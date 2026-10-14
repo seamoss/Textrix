@@ -57,6 +57,7 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Alt+1…0, Alt+Q…P | window 1–20 |
 | Ctrl+N / Ctrl+P, Alt+←/→ | next / previous window |
 | Alt+A | jump to the most important active window |
+| Ctrl+K, Alt+K | **quick switcher**: type part of a room's name (letters in order, like `tt` for Tetrix Tests) or its number; ↑/↓ choose, Enter goes there. Closed windows are included. With nothing typed it lists windows with activity first, then where you were most recently, so Ctrl+K Enter flips back to the last window. Ctrl+K still cuts to the end of the line when there's text after the cursor |
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |

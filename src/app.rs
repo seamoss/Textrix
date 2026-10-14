@@ -47,6 +47,7 @@ use crate::{
     model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta, SpaceInfo},
     notify,
     servers::{EnvFile, ServerDef, Servers},
+    switcher::{self, Switcher},
     ui,
 };
 
@@ -595,6 +596,9 @@ pub struct App {
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
     pub split: Option<Split>,
+    pub switcher: Option<Switcher>,
+    /// Windows you were in, most recent first (for the switcher).
+    recent: Vec<Option<WinKey>>,
     /// Rooms with their own notification mode, per server.
     pub push_modes: HashMap<AccountName, HashMap<OwnedRoomId, RoomNotificationMode>>,
     /// Where the last frame drew things, for the mouse.
@@ -765,6 +769,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Alt+1…0, Alt+Q…P", "go to window 1–20"),
     ("Ctrl+N / Ctrl+P, Alt+← / Alt+→", "next / previous window"),
     ("Alt+A", "jump to the most important window with activity"),
+    ("Ctrl+K, Alt+K", "quick switcher: type part of a room's name (or its number), Enter goes there"),
     ("PgUp / PgDn", "scroll; older history loads at the top"),
     ("Tab", "complete commands, nicks (adds a mention), :emoji shortcodes, server names, file paths"),
     ("Up / Down", "input history"),
@@ -907,6 +912,8 @@ impl App {
             clipboard: None,
             help: None,
             split: None,
+            switcher: None,
+            recent: Vec::new(),
             push_modes: HashMap::new(),
             hits: ui::Hits::default(),
             picker: None,
@@ -1837,6 +1844,10 @@ impl App {
     /// The wheel scrolls the pane under the pointer (older history loads
     /// at the top), or moves the selection in selection mode.
     fn on_wheel(&mut self, at: Position, up: bool) {
+        if let Some(sw) = self.switcher.as_mut() {
+            sw.selected = if up { sw.selected.saturating_sub(1) } else { sw.selected + 1 };
+            return;
+        }
         if let Some(help) = self.help.as_mut() {
             help.scroll =
                 if up { help.scroll.saturating_sub(WHEEL_ROWS) } else { help.scroll.saturating_add(WHEEL_ROWS) };
@@ -1854,6 +1865,18 @@ impl App {
     /// message is selected (again to unselect); a link opens; a member's
     /// name is added to your message; the input line moves the cursor.
     fn on_click(&mut self, at: Position) {
+        if self.switcher.is_some() {
+            // A row goes there; a click anywhere else closes the switcher.
+            let picked = self.hits.switcher.as_ref().and_then(|(_, rows)| rows.iter().find(|(r, _)| r.contains(at)));
+            match picked {
+                Some(&(_, n)) => self.switcher_go(Some(n)),
+                None if !self.hits.switcher.as_ref().is_some_and(|(area, _)| area.contains(at)) => {
+                    self.switcher = None;
+                }
+                None => {}
+            }
+            return;
+        }
         if self.help.is_some() || self.confirm_delete.is_some() || self.confirm_paste.is_some() {
             return;
         }
@@ -1951,6 +1974,9 @@ impl App {
             }
             return;
         }
+        if self.switcher.is_some() {
+            return self.on_switcher_key(key);
+        }
         if self.confirm_paste.take().is_some() {
             // Declining leaves the text in the input line to edit.
             if matches!(key.code, Char('y' | 'Y')) {
@@ -2027,6 +2053,7 @@ impl App {
                 '1'..='9' => self.switch_to(c as usize - '1' as usize),
                 '0' => self.switch_to(9),
                 'a' => self.next_active(),
+                'k' => self.switcher = Some(Switcher::default()),
                 'b' => self.input.word_left(),
                 'f' => self.input.word_right(),
                 c => {
@@ -2043,6 +2070,11 @@ impl App {
                 'n' => self.cycle_window(1),
                 'p' => self.cycle_window(-1),
                 'l' => self.redraw_all = true,
+                // With nothing after the cursor to cut, Ctrl+K opens the
+                // switcher.
+                'k' if self.input.cursor() == self.input.chars().len() => {
+                    self.switcher = Some(Switcher::default());
+                }
                 'd' | 'h' | 'u' | 'k' | 'w' | 'y' | 'c' => {
                     match c {
                         'd' => self.input.delete(),
@@ -2111,6 +2143,10 @@ impl App {
         // Unsent text (and a reply or reaction being written) stays with
         // the window you leave, and comes back when you return.
         let unsent = Unsent { text: self.input.stash(), compose: self.compose.take().map(|(_, c)| c) };
+        let left_key = self.windows[self.active].room.clone();
+        self.recent.retain(|k| *k != left_key);
+        self.recent.insert(0, left_key);
+        self.recent.truncate(64);
         let left = &mut self.windows[self.active];
         left.unsent = (unsent.text.is_some() || unsent.compose.is_some()).then_some(unsent);
         // Everything in the window you leave counts as seen.
@@ -2155,6 +2191,98 @@ impl App {
 
     pub fn on_screen(&self, idx: usize) -> bool {
         idx == self.active || self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[idx].room))
+    }
+
+    /// Switcher entries for what's typed: every window, and closed rooms.
+    /// With nothing typed the current window is left out, so Enter goes
+    /// back to the previous one.
+    pub fn switcher_entries(&self) -> Vec<switcher::Entry> {
+        let Some(sw) = &self.switcher else { return Vec::new() };
+        let several = self.accounts.len() > 1;
+        let recency = |key: &Option<WinKey>| self.recent.iter().position(|k| k == key).unwrap_or(usize::MAX);
+        let mut candidates = Vec::new();
+        for (i, w) in self.windows.iter().enumerate() {
+            if i == self.active && sw.query.trim().is_empty() {
+                continue;
+            }
+            let detail = match w.account() {
+                Some(account) if several => account.to_owned(),
+                _ => String::new(),
+            };
+            candidates.push(switcher::Candidate {
+                entry: switcher::Entry {
+                    target: switcher::Target::Window(i),
+                    name: w.name.clone(),
+                    detail,
+                    activity: w.activity,
+                    unread: w.unread(),
+                    matched: Vec::new(),
+                },
+                number: Some(i + 1),
+                recency: recency(&w.room),
+            });
+        }
+        for key in self.layout.closed.iter().filter(|k| k.thread.is_none()) {
+            let Some(meta) = self.connected(&key.account).and_then(|a| a.quick_meta(&key.room_id)) else { continue };
+            let detail = if several { format!("{} · closed", key.account) } else { "closed".to_owned() };
+            candidates.push(switcher::Candidate {
+                entry: switcher::Entry {
+                    target: switcher::Target::Closed { account: key.account.clone(), room_id: key.room_id.clone() },
+                    name: meta.name,
+                    detail,
+                    activity: Activity::None,
+                    unread: meta.unread,
+                    matched: Vec::new(),
+                },
+                number: None,
+                recency: usize::MAX,
+            });
+        }
+        switcher::rank(&sw.query, candidates)
+    }
+
+    fn on_switcher_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(sw) = self.switcher.as_mut() else { return };
+        match key.code {
+            Esc => self.switcher = None,
+            Char('c' | 'k') if ctrl => self.switcher = None,
+            Enter => self.switcher_go(None),
+            Up | BackTab => sw.selected = sw.selected.saturating_sub(1),
+            Char('p') if ctrl => sw.selected = sw.selected.saturating_sub(1),
+            Down | Tab => sw.selected += 1,
+            Char('n') if ctrl => sw.selected += 1,
+            Backspace => {
+                sw.query.pop();
+                sw.selected = 0;
+            }
+            Char('u') if ctrl => {
+                sw.query.clear();
+                sw.selected = 0;
+            }
+            Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                sw.query.push(c);
+                sw.selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    /// Go to the chosen switcher entry (or entry `pick`) and close it.
+    fn switcher_go(&mut self, pick: Option<usize>) {
+        let entries = self.switcher_entries();
+        let Some(sw) = self.switcher.take() else { return };
+        let Some(entry) = entries.get(pick.unwrap_or(sw.selected).min(entries.len().saturating_sub(1))) else {
+            return;
+        };
+        match entry.target.clone() {
+            switcher::Target::Window(idx) => self.switch_to(idx),
+            switcher::Target::Closed { account, room_id } => match self.reopen(&account, &room_id) {
+                Some(idx) => self.switch_to(idx),
+                None => self.error(format!("{} isn't available right now", entry.name)),
+            },
+        }
     }
 
     /// F6 / Shift+F6: focus the next or previous pane.

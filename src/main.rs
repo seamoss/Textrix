@@ -13,6 +13,7 @@ mod model;
 mod notify;
 mod richtext;
 mod servers;
+mod switcher;
 mod ui;
 
 use std::process::ExitCode;

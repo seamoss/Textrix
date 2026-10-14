@@ -25,6 +25,7 @@ use crate::{
     links,
     model::{Activity, Line, LineKind, PresenceKind},
     richtext::Marks,
+    switcher,
 };
 
 const BAR: Style = Style::new().fg(Color::White).bg(Color::Blue);
@@ -56,6 +57,8 @@ pub struct Hits {
     /// The input line, the column its text starts at, and how many
     /// characters are scrolled out of view on the left.
     pub input: Option<(Rect, u16, usize)>,
+    /// The quick switcher's box, and its rows: (row, entry index).
+    pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
 }
 
 pub struct PaneHits {
@@ -101,6 +104,79 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.help.is_some() {
         draw_help(f, app);
     }
+    if app.switcher.is_some() {
+        app.hits.switcher = Some(draw_switcher(f, app));
+    }
+}
+
+/// The quick switcher: what you've typed, and the best matches under it.
+fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    let entries = app.switcher_entries();
+    let screen = f.area();
+    let Some(sw) = app.switcher.as_mut() else { return (Rect::default(), Vec::new()) };
+    sw.selected = sw.selected.min(entries.len().saturating_sub(1));
+    let width = screen.width.saturating_sub(4).min(72);
+    let height = (entries.len().clamp(1, 12) as u16 + 3).min(screen.height.saturating_sub(2));
+    let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
+    let block = Block::bordered()
+        .border_style(Style::new().fg(Color::Cyan))
+        .title(Span::styled(" Go to ", MARKER))
+        .title_bottom(TLine::from(" ↑↓ choose · Enter go · Esc close ").right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let query: String = sw.query.chars().filter(|c| !c.is_control()).collect();
+    let prompt = TLine::from(vec![Span::styled("› ", MARKER), Span::raw(query.clone())]);
+    f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
+    let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
+    f.set_cursor_position(Position::new(cursor_x, inner.y));
+
+    let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
+    if entries.is_empty() {
+        f.render_widget(Paragraph::new(Span::styled("  nothing matches", DIM)), list);
+        return (area, Vec::new());
+    }
+    let rows = list.height as usize;
+    let start = (sw.selected + 1).saturating_sub(rows);
+    let mut hits = Vec::new();
+    for (row, (n, entry)) in entries.iter().enumerate().skip(start).take(rows).enumerate() {
+        let rect = Rect { y: list.y + row as u16, height: 1, ..list };
+        f.render_widget(Paragraph::new(switcher_row(entry, list.width as usize, n == sw.selected)), rect);
+        hits.push((rect, n));
+    }
+    (area, hits)
+}
+
+/// One switcher entry: window number, name (matched letters picked out),
+/// and unread count and server or "closed" at the right.
+fn switcher_row(entry: &switcher::Entry, width: usize, selected: bool) -> TLine<'static> {
+    let number = match entry.target {
+        switcher::Target::Window(i) => format!("{:>3} ", i + 1),
+        switcher::Target::Closed { .. } => "    ".to_owned(),
+    };
+    let right = match (entry.unread, entry.detail.as_str()) {
+        (0, detail) => detail.to_owned(),
+        (n, "") => n.to_string(),
+        (n, detail) => format!("{n} · {detail}"),
+    };
+    let base = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { activity_style(entry.activity) };
+    let dim = if selected { base } else { DIM };
+    let name_w = width.saturating_sub(number.len() + display_len(&right) + 2);
+    let mut spans = vec![Span::styled(number, dim)];
+    let mut used = 0;
+    for (i, c) in entry.name.chars().filter(|c| !c.is_control()).enumerate() {
+        let w = c.width().unwrap_or(0);
+        if used + w > name_w {
+            break;
+        }
+        used += w;
+        let style = if entry.matched.contains(&i) { base.fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { base };
+        spans.push(Span::styled(c.to_string(), style));
+    }
+    spans.push(Span::styled(" ".repeat(width.saturating_sub(4 + used + display_len(&right))), base));
+    spans.push(Span::styled(right, dim));
+    TLine::from(spans)
 }
 
 /// The F1 help screen: keys and commands, filtered by what you type.
