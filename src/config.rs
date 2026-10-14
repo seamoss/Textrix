@@ -93,6 +93,9 @@ pub struct Config {
     pub image_previews: bool,
     /// Maximum height of an inline image, in rows.
     pub image_rows: u16,
+    /// How to receive updates: "auto" (sliding sync when the server offers
+    /// it, else classic), "sliding", or "classic".
+    pub sync: SyncMode,
     /// Window list on the left (F2 or /sidebar toggles it).
     pub sidebar: bool,
     /// Member list on the right of group rooms (F3 or /nicklist toggles it).
@@ -113,6 +116,7 @@ impl Default for Config {
             scrollback: 5000,
             history_page: 50,
             completion_char: ":".into(),
+            sync: SyncMode::Auto,
             image_previews: true,
             image_rows: 10,
             sidebar: true,
@@ -127,6 +131,14 @@ pub enum ReceiptMode {
     Public,
     Private,
     Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    Auto,
+    Sliding,
+    Classic,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]

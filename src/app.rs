@@ -711,11 +711,12 @@ impl App {
         let Some(state) = self.accounts.get_mut(name) else { return };
         state.status = ConnStatus::Connecting;
         let (def, paths, env, tx) = (state.def.clone(), self.paths.clone(), self.env.clone(), self.tx.clone());
+        let sync_mode = self.cfg.sync;
         let homeserver = def.homeserver_or_server_name().unwrap_or("?").to_owned();
         self.status(Line::info(format!("{name}: connecting to {homeserver} as {}", def.user)));
         let name = AccountName::from(name);
         tokio::spawn(async move {
-            let event = match matrix::connect(def, paths, env, tx.clone()).await {
+            let event = match matrix::connect(def, paths, env, sync_mode, tx.clone()).await {
                 Ok(account) => AppEvent::Connected(account),
                 Err(e) => AppEvent::ConnectFailed { account: name, error: format!("{e:#}") },
             };

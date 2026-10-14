@@ -97,6 +97,16 @@ headings, coloured text, links (with the address when the text differs),
 mention pills, and spoilers (hidden until you press `v` in selection mode).
 What you send is Markdown (`markdown = true`) and shows formatted right away.
 
+### Sync
+
+New sessions use Simplified Sliding Sync (MSC4186) when the server offers it,
+which loads big accounts faster; otherwise Textrix long-polls the classic
+`/sync`. A session keeps the method it started with: Synapse can't carry a
+classic session's encryption stream position over to sliding sync, so an
+existing session stays on classic sync (to switch, `/logout` and reconnect).
+Sliding sync has no presence, so presence dots there only update via
+`/whois`. Force a method with `sync = "classic"` or `"sliding"`.
+
 ### Images
 
 Images show inline under their message. Textrix asks the terminal what it
@@ -139,6 +149,7 @@ read_receipts = "public"   # "private" (only your clients see it) or "off"
 bell = true
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
+sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
 sidebar = true             # window list (F2)

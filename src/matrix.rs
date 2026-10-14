@@ -45,7 +45,8 @@ use matrix_sdk::{
         },
         events::{
             AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, MessageLikeEventType, StateEvent,
-            SyncStateEvent,
+            StateEventType, SyncStateEvent,
+            presence::PresenceEvent,
             fully_read::FullyReadEventContent,
             space::child::SpaceChildEventContent,
             ignored_user_list::IgnoredUserListEventContent,
@@ -60,7 +61,8 @@ use matrix_sdk::{
         },
     },
     deserialized_responses::RawSyncOrStrippedState,
-    sync::SyncResponse,
+    sliding_sync::{SlidingSyncList, SlidingSyncListLoadingState, SlidingSyncMode, Version as SlidingVersion},
+    sync::RoomUpdates,
     TransmissionProgress,
     attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
@@ -76,7 +78,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{Paths, ReceiptMode, create_private_dir},
+    config::{Paths, ReceiptMode, SyncMode, create_private_dir},
     convert::Converter,
     model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo},
     servers::{EnvFile, Secret, ServerDef, write_private},
@@ -173,10 +175,13 @@ pub struct Account {
     tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>>,
     /// Presence sent with every sync; set by `/away`.
     away: Arc<AtomicBool>,
+    sync_mode: SyncMode,
+    /// This connection logged in afresh rather than restoring a session.
+    fresh_login: bool,
 }
 
 /// Log in (or restore the saved session) for one dotfile server.
-pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, tx: Tx) -> Result<Account> {
+pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, sync_mode: SyncMode, tx: Tx) -> Result<Account> {
     let name: AccountName = def.name.as_str().into();
     let notify = Notifier { name: name.clone(), tx };
     let dir = paths.account_dir(&def.name);
@@ -184,6 +189,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, tx: Tx) -> Resu
     let session_path = dir.join("session.json");
     let store = dir.join("store");
 
+    let restored = session_path.exists();
     let client = match load_session(&session_path)? {
         Some(saved) => {
             if !same_user(&def.user, &saved.session.meta.user_id) {
@@ -246,6 +252,8 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, tx: Tx) -> Resu
         verify: Default::default(),
         tasks: Default::default(),
         away: Default::default(),
+        sync_mode,
+        fresh_login: !restored,
     })
 }
 
@@ -358,7 +366,43 @@ impl Account {
         }));
 
         let acct = self.clone();
-        self.track(tokio::spawn(async move { acct.sync_loop().await }));
+        self.track(tokio::spawn(async move {
+            // A session keeps the sync method it started with: Synapse can't
+            // continue classic sync's encryption stream position over
+            // sliding sync, so only fresh logins start on sliding sync.
+            let mode_file = acct.dir.join("sync-mode");
+            let remembered = std::fs::read_to_string(&mode_file).ok().map(|s| s.trim() == "sliding");
+            let sliding = match acct.sync_mode {
+                SyncMode::Classic => false,
+                SyncMode::Sliding => true,
+                SyncMode::Auto => match remembered {
+                    Some(sliding) => sliding,
+                    None => acct.fresh_login && !acct.client.available_sliding_sync_versions().await.is_empty(),
+                },
+            };
+            let remember = |sliding: bool| {
+                if acct.sync_mode == SyncMode::Auto && remembered != Some(sliding) {
+                    let _ = std::fs::write(&mode_file, if sliding { "sliding\n" } else { "classic\n" });
+                }
+            };
+            if sliding {
+                remember(true);
+                match acct.sliding_loop().await {
+                    Ok(()) => return,
+                    Err(e) if acct.sync_mode == SyncMode::Sliding => {
+                        acct.notify.error(format!(
+                            "sliding sync failed ({e:#}). A session that started on classic sync can't switch \
+                             on Synapse; /logout {} and /connect to start a fresh session on sliding sync",
+                            acct.name
+                        ));
+                        return;
+                    }
+                    Err(e) => acct.notify.info(format!("sliding sync unavailable ({e:#}); using classic sync")),
+                }
+            }
+            remember(false);
+            acct.sync_loop().await
+        }));
     }
 
     /// Stop syncing. The session stays on disk for the next `/connect`.
@@ -384,7 +428,8 @@ impl Account {
             let presence = if self.away.load(Ordering::Relaxed) { PresenceState::Unavailable } else { PresenceState::Online };
             match self.client.sync_once(settings.clone().set_presence(presence)).await {
                 Ok(response) => {
-                    self.process_sync(response, first).await;
+                    self.process_presence(&response.presence);
+                    self.process_rooms(response.rooms, !first).await;
                     if first || failing {
                         self.notify.send(AppEvent::Synced { account: self.name.clone(), first });
                     }
@@ -419,15 +464,128 @@ impl Account {
         }
     }
 
-    async fn process_sync(&self, response: SyncResponse, first: bool) {
+    /// Sliding sync (MSC4186): rooms arrive in batches; their updates come
+    /// through the client's room-update broadcast like classic sync's.
+    /// Returns an error only if it can't get going, so the caller can fall
+    /// back to classic sync.
+    async fn sliding_loop(&self) -> Result<()> {
+        let state = |kind: StateEventType, key: &str| (kind, key.to_owned());
+        let list = SlidingSyncList::builder("all")
+            .sync_mode(SlidingSyncMode::new_growing(50))
+            .timeline_limit(20)
+            .required_state(vec![
+                state(StateEventType::RoomCreate, ""),
+                state(StateEventType::RoomName, ""),
+                state(StateEventType::RoomTopic, ""),
+                state(StateEventType::RoomCanonicalAlias, ""),
+                state(StateEventType::RoomEncryption, ""),
+                state(StateEventType::RoomPowerLevels, ""),
+                state(StateEventType::RoomJoinRules, ""),
+                state(StateEventType::RoomMember, "$LAZY"),
+                state(StateEventType::RoomMember, "$ME"),
+                state(StateEventType::SpaceChild, "*"),
+            ]);
+        let sync = self
+            .client
+            .sliding_sync("textrix")?
+            .version(SlidingVersion::Native)
+            .with_all_extensions()
+            .poll_timeout(Duration::from_secs(30))
+            .network_timeout(Duration::from_secs(60))
+            .add_list(list)
+            .build()
+            .await?;
+
+        // Messages count as new (activity, bells) once every room is loaded.
+        let live = Arc::new(AtomicBool::new(false));
+        let mut updates = self.client.subscribe_to_all_room_updates();
+        let (acct, live_now) = (self.clone(), live.clone());
+        self.track(tokio::spawn(async move {
+            loop {
+                match updates.recv().await {
+                    Ok(rooms) => acct.process_rooms(rooms, live_now.load(Ordering::Relaxed)).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::warn!("missed {missed} room updates");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }));
+
+        let (mut first, mut trusted, mut failing) = (true, false, false);
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            let stream = sync.sync();
+            futures_util::pin_mut!(stream);
+            // The stream ends after an error; restart it after a pause.
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(_) => {
+                        if first || failing {
+                            self.notify.send(AppEvent::Synced { account: self.name.clone(), first });
+                        }
+                        if first {
+                            first = false;
+                            self.notify.info("receiving updates with sliding sync");
+                            trusted = self.after_first_sync().await;
+                        } else if !trusted {
+                            trusted = self.own_device_trusted().await;
+                            if trusted {
+                                self.notify.send(AppEvent::Trust { account: self.name.clone(), verified: true });
+                                self.notify.info("this device is now verified");
+                            }
+                        }
+                        if !live.load(Ordering::Relaxed) {
+                            let state = sync.on_list("all", |list| std::future::ready(list.state())).await;
+                            if state == Some(SlidingSyncListLoadingState::FullyLoaded) {
+                                live.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        failing = false;
+                        backoff = Duration::from_secs(1);
+                    }
+                    Err(e) if first => return Err(e.into()),
+                    Err(e) => {
+                        if let Some(ErrorKind::UnknownToken(_)) = e.client_api_error_kind() {
+                            self.notify.send(AppEvent::ConnectFailed {
+                                account: self.name.clone(),
+                                error: format!("session is no longer valid ({e}); run /logout {} and reconnect", self.name),
+                            });
+                            return Ok(());
+                        }
+                        failing = true;
+                        self.notify.send(AppEvent::SyncError { account: self.name.clone(), error: e.to_string() });
+                    }
+                }
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(60));
+        }
+    }
+
+    fn process_presence(&self, events: &[Raw<PresenceEvent>]) {
+        let updates: Vec<(OwnedUserId, Presence)> = events
+            .iter()
+            .filter_map(|raw| raw.deserialize().ok())
+            .map(|ev| {
+                let ago = ev.content.last_active_ago.map(|ms| Duration::from_millis(ms.into()));
+                (ev.sender, presence_from(&ev.content.presence, ev.content.status_msg, ago))
+            })
+            .collect();
+        if !updates.is_empty() {
+            self.notify.send(AppEvent::Presence { account: self.name.clone(), updates });
+        }
+    }
+
+    async fn process_rooms(&self, rooms: RoomUpdates, live: bool) {
         // Announce rooms before their events so the UI has windows for them.
         let mut metas = Vec::new();
-        for room_id in response.rooms.joined.keys() {
+        for room_id in rooms.joined.keys() {
             if let Some(room) = self.client.get_room(room_id) {
                 metas.push(room_meta(&room).await);
             }
         }
-        let spaces_changed = metas.iter().any(|m| m.is_space) || response.rooms.left.keys().next().is_some();
+        let spaces_changed = metas.iter().any(|m| m.is_space) || rooms.left.keys().next().is_some();
         if !metas.is_empty() {
             self.notify.send(AppEvent::Rooms { account: self.name.clone(), rooms: metas });
         }
@@ -435,7 +593,7 @@ impl Account {
             self.notify.send(AppEvent::Spaces { account: self.name.clone(), spaces: joined_spaces(&self.client).await });
         }
 
-        for (room_id, update) in response.rooms.joined {
+        for (room_id, update) in rooms.joined {
             let Some(room) = self.client.get_room(&room_id) else { continue };
             let mut conv = Converter::new(&room, &self.user_id);
             let mut items = Vec::new();
@@ -449,7 +607,7 @@ impl Account {
                     account: self.name.clone(),
                     room_id: room_id.clone(),
                     items,
-                    live: !first,
+                    live,
                 });
             }
 
@@ -487,24 +645,11 @@ impl Account {
             }
         }
 
-        let updates: Vec<(OwnedUserId, Presence)> = response
-            .presence
-            .iter()
-            .filter_map(|raw| raw.deserialize().ok())
-            .map(|ev| {
-                let ago = ev.content.last_active_ago.map(|ms| Duration::from_millis(ms.into()));
-                (ev.sender, presence_from(&ev.content.presence, ev.content.status_msg, ago))
-            })
-            .collect();
-        if !updates.is_empty() {
-            self.notify.send(AppEvent::Presence { account: self.name.clone(), updates });
-        }
-
-        for room_id in response.rooms.left.into_keys() {
+        for room_id in rooms.left.into_keys() {
             self.notify.send(AppEvent::RoomGone { account: self.name.clone(), room_id });
         }
 
-        for room_id in response.rooms.invited.into_keys() {
+        for room_id in rooms.invited.into_keys() {
             let Some(room) = self.client.get_room(&room_id) else { continue };
             let name = room.display_name().await.map(|n| n.to_string()).unwrap_or_else(|_| room_id.to_string());
             let inviter = match room.invite_details().await {
