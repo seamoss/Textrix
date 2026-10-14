@@ -26,24 +26,8 @@ use crate::{
     model::{Activity, Line, LineKind, PresenceKind},
     richtext::Marks,
     switcher,
+    theme::Theme,
 };
-
-const BAR: Style = Style::new().fg(Color::White).bg(Color::Blue);
-const BRACKET: Style = Style::new().fg(Color::Cyan).bg(Color::Blue);
-const DIM: Style = Style::new().fg(Color::DarkGray);
-const MARKER: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-const NICK_COLORS: [Color; 10] = [
-    Color::Cyan,
-    Color::Green,
-    Color::Yellow,
-    Color::Blue,
-    Color::Red,
-    Color::LightCyan,
-    Color::LightGreen,
-    Color::LightBlue,
-    Color::LightRed,
-    Color::LightYellow,
-];
 
 /// Where things were drawn in the last frame, so mouse clicks can find
 /// them.
@@ -111,6 +95,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// The quick switcher: what you've typed, and the best matches under it.
 fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    let t = app.cfg.palette.clone();
     let entries = app.switcher_entries();
     let screen = f.area();
     let Some(sw) = app.switcher.as_mut() else { return (Rect::default(), Vec::new()) };
@@ -119,22 +104,22 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     let height = (entries.len().clamp(1, 12) as u16 + 3).min(screen.height.saturating_sub(2));
     let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
     let block = Block::bordered()
-        .border_style(Style::new().fg(Color::Cyan))
-        .title(Span::styled(" Go to ", MARKER))
+        .border_style(t.frame)
+        .title(Span::styled(" Go to ", t.accent))
         .title_bottom(TLine::from(" ↑↓ choose · Enter go · Esc close ").right_aligned());
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
     let query: String = sw.query.chars().filter(|c| !c.is_control()).collect();
-    let prompt = TLine::from(vec![Span::styled("› ", MARKER), Span::raw(query.clone())]);
+    let prompt = TLine::from(vec![Span::styled("› ", t.accent), Span::raw(query.clone())]);
     f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
     let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
     f.set_cursor_position(Position::new(cursor_x, inner.y));
 
     let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
     if entries.is_empty() {
-        f.render_widget(Paragraph::new(Span::styled("  nothing matches", DIM)), list);
+        f.render_widget(Paragraph::new(Span::styled("  nothing matches", t.dim)), list);
         return (area, Vec::new());
     }
     let rows = list.height as usize;
@@ -142,7 +127,7 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     let mut hits = Vec::new();
     for (row, (n, entry)) in entries.iter().enumerate().skip(start).take(rows).enumerate() {
         let rect = Rect { y: list.y + row as u16, height: 1, ..list };
-        f.render_widget(Paragraph::new(switcher_row(entry, list.width as usize, n == sw.selected)), rect);
+        f.render_widget(Paragraph::new(switcher_row(&t, entry, list.width as usize, n == sw.selected)), rect);
         hits.push((rect, n));
     }
     (area, hits)
@@ -150,7 +135,7 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
 
 /// One switcher entry: window number, name (matched letters picked out),
 /// and unread count and server or "closed" at the right.
-fn switcher_row(entry: &switcher::Entry, width: usize, selected: bool) -> TLine<'static> {
+fn switcher_row(t: &Theme, entry: &switcher::Entry, width: usize, selected: bool) -> TLine<'static> {
     let number = match entry.target {
         switcher::Target::Window(i) => format!("{:>3} ", i + 1),
         switcher::Target::Closed { .. } => "    ".to_owned(),
@@ -160,8 +145,8 @@ fn switcher_row(entry: &switcher::Entry, width: usize, selected: bool) -> TLine<
         (n, "") => n.to_string(),
         (n, detail) => format!("{n} · {detail}"),
     };
-    let base = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { activity_style(entry.activity) };
-    let dim = if selected { base } else { DIM };
+    let base = if selected { Style::new().add_modifier(Modifier::REVERSED) } else { activity_style(t, entry.activity) };
+    let dim = if selected { base } else { t.dim };
     let name_w = width.saturating_sub(number.len() + display_len(&right) + 2);
     let mut spans = vec![Span::styled(number, dim)];
     let mut used = 0;
@@ -171,7 +156,7 @@ fn switcher_row(entry: &switcher::Entry, width: usize, selected: bool) -> TLine<
             break;
         }
         used += w;
-        let style = if entry.matched.contains(&i) { base.fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { base };
+        let style = if entry.matched.contains(&i) { base.patch(t.matched) } else { base };
         spans.push(Span::styled(c.to_string(), style));
     }
     spans.push(Span::styled(" ".repeat(width.saturating_sub(4 + used + display_len(&right))), base));
@@ -181,6 +166,7 @@ fn switcher_row(entry: &switcher::Entry, width: usize, selected: bool) -> TLine<
 
 /// The F1 help screen: keys and commands, filtered by what you type.
 fn draw_help(f: &mut Frame, app: &mut App) {
+    let t = app.cfg.palette.clone();
     let screen = f.area();
     let width = screen.width.saturating_sub(4).min(110);
     let area = Rect {
@@ -207,12 +193,12 @@ fn draw_help(f: &mut Frame, app: &mut App) {
                 if !lines.is_empty() {
                     lines.push(TLine::default());
                 }
-                lines.push(TLine::from(Span::styled(title, MARKER)));
+                lines.push(TLine::from(Span::styled(title, t.accent)));
             }
             HelpRow::Entry(key, what) => {
                 let pad = " ".repeat(key_w.saturating_sub(display_len(&key)) + 2);
                 lines.push(TLine::from(vec![
-                    Span::styled(format!("  {key}"), Style::new().fg(Color::Yellow)),
+                    Span::styled(format!("  {key}"), t.matched.remove_modifier(Modifier::BOLD)),
                     Span::raw(pad),
                     Span::raw(what),
                 ]));
@@ -220,26 +206,26 @@ fn draw_help(f: &mut Frame, app: &mut App) {
         }
     }
     if lines.is_empty() {
-        lines.push(TLine::from(Span::styled("  nothing matches", DIM)));
+        lines.push(TLine::from(Span::styled("  nothing matches", t.dim)));
     }
     let inner_h = area.height.saturating_sub(2) as usize;
     help.scroll = help.scroll.min(lines.len().saturating_sub(inner_h));
     let filter =
         if help.filter.is_empty() { " type to filter ".to_owned() } else { format!(" filter: {} ", help.filter) };
     let block = Block::bordered()
-        .border_style(Style::new().fg(Color::Cyan))
-        .title(Span::styled(" Textrix help ", MARKER))
+        .border_style(t.frame)
+        .title(Span::styled(" Textrix help ", t.accent))
         .title_bottom(TLine::from(format!("{filter}· ↑↓ PgUp/PgDn scroll · Esc closes ")).right_aligned());
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block).scroll((help.scroll as u16, 0)), area);
 }
 
-fn activity_style(level: Activity) -> Style {
+fn activity_style(t: &Theme, level: Activity) -> Style {
     match level {
-        Activity::Highlight => Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        Activity::Message => Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-        Activity::Event => Style::new().fg(Color::Cyan),
-        Activity::None => Style::new().fg(Color::Gray),
+        Activity::Highlight => t.highlight,
+        Activity::Message => t.activity,
+        Activity::Event => t.activity_event,
+        Activity::None => t.inactive,
     }
 }
 
@@ -304,6 +290,7 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
 /// irssi adv_windowlist-style: window number, name and unread count,
 /// coloured by activity, grouped by server and space.
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
+    let t = &app.cfg.palette;
     let inner = area.width.saturating_sub(1) as usize;
     let entries = sidebar_entries(app);
     let rows: Vec<(TLine<'static>, bool)> = entries
@@ -311,7 +298,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
         .map(|entry| match entry {
             SidebarEntry::Header(text) => {
                 let text: String = text.chars().take(inner).collect();
-                (TLine::from(Span::styled(format!(" {text}"), DIM.add_modifier(Modifier::BOLD))), false)
+                (TLine::from(Span::styled(format!(" {text}"), t.dim.add_modifier(Modifier::BOLD))), false)
             }
             SidebarEntry::Window(i) => (window_row(app, *i, inner), *i == app.active),
         })
@@ -321,7 +308,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let active_row = rows.iter().position(|(_, a)| *a).unwrap_or(0);
     let start = (active_row + 1).saturating_sub(height);
     let shown: Vec<TLine> = rows.into_iter().skip(start).take(height).map(|(r, _)| r).collect();
-    let block = Block::new().borders(Borders::RIGHT).border_style(DIM);
+    let block = Block::new().borders(Borders::RIGHT).border_style(t.dim);
     f.render_widget(Paragraph::new(shown).block(block), area);
 
     // Avatar images go into the gap left for them after the window number.
@@ -345,6 +332,7 @@ fn avatar_of(app: &App, i: usize) -> Option<&Preview> {
 /// The 3-column avatar slot: blank for a drawn image, otherwise a coloured
 /// initial tile.
 fn avatar_slot(app: &App, i: usize) -> Vec<Span<'static>> {
+    let t = &app.cfg.palette;
     let w = &app.windows[i];
     if matches!(avatar_of(app, i), Some(Preview::Ready(_))) && app.avatar_images() {
         return vec![Span::raw("   ")];
@@ -355,11 +343,16 @@ fn avatar_slot(app: &App, i: usize) -> Vec<Span<'static>> {
     } else {
         w.name.chars().find(|c| c.is_alphanumeric()).map_or('#', |c| c.to_uppercase().next().unwrap_or(c))
     };
-    let tile = Style::new().fg(Color::Black).bg(nick_color(key.room_id.as_str())).add_modifier(Modifier::BOLD);
+    let tile = match t.nick_color(key.room_id.as_str()) {
+        Color::Reset => Style::new().add_modifier(Modifier::REVERSED),
+        color => Style::new().fg(Color::Black).bg(color),
+    }
+    .add_modifier(Modifier::BOLD);
     vec![Span::styled(format!("{initial} "), tile), Span::raw(" ")]
 }
 
 fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
+    let t = &app.cfg.palette;
     let w = &app.windows[i];
     let active = i == app.active;
     let unread = match (active, w.typing.is_empty(), w.unread()) {
@@ -371,7 +364,7 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     };
     let number = format!("{:>2} ", i + 1);
     let avatar = if app.cfg.sidebar_avatars { avatar_slot(app, i) } else { Vec::new() };
-    let dot = w.dm_presence(app).map(|p| presence_dot(p.kind));
+    let dot = w.dm_presence(app).map(|p| presence_dot(t, p.kind));
     // Columns before the name: avatar slot and presence dot.
     let lead_w = if avatar.is_empty() { 0 } else { 3 } + if dot.is_some() { 2 } else { 0 };
     let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + 1);
@@ -379,16 +372,16 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let pad = inner.saturating_sub(number.len() + lead_w + display_len(&name) + display_len(&unread));
     let muted = app.room_mode(i) == Some(RoomNotificationMode::Mute);
     let style = if active {
-        Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        t.current
     } else if muted && w.activity == Activity::None {
-        DIM
+        t.dim
     } else {
-        activity_style(w.activity)
+        activity_style(t, w.activity)
     };
     let number_style = match (active, app.on_screen(i)) {
         (true, _) => style,
-        (false, true) => Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        (false, false) => DIM,
+        (false, true) => t.shown,
+        (false, false) => t.dim,
     };
     let mut parts = vec![Span::styled(number, number_style)];
     parts.extend(avatar);
@@ -398,7 +391,7 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     parts.extend([
         Span::styled(name, style),
         Span::styled(" ".repeat(pad), style),
-        Span::styled(unread, if active { style } else { activity_style(w.activity) }),
+        Span::styled(unread, if active { style } else { activity_style(t, w.activity) }),
     ]);
     TLine::from(parts)
 }
@@ -409,43 +402,44 @@ fn nicklist_width(app: &App) -> u16 {
     (longest.clamp(6, 18) + 5) as u16
 }
 
-fn presence_dot(kind: PresenceKind) -> (char, Color) {
+fn presence_dot(t: &Theme, kind: PresenceKind) -> (char, Color) {
     match kind {
-        PresenceKind::Online => ('●', Color::Green),
-        PresenceKind::Away => ('●', Color::Yellow),
-        PresenceKind::Offline => ('○', Color::DarkGray),
+        PresenceKind::Online => ('●', t.online),
+        PresenceKind::Away => ('●', t.away),
+        PresenceKind::Offline => ('○', t.offline),
     }
 }
 
 fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
+    let t = &app.cfg.palette;
     let win = &app.windows[app.active];
     let inner = area.width.saturating_sub(1) as usize;
     let height = area.height as usize;
-    let mut rows = vec![TLine::from(Span::styled(format!("Users ({})", win.members.len()), DIM))];
+    let mut rows = vec![TLine::from(Span::styled(format!("Users ({})", win.members.len()), t.dim))];
     let room = height.saturating_sub(1);
     let overflow = win.members.len() > room;
     let take = if overflow { room.saturating_sub(1) } else { room };
     for m in win.members.iter().take(take) {
         let prefix_style = match m.prefix {
-            '@' => Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            '+' => Style::new().fg(Color::Green),
+            '@' => t.op,
+            '+' => t.voice,
             _ => Style::new(),
         };
         let name: String = m.name.chars().filter(|c| !c.is_control()).take(inner.saturating_sub(3)).collect();
         let (symbol, color) = match win.account().and_then(|a| app.presence_of(a, &m.user_id)) {
-            Some(p) => presence_dot(p.kind),
+            Some(p) => presence_dot(t, p.kind),
             None => (' ', Color::Reset),
         };
         rows.push(TLine::from(vec![
             Span::styled(m.prefix.to_string(), prefix_style),
             Span::styled(format!("{symbol} "), Style::new().fg(color)),
-            Span::styled(name, Style::new().fg(nick_color(m.user_id.as_str()))),
+            Span::styled(name, Style::new().fg(t.nick_color(m.user_id.as_str()))),
         ]));
     }
     if overflow {
-        rows.push(TLine::from(Span::styled(format!("… {} more", win.members.len() - take), DIM)));
+        rows.push(TLine::from(Span::styled(format!("… {} more", win.members.len() - take), t.dim)));
     }
-    let block = Block::new().borders(Borders::LEFT).border_style(DIM);
+    let block = Block::new().borders(Borders::LEFT).border_style(t.dim);
     f.render_widget(Paragraph::new(rows).block(block), area);
     // Names start on the row after the "Users" header.
     (0..take.min(win.members.len())).map(|n| (Rect { y: area.y + 1 + n as u16, height: 1, ..area }, n)).collect()
@@ -456,6 +450,7 @@ fn display_len(s: &str) -> usize {
 }
 
 fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
+    let t = &app.cfg.palette;
     let win = &app.windows[app.active];
     let mut text = match (&win.room, &win.topic) {
         (None, _) => format!(" Textrix {} — {}", env!("CARGO_PKG_VERSION"), app.servers_summary()),
@@ -466,19 +461,20 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
         text.push_str(&format!(" · {} is {}", win.name, presence.describe()));
     }
     let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    f.render_widget(Paragraph::new(text).style(BAR), area);
+    f.render_widget(Paragraph::new(text).style(t.bar), area);
     // The pin count stays visible at the right, over a long topic.
     if !win.pinned.is_empty() && area.width > 40 {
         let pins = format!(" 📌 {} pinned · /pins ", win.pinned.len());
         let w = display_len(&pins) as u16;
         let right = Rect { x: area.right() - w, width: w, ..area };
-        f.render_widget(Paragraph::new(pins).style(BAR.add_modifier(Modifier::BOLD)), right);
+        f.render_widget(Paragraph::new(pins).style(t.bar.add_modifier(Modifier::BOLD)), right);
     }
 }
 
 /// The message area: one window, or several split panes, each with a
 /// title bar.
 fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
+    let t = app.cfg.palette.clone();
     let panes = app.screen_windows();
     if panes.len() < 2 {
         let idx = app.active;
@@ -491,7 +487,7 @@ fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
     for (n, (&idx, &pane)) in panes.iter().zip(areas.iter()).enumerate() {
         let mut pane = pane;
         if side_by_side && n > 0 {
-            let divider = Block::new().borders(Borders::LEFT).border_style(DIM);
+            let divider = Block::new().borders(Borders::LEFT).border_style(t.dim);
             f.render_widget(&divider, pane);
             pane = divider.inner(pane);
         }
@@ -508,6 +504,7 @@ fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
 /// A split pane's own status line: which window it is, and whether it has
 /// the focus.
 fn draw_pane_bar(f: &mut Frame, area: Rect, app: &App, idx: usize) {
+    let t = &app.cfg.palette;
     let w = &app.windows[idx];
     let focused = idx == app.active;
     let mut text = format!("{} {}:{}", if focused { '▶' } else { ' ' }, idx + 1, w.name);
@@ -521,8 +518,7 @@ fn draw_pane_bar(f: &mut Frame, area: Rect, app: &App, idx: usize) {
         text.push_str(if w.unseen_below { "  [more, new below]" } else { "  [more]" });
     }
     let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let style =
-        if focused { BAR.add_modifier(Modifier::BOLD) } else { Style::new().fg(Color::Gray).bg(Color::DarkGray) };
+    let style = if focused { t.bar.add_modifier(Modifier::BOLD) } else { t.pane };
     f.render_widget(Paragraph::new(text).style(style), area);
 }
 
@@ -613,7 +609,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             need = height + win.scroll;
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
-            rows.push(day_changed(line.ts));
+            rows.push(day_changed(&cfg.palette, line.ts));
             row_events.push(None);
         }
         if i > 0
@@ -621,7 +617,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && visible[i - 1].event_id == win.marker
             && last_from_others.is_some_and(|j| j >= i)
         {
-            rows.push(new_messages(width));
+            rows.push(new_messages(&cfg.palette, width));
             row_events.push(None);
         }
     }
@@ -697,15 +693,15 @@ fn underlined(row: &TLine, x: u16) -> Vec<(u16, u16, String)> {
     out
 }
 
-fn new_messages(width: usize) -> TLine<'static> {
+fn new_messages(t: &Theme, width: usize) -> TLine<'static> {
     let label = " new messages ";
     let side = width.saturating_sub(label.len()) / 2;
     let rule = "─".repeat(side);
-    TLine::from(Span::styled(format!("{rule}{label}{rule}"), Style::new().fg(Color::Red)))
+    TLine::from(Span::styled(format!("{rule}{label}{rule}"), t.divider))
 }
 
-fn day_changed(ts: DateTime<Local>) -> TLine<'static> {
-    TLine::from(vec![Span::styled("-!- ", MARKER), Span::raw(format!("Day changed to {}", ts.format("%a %d %b %Y")))])
+fn day_changed(t: &Theme, ts: DateTime<Local>) -> TLine<'static> {
+    TLine::from(vec![Span::styled("-!- ", t.accent), Span::raw(format!("Day changed to {}", ts.format("%a %d %b %Y")))])
 }
 
 /// Format one scrollback line and wrap it to `width`, indenting
@@ -725,49 +721,50 @@ fn render_line_with(
     thread_window: Option<&EventId>,
     pinned: bool,
 ) -> Vec<TLine<'static>> {
+    let t = &cfg.palette;
     let mut cells: Vec<(char, Style)> = Vec::new();
     let push = |cells: &mut Vec<(char, Style)>, s: &str, style: Style| {
         cells.extend(s.chars().filter_map(|c| sanitize(c).map(|c| (c, style))));
     };
 
-    push(&mut cells, &line.ts.format(&cfg.timestamp_format).to_string(), DIM);
+    push(&mut cells, &line.ts.format(&cfg.timestamp_format).to_string(), t.dim);
     push(&mut cells, " ", Style::new());
 
     let nick_style = if line.highlight {
-        Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+        t.highlight
     } else if line.own {
-        Style::new().add_modifier(Modifier::BOLD)
+        t.own
     } else {
-        Style::new().fg(nick_color(line.sender.as_ref().map_or(line.nick.as_str(), |s| s.as_str())))
+        Style::new().fg(t.nick_color(line.sender.as_ref().map_or(line.nick.as_str(), |s| s.as_str())))
     };
     let mut body_style = match line.kind {
-        LineKind::Error => Style::new().fg(Color::Red),
-        LineKind::Utd => DIM.add_modifier(Modifier::ITALIC),
-        _ if line.highlight => Style::new().fg(Color::Yellow),
+        LineKind::Error => t.error,
+        LineKind::Utd => t.dim.add_modifier(Modifier::ITALIC),
+        _ if line.highlight => t.highlight_text,
         _ => Style::new(),
     };
     if line.pending || line.redacted {
-        body_style = DIM;
+        body_style = t.dim;
     }
 
     match line.kind {
         LineKind::Message | LineKind::Utd => {
-            push(&mut cells, "<", DIM);
+            push(&mut cells, "<", t.dim);
             push(&mut cells, &line.nick, nick_style);
-            push(&mut cells, "> ", DIM);
+            push(&mut cells, "> ", t.dim);
         }
         LineKind::Emote => {
-            push(&mut cells, " * ", MARKER);
+            push(&mut cells, " * ", t.accent);
             push(&mut cells, &line.nick, nick_style);
             push(&mut cells, " ", Style::new());
         }
         LineKind::Notice => {
-            push(&mut cells, "-", DIM);
+            push(&mut cells, "-", t.dim);
             push(&mut cells, &line.nick, nick_style);
-            push(&mut cells, "- ", DIM);
+            push(&mut cells, "- ", t.dim);
         }
-        LineKind::Error => push(&mut cells, "-!- ", Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        LineKind::Membership | LineKind::Event | LineKind::Info => push(&mut cells, "-!- ", MARKER),
+        LineKind::Error => push(&mut cells, "-!- ", t.error.add_modifier(Modifier::BOLD)),
+        LineKind::Membership | LineKind::Event | LineKind::Info => push(&mut cells, "-!- ", t.accent),
     }
     // Inside its own thread window a thread message needs no "in thread"
     // context; only explicit replies to a later message say what they answer.
@@ -784,7 +781,7 @@ fn render_line_with(
             (Some(nick), None) => format!("{mark} {nick}: "),
             _ => format!("{mark} "),
         };
-        push(&mut cells, &to, DIM);
+        push(&mut cells, &to, t.dim);
     }
 
     let prefix_width: usize = cells.iter().map(|(c, _)| display_width(*c)).sum();
@@ -793,7 +790,7 @@ fn render_line_with(
     match &line.rich {
         Some(spans) if !line.redacted => {
             for span in spans {
-                let style = rich_style(body_style, span.marks, line.highlight);
+                let style = rich_style(t, body_style, span.marks, line.highlight);
                 if span.marks.spoiler && !line.reveal {
                     let hidden: String = span.text.chars().map(|c| if c.is_whitespace() { c } else { '░' }).collect();
                     push(&mut cells, &hidden, style);
@@ -806,44 +803,40 @@ fn render_line_with(
             let mut at = 0;
             for range in links::url_ranges(&line.body) {
                 push(&mut cells, &line.body[at..range.start], body_style);
-                push(
-                    &mut cells,
-                    &line.body[range.clone()],
-                    body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
-                );
+                push(&mut cells, &line.body[range.clone()], body_style.patch(t.link));
                 at = range.end;
             }
             push(&mut cells, &line.body[at..], body_style);
         }
     }
     if line.edited && !line.redacted {
-        push(&mut cells, " (edited)", DIM);
+        push(&mut cells, " (edited)", t.dim);
     }
     if let Some(count) = line.thread_count {
         let text = if count == 1 { " [1 reply]".to_owned() } else { format!(" [{count} replies]") };
-        push(&mut cells, &text, Style::new().fg(Color::Cyan));
+        push(&mut cells, &text, t.badge);
     }
     if pinned {
-        push(&mut cells, " [pinned]", Style::new().fg(Color::Yellow));
+        push(&mut cells, " [pinned]", t.pinned);
     }
     if let Some(percent) = line.progress {
-        push(&mut cells, &format!(" ({percent}%)"), DIM);
+        push(&mut cells, &format!(" ({percent}%)"), t.dim);
     }
     if !line.reactions.is_empty() {
         let summary: Vec<String> = line.reactions.iter().map(|(key, nicks)| format!("{key} {}", nicks.len())).collect();
-        push(&mut cells, &format!(" [{}]", summary.join(" ")), DIM);
+        push(&mut cells, &format!(" [{}]", summary.join(" ")), t.dim);
     }
     if !read_by.is_empty() {
         let shown = read_by.iter().take(3).copied().collect::<Vec<_>>().join(", ");
         let more = read_by.len().saturating_sub(3);
         let text = if more > 0 { format!(" ✓ {shown} +{more}") } else { format!(" ✓ {shown}") };
-        push(&mut cells, &text, Style::new().fg(Color::Green).add_modifier(Modifier::DIM));
+        push(&mut cells, &text, t.receipts);
     }
 
     wrap(&cells, width, indent)
 }
 
-fn rich_style(base: Style, marks: Marks, highlight: bool) -> Style {
+fn rich_style(t: &Theme, base: Style, marks: Marks, highlight: bool) -> Style {
     let mut style = base;
     for (on, modifier) in [
         (marks.bold, Modifier::BOLD),
@@ -855,20 +848,22 @@ fn rich_style(base: Style, marks: Marks, highlight: bool) -> Style {
             style = style.add_modifier(modifier);
         }
     }
-    if let Some((r, g, b)) = marks.color {
+    if let Some((r, g, b)) = marks.color
+        && t.message_colors
+    {
         style = style.fg(Color::Rgb(r, g, b));
     }
     if marks.code {
-        style = style.fg(Color::LightYellow);
+        style = style.patch(t.code);
     }
     if marks.link {
-        style = style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED);
+        style = style.patch(t.link);
     }
     if marks.mention && !highlight {
-        style = style.fg(Color::LightBlue).add_modifier(Modifier::BOLD);
+        style = style.patch(t.mention);
     }
     if marks.dim || marks.spoiler {
-        style = style.fg(Color::DarkGray);
+        style = style.patch(t.dim);
     }
     style
 }
@@ -942,32 +937,28 @@ fn wrap(cells: &[(char, Style)], width: usize, indent: usize) -> Vec<TLine<'stat
     rows
 }
 
-pub fn nick_color(key: &str) -> Color {
-    let hash = key.bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x01000193));
-    NICK_COLORS[hash as usize % NICK_COLORS.len()]
-}
-
 fn draw_status(f: &mut Frame, area: Rect, app: &App) {
+    let t = &app.cfg.palette;
     let win = &app.windows[app.active];
     let mut spans: Vec<Span> = Vec::new();
     let item = |spans: &mut Vec<Span<'static>>, parts: Vec<Span<'static>>| {
-        spans.push(Span::styled("[", BRACKET));
+        spans.push(Span::styled("[", t.bar_accent));
         spans.extend(parts);
-        spans.push(Span::styled("] ", BRACKET));
+        spans.push(Span::styled("] ", t.bar_accent));
     };
 
-    item(&mut spans, vec![Span::styled(Local::now().format("%H:%M").to_string(), BAR)]);
+    item(&mut spans, vec![Span::styled(Local::now().format("%H:%M").to_string(), t.bar)]);
 
     if let Some(state) = win.account().and_then(|a| app.accounts.get(a)) {
         let nick = state.nick.clone().unwrap_or_else(|| state.user.clone());
-        item(&mut spans, vec![Span::styled(nick, BAR)]);
+        item(&mut spans, vec![Span::styled(nick, t.bar)]);
     }
 
     let mut name = format!("{}:{}", app.active + 1, win.name);
     if win.encrypted {
         name.push_str("(+E)");
     }
-    item(&mut spans, vec![Span::styled(name, BAR)]);
+    item(&mut spans, vec![Span::styled(name, t.bar)]);
 
     let active: Vec<(usize, Activity)> = app
         .windows
@@ -977,15 +968,15 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         .map(|(i, w)| (i + 1, w.activity))
         .collect();
     if !active.is_empty() {
-        let mut parts = vec![Span::styled("Act: ", BAR)];
+        let mut parts = vec![Span::styled("Act: ", t.bar)];
         for (n, (num, level)) in active.into_iter().enumerate() {
             if n > 0 {
-                parts.push(Span::styled(",", BAR));
+                parts.push(Span::styled(",", t.bar));
             }
             let style = match level {
-                Activity::Highlight => BAR.fg(Color::Magenta).add_modifier(Modifier::BOLD),
-                Activity::Message => BAR.fg(Color::White).add_modifier(Modifier::BOLD),
-                _ => BAR.fg(Color::Cyan),
+                Activity::Highlight => t.bar.patch(t.highlight),
+                Activity::Message => t.bar.patch(t.activity),
+                _ => t.bar_accent,
             };
             parts.push(Span::styled(num.to_string(), style));
         }
@@ -993,15 +984,15 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     }
 
     if !win.typing.is_empty() {
-        item(&mut spans, vec![Span::styled(format!("typing: {}", win.typing.join(", ")), BAR)]);
+        item(&mut spans, vec![Span::styled(format!("typing: {}", win.typing.join(", ")), t.bar)]);
     }
 
     for (name, state) in &app.accounts {
         if state.away.is_some() {
-            item(&mut spans, vec![Span::styled(format!("{name}: away"), BAR.fg(Color::Yellow))]);
+            item(&mut spans, vec![Span::styled(format!("{name}: away"), t.bar_alert)]);
         }
         if state.verified == Some(false) {
-            item(&mut spans, vec![Span::styled(format!("{name}: unverified"), BAR.fg(Color::Yellow))]);
+            item(&mut spans, vec![Span::styled(format!("{name}: unverified"), t.bar_alert)]);
         }
         let label = match &state.status {
             ConnStatus::Online => continue,
@@ -1010,34 +1001,35 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
             ConnStatus::Lagging => "lag",
             ConnStatus::Offline => "offline",
         };
-        item(&mut spans, vec![Span::styled(format!("{name}: {label}"), BAR.fg(Color::Yellow))]);
+        item(&mut spans, vec![Span::styled(format!("{name}: {label}"), t.bar_alert)]);
     }
 
     if win.scroll > 0 {
-        let style = if win.unseen_below { BAR.add_modifier(Modifier::BOLD) } else { BAR };
+        let style = if win.unseen_below { t.bar.add_modifier(Modifier::BOLD) } else { t.bar };
         item(&mut spans, vec![Span::styled("more", style)]);
     }
 
     if let Some(lines) = app.confirm_paste {
         let prompt = format!("send {lines} pasted lines to {}? y/n", win.name);
-        item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
+        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         let prompt = format!("delete {what}? y/n");
-        item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
+        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
     } else if app.select.is_some() {
         let keys =
             "r reply  e edit  d delete  + react  t thread  p pin  s save  o open  v spoiler  c copy  i info  Esc";
-        item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
+        item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
-        item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
+        item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     }
 
-    f.render_widget(Paragraph::new(TLine::from(spans)).style(BAR), area);
+    f.render_widget(Paragraph::new(TLine::from(spans)).style(t.bar), area);
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
+    let t = &app.cfg.palette;
     let win = &app.windows[app.active];
     let label: String = match app.compose_label() {
         Some(label) => label.chars().take(32).collect(),
@@ -1073,13 +1065,13 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
         used += w;
     }
 
-    let mut spans = vec![Span::styled(prompt, Style::new().fg(Color::Cyan)), Span::raw(text)];
+    let mut spans = vec![Span::styled(prompt, t.frame), Span::raw(text)];
     if app.input.cursor() == chars.len()
         && let Some(hint) = app.input_hint()
     {
         let room = avail.saturating_sub(used + 1);
         let hint: String = hint.chars().take(room).collect();
-        spans.push(Span::styled(hint, DIM));
+        spans.push(Span::styled(hint, t.dim));
     }
     f.render_widget(Paragraph::new(TLine::from(spans)), area);
     let x = area.x + (prompt_w + cursor_w - skip_w).min(area.width.saturating_sub(1) as usize) as u16;

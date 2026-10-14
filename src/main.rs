@@ -14,6 +14,7 @@ mod notify;
 mod richtext;
 mod servers;
 mod switcher;
+mod theme;
 mod ui;
 
 use std::process::ExitCode;

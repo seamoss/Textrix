@@ -105,7 +105,7 @@ bindings.
 | Search | `/search <text>` across every room's loaded history, `/search -deep <text>` through each room's last 500 messages (decrypted locally — servers can't search encrypted rooms), `/jump N` to land on a result in selection mode |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/theme [default\|light\|mono]` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>` (see below) |
@@ -199,6 +199,31 @@ Matrix push rules so Element and your phone follow the same setting:
 synced, so your other clients notify on it too); `/hilight` lists them and
 `/dehilight <word>` removes one. `/info` shows a room's setting.
 
+### Colours
+
+`theme = "default"` suits dark terminal backgrounds, `"light"` light ones,
+and `"mono"` uses no colour at all (bold, underline and reverse video).
+`/theme light` tries one for the session. A `[colors]` table changes single
+parts, by colour name (`lightcyan`), `#rrggbb`, or a 256-colour number:
+
+```toml
+theme = "light"
+
+[colors]
+bar_bg = "#203050"
+link = "lightcyan"
+nicks = "red, 214, #00aa88, blue"   # the colours nicks are picked from
+```
+
+The keys: `bar_fg`, `bar_bg`, `bar_accent`, `bar_alert` (the topic and
+status bars), `pane_fg`, `pane_bg` (unfocused split panes), `dim`,
+`accent`, `frame`, `own_nick`, `highlight`, `highlight_text`, `error`,
+`divider`, `link`, `mention`, `code`, `badge` (reply counts), `pinned`,
+`receipts`, `matched`, `current_fg`, `current_bg`, `shown`, `inactive`,
+`activity_event`, `activity` (the window list), `op`, `voice`, `online`,
+`away`, `offline` (the member list), and `nicks`. A typo stops Textrix
+with the list of keys rather than being ignored.
+
 ## Optional preferences
 
 `~/.textrix/config.toml` (all keys optional; `/reload` applies changes, and
@@ -223,6 +248,7 @@ sidebar_avatars = true     # room avatars there (coloured initials without graph
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
+theme = "default"          # or "light", "mono"; [colors] overrides parts (see above)
 scrollback = 5000
 history_page = 50
 completion_char = ":"

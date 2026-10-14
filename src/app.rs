@@ -48,6 +48,7 @@ use crate::{
     notify,
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
+    theme::{Theme, ThemeName},
     ui,
 };
 
@@ -727,6 +728,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "unsplit", args: "[all]", help: "Close this pane (the window stays open), or all but this one" },
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
+    Cmd {
+        name: "theme",
+        args: "[default|light|mono]",
+        help: "Switch colours for this session (theme = … in config.toml makes it stick)",
+    },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
     Cmd { name: "log", args: "[on|off]", help: "Chat logging for this session (log = true in config makes it stick)" },
@@ -2797,6 +2803,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "theme" => self.cmd_theme(args),
             "devices" | "sessions" => self.cmd_devices(args),
             "hilight" | "highlight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
                 "" => acct.list_highlights(self.here()),
@@ -3650,6 +3657,27 @@ impl App {
             }
             _ => return Err("usage: /devices [rename <id> <name> | delete <id>]".into()),
         }
+        Ok(())
+    }
+
+    fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
+        let name = match args.trim() {
+            "" => {
+                let custom = if self.cfg.colors.is_empty() { "" } else { ", with your [colors] changes" };
+                self.info(format!(
+                    "theme: {}{custom}; /theme default|light|mono switches",
+                    format!("{:?}", self.cfg.theme).to_lowercase()
+                ));
+                return Ok(());
+            }
+            "default" | "dark" => ThemeName::Default,
+            "light" => ThemeName::Light,
+            "mono" => ThemeName::Mono,
+            other => return Err(format!("no theme {other}; there's default, light and mono")),
+        };
+        self.cfg.palette = Theme::build(name, &self.cfg.colors).map_err(|e| format!("{e:#}"))?;
+        self.cfg.theme = name;
+        self.redraw_all = true;
         Ok(())
     }
 

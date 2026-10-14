@@ -11,10 +11,15 @@
 //! accounts/<name>/        per-server session + encrypted-state store
 //! ```
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+
+use crate::theme::{Theme, ThemeName};
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -122,6 +127,13 @@ pub struct Config {
     pub mouse: bool,
     /// Ask before sending a paste longer than this many lines (0: never).
     pub paste_confirm_lines: usize,
+    /// Built-in colours: "default" (dark backgrounds), "light", or "mono".
+    pub theme: ThemeName,
+    /// Colour overrides, e.g. `link = "lightcyan"`, `bar_bg = "#203050"`.
+    pub colors: BTreeMap<String, String>,
+    /// `theme` with `colors` applied (worked out when loading).
+    #[serde(skip)]
+    pub palette: Theme,
 }
 
 impl Default for Config {
@@ -148,6 +160,9 @@ impl Default for Config {
             sidebar_avatars: true,
             mouse: true,
             paste_confirm_lines: 5,
+            theme: ThemeName::Default,
+            colors: BTreeMap::new(),
+            palette: Theme::default(),
         }
     }
 }
@@ -181,7 +196,11 @@ pub enum NotifyMode {
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).with_context(|| format!("parsing {}", path.display())),
+            Ok(text) => {
+                let mut cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+                cfg.palette = Theme::build(cfg.theme, &cfg.colors).with_context(|| format!("in {}", path.display()))?;
+                Ok(cfg)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
