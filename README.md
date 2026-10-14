@@ -178,3 +178,11 @@ scrollback = 5000
 history_page = 50
 completion_char = ":"
 ```
+
+## Building and releases
+
+`cargo build --release` gives a single binary at `target/release/textrix`
+(release builds read `~/.textrix/.env`). CI runs `cargo fmt --check`, clippy
+and the tests on every push to `master`. Pushing a `v*` tag builds archives
+for macOS (Apple silicon and Intel) and Linux x86_64 and publishes them as a
+GitHub release; running the Release workflow by hand only builds them.
