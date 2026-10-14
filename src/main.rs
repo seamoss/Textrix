@@ -5,6 +5,7 @@ mod compose;
 mod config;
 mod convert;
 mod input;
+mod links;
 mod matrix;
 mod model;
 mod notify;
@@ -14,7 +15,10 @@ mod ui;
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use crossterm::event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange};
+use crossterm::event::{
+    DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use ratatui_image::picker::Picker;
 use tracing_subscriber::EnvFilter;
 
@@ -80,12 +84,25 @@ async fn run() -> Result<()> {
     let mut app = App::new(cfg, paths, env, servers, tx);
 
     let mut terminal = ratatui::init();
-    // Ask the terminal what graphics it supports before anything reads stdin.
+    // Ask the terminal about graphics and key reporting before anything
+    // else reads stdin.
     if previews {
         app.picker = Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
     }
+    // Lets terminals that support it (kitty, Ghostty, WezTerm, …) report
+    // Shift+Enter distinctly; elsewhere Alt+Enter inserts a newline.
+    let enhanced_keys = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced_keys {
+        crossterm::execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
     crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
     let result = app::run(&mut terminal, app, rx).await;
+    if enhanced_keys {
+        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
     result

@@ -25,6 +25,7 @@ use crate::{
     config::{Config, NotifyMode, Paths},
     convert::attachment,
     input::{Candidate, Input},
+    links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
     model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, RoomMeta},
     notify,
@@ -527,6 +528,8 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "upload", args: "<path>", help: "Send a file or image (Tab completes paths)" },
     Cmd { name: "download", args: "[nick]", help: "Save the last attachment (from nick) to Downloads" },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
+    Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
+    Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
     Cmd { name: "away", args: "[-all] [message]", help: "Set away with a message, or come back (no message)" },
     Cmd { name: "ignore", args: "[nick|@user]", help: "Hide a user everywhere, or list ignored users" },
@@ -1292,6 +1295,13 @@ impl App {
             self.on_select_key(key);
             return;
         }
+        // Shift+Enter (or Alt+Enter) starts a new line in the message.
+        if key.code == Enter && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) {
+            self.input.end_completion();
+            self.input.insert('\n');
+            self.typed();
+            return;
+        }
         if self.editing.is_some() {
             match key.code {
                 Up => return self.step_edit(true),
@@ -1551,6 +1561,10 @@ impl App {
                 (Some(media), Ok((acct, room_id))) => acct.download(room_id, media),
                 (None, _) => self.error("that message has no attachment"),
                 (_, Err(e)) => self.error(e),
+            },
+            Char('o') => match links::urls(&line.body).first() {
+                Some(url) => self.open_url((*url).to_owned()),
+                None => self.error("that message has no link"),
             },
             Char('c') => {
                 self.clipboard = Some(line.body.clone());
@@ -1875,6 +1889,11 @@ impl App {
             "react" => self.cmd_react(args),
             "upload" => self.cmd_upload(args),
             "lastlog" => self.cmd_lastlog(args),
+            "urls" => {
+                self.cmd_urls();
+                Ok(())
+            }
+            "open" => self.cmd_open(args),
             "list" => self.pick_account(args).map(|(acct, search)| {
                 let search = Some(search.trim()).filter(|s| !s.is_empty()).map(str::to_owned);
                 acct.list_public(self.here(), search);
@@ -2211,6 +2230,51 @@ impl App {
         Ok(())
     }
 
+    /// Links in this window, newest first, without repeats.
+    fn window_urls(&self) -> Vec<(String, String)> {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for line in self.win().lines.iter().rev().filter(|l| l.event_id.is_some() && !l.redacted) {
+            for url in links::urls(&line.body).into_iter().rev() {
+                if seen.insert(url.to_owned()) {
+                    out.push((url.to_owned(), line.nick.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn cmd_urls(&mut self) {
+        let urls = self.window_urls();
+        if urls.is_empty() {
+            return self.info("no links in this window's loaded history");
+        }
+        let rows: Vec<String> =
+            urls.iter().take(20).enumerate().map(|(i, (url, nick))| format!("{:>2}: {url}  <{nick}>", i + 1)).collect();
+        for row in rows {
+            self.info(row);
+        }
+        self.info("/open N opens one in your browser");
+    }
+
+    fn cmd_open(&mut self, args: &str) -> Result<(), String> {
+        let n: usize = match args.trim() {
+            "" => 1,
+            n => n.parse().map_err(|_| "usage: /open [N] (numbers from /urls)")?,
+        };
+        let urls = self.window_urls();
+        let (url, _) = urls.get(n.saturating_sub(1)).ok_or_else(|| format!("no link {n} here; see /urls"))?;
+        self.open_url(url.clone());
+        Ok(())
+    }
+
+    fn open_url(&mut self, url: String) {
+        match links::open(&url) {
+            Ok(()) => self.info(format!("opening {url}")),
+            Err(e) => self.error(format!("couldn't open {url}: {e}")),
+        }
+    }
+
     fn cmd_away(&mut self, args: &str) -> Result<(), String> {
         let (all, message) = match args.trim().strip_prefix("-all") {
             Some(rest) => (true, rest.trim()),
@@ -2404,11 +2468,12 @@ impl App {
             }
             self.info("Keys: Alt+1..0/Alt+Q..P window 1-20, Ctrl+N/P next/prev, Alt+A next active,");
             self.info("      PgUp/PgDn scroll, Tab complete, Up/Down history, Ctrl+A/E/U/K/W/Y edit,");
-            self.info("      F1 help, F2 window list, F3 member list, Ctrl+L redraw");
+            self.info("      Shift+Enter (or Alt+Enter) new line, F1 help, F2 window list, F3 member list,");
+            self.info("      Ctrl+L redraw");
             self.info("Edit: Shift+Up (or Ctrl+E on an empty line), ↑/↓ pick your message, Enter saves,");
             self.info("      clearing the text deletes, Esc restores what you were typing");
             self.info("Select: Alt+Up, then ↑/↓ PgUp/PgDn g/G to move; r reply, e edit, d delete,");
-            self.info("      + react, s save attachment, c copy, i details, Esc to leave");
+            self.info("      + react, s save attachment, o open link, c copy, i details, Esc to leave");
             return;
         }
         let real = ALIASES.iter().find(|(a, _)| *a == wanted).map_or(wanted.as_str(), |(_, r)| *r);
@@ -2730,6 +2795,16 @@ mod tests {
         app.step_edit(false);
         assert!(!app.is_editing(), "down past the newest leaves edit mode");
         assert_eq!(app.input.text(), "half-typed draft");
+    }
+
+    #[test]
+    fn shift_or_alt_enter_starts_a_new_line() {
+        let mut app = test_app();
+        app.input.set_text("first");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        app.input.insert_str("second");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(app.input.text(), "first\nsecond\n");
     }
 
     #[test]

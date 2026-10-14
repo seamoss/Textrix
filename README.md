@@ -56,6 +56,7 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Up / Down | input history |
 | Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `s` save attachment, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
+| Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | help / window list / member list |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Ctrl+L | redraw |
@@ -73,6 +74,7 @@ bindings.
 |---|---|
 | Rooms | `/create [-public] <name>`, `/join`, `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
 | Directory | `/list [search]` (public rooms) |
+| Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |

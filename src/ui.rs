@@ -19,6 +19,7 @@ use crate::{
     app::{App, ConnStatus, Preview},
     config::Config,
     input::display_width,
+    links,
     model::{Activity, Line, LineKind},
 };
 
@@ -373,7 +374,13 @@ fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -
     let prefix_width: usize = cells.iter().map(|(c, _)| display_width(*c)).sum();
     let indent = if prefix_width > width / 2 { 4.min(width.saturating_sub(1)) } else { prefix_width };
 
-    push(&mut cells, &line.body, body_style);
+    let mut at = 0;
+    for range in links::url_ranges(&line.body) {
+        push(&mut cells, &line.body[at..range.start], body_style);
+        push(&mut cells, &line.body[range.clone()], body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED));
+        at = range.end;
+    }
+    push(&mut cells, &line.body[at..], body_style);
     if line.edited && !line.redacted {
         push(&mut cells, " (edited)", DIM);
     }
@@ -546,7 +553,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  s save  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  s save  o open  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
