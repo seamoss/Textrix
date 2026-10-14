@@ -10,6 +10,8 @@ use unicode_width::UnicodeWidthChar;
 pub struct Candidate {
     pub text: String,
     pub user: Option<OwnedUserId>,
+    /// Shown while cycling (e.g. an emoji's shortcode).
+    pub hint: Option<String>,
 }
 
 struct Completion {
@@ -200,6 +202,13 @@ impl Input {
         (self.buf[start..self.cursor].iter().collect(), start == 0)
     }
 
+    /// While cycling through candidates that carry a hint: "hint  2/5".
+    pub fn completion_hint(&self) -> Option<String> {
+        let c = self.completion.as_ref()?;
+        let hint = c.candidates[c.idx].hint.as_ref()?;
+        Some(format!("{hint}  {}/{} · Tab next", c.idx + 1, c.candidates.len()))
+    }
+
     /// Tab: start a completion with `candidates`, or cycle the current one.
     pub fn complete(&mut self, candidates: impl FnOnce() -> Vec<Candidate>) {
         if let Some(c) = &mut self.completion {
@@ -287,8 +296,8 @@ mod tests {
     fn completion_cycles_and_records_mentions() {
         let user: OwnedUserId = "@alice:x.org".try_into().unwrap();
         let cands = vec![
-            Candidate { text: "alice: ".into(), user: Some(user.clone()) },
-            Candidate { text: "alfred: ".into(), user: None },
+            Candidate { text: "alice: ".into(), user: Some(user.clone()), hint: None },
+            Candidate { text: "alfred: ".into(), user: None, hint: Some(":alfred:".into()) },
         ];
         let mut input = typed("al");
         input.complete(|| cands.clone());

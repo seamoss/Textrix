@@ -32,6 +32,7 @@ impl Say {
 }
 
 pub fn compose(text: &str, kind: Say, mentions: &[(String, OwnedUserId)], markdown: bool) -> RoomMessageEventContent {
+    let text = &*crate::emoji::expand(text);
     let mentioned: Vec<&(String, OwnedUserId)> =
         mentions.iter().filter(|(nick, _)| !nick.is_empty() && text.contains(nick.as_str())).collect();
 
@@ -102,6 +103,12 @@ mod tests {
         let html = html_of(&content).expect("mention renders as html");
         assert!(html.contains(r#"<a href="https://matrix.to/#/@alice:x.org">Alice</a>"#), "{html}");
         assert!(content.mentions.unwrap().user_ids.contains(&alice));
+    }
+
+    #[test]
+    fn shortcodes_become_emoji() {
+        let content = compose("ship it :rocket: `:keep:`", Say::Text, &[], true);
+        assert_eq!(content.body(), "ship it 🚀 `:keep:`");
     }
 
     #[test]

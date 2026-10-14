@@ -32,6 +32,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-width = "0.2"
 zeroize = "1"
+emojis = "0.9.0"
 
 [profile.release]
 lto = "thin"

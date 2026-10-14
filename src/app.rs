@@ -704,7 +704,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Ctrl+N / Ctrl+P, Alt+← / Alt+→", "next / previous window"),
     ("Alt+A", "jump to the most important window with activity"),
     ("PgUp / PgDn", "scroll; older history loads at the top"),
-    ("Tab", "complete commands, nicks (adds a mention), server names, file paths"),
+    ("Tab", "complete commands, nicks (adds a mention), :emoji shortcodes, server names, file paths"),
     ("Up / Down", "input history"),
     ("Shift+Enter, Alt+Enter", "new line in the message"),
     ("Alt+Up", "select a message (keys below)"),
@@ -2162,6 +2162,9 @@ impl App {
     /// Dim text after the cursor: matching commands while typing a command
     /// name, then that command's usage once it's complete.
     pub fn input_hint(&self) -> Option<String> {
+        if let Some(hint) = self.input.completion_hint() {
+            return Some(format!("  {hint}"));
+        }
         if self.editing.is_some() {
             return Some("  Enter saves · ↑/↓ your other messages · Esc cancels".into());
         }
@@ -2223,7 +2226,7 @@ impl App {
             return names
                 .into_iter()
                 .filter(|n| n.starts_with(prefix))
-                .map(|n| Candidate { text: format!("/{n} "), user: None })
+                .map(|n| Candidate { text: format!("/{n} "), user: None, hint: None })
                 .collect();
         }
 
@@ -2234,7 +2237,7 @@ impl App {
                 .accounts
                 .keys()
                 .filter(|n| n.starts_with(&lower))
-                .map(|n| Candidate { text: format!("{n} "), user: None })
+                .map(|n| Candidate { text: format!("{n} "), user: None, hint: None })
                 .collect();
         }
         if first == "/upload" {
@@ -2243,6 +2246,12 @@ impl App {
 
         if word.is_empty() {
             return Vec::new();
+        }
+        if let Some(prefix) = word.strip_prefix(':') {
+            return crate::emoji::complete(prefix.trim_end_matches(':'))
+                .into_iter()
+                .map(|(emoji, code)| Candidate { text: emoji.to_owned(), user: None, hint: Some(format!(":{code}:")) })
+                .collect();
         }
         let suffix = if at_start { format!("{} ", self.cfg.completion_char) } else { " ".to_owned() };
         let win = self.win();
@@ -2264,7 +2273,7 @@ impl App {
             };
             if matches && seen.insert(user.clone()) {
                 let text = if word.starts_with('@') { user.to_string() } else { nick.to_owned() };
-                out.push(Candidate { text: format!("{text}{suffix}"), user: Some(user.clone()) });
+                out.push(Candidate { text: format!("{text}{suffix}"), user: Some(user.clone()), hint: None });
             }
         }
         out
@@ -2560,7 +2569,7 @@ impl App {
         reply_to: Option<OwnedEventId>,
     ) {
         let txn_id = TransactionId::new();
-        let mut line = Line::new(kind, text);
+        let mut line = Line::new(kind, crate::emoji::expand(text).into_owned());
         line.reply_to = reply_to;
         if let Some(root) = self.win().thread_root() {
             line.thread = true;
@@ -2643,7 +2652,7 @@ impl App {
             .make_replacement(ReplacementMetadata::new(event_id.clone(), None));
         let rich = crate::convert::rich_of(&content.msgtype);
         if let Some(line) = self.win_mut().find_mut(&event_id) {
-            line.body = text.to_owned();
+            line.body = crate::emoji::expand(text).into_owned();
             line.rich = rich;
             line.edited = true;
         }
@@ -2675,7 +2684,7 @@ impl App {
             return Err("type an emoji (or any text) to react with".into());
         }
         let (acct, room_id) = self.room_ctx()?;
-        acct.react(room_id, event_id, key.to_owned());
+        acct.react(room_id, event_id, crate::emoji::expand(key).into_owned());
         Ok(())
     }
 
@@ -3423,7 +3432,7 @@ fn path_candidates(word: &str) -> Vec<Candidate> {
             }
             let is_dir = Path::new(&dir).join(&name).is_dir();
             let text = if is_dir { format!("{dir_part}{name}/") } else { format!("{dir_part}{name} ") };
-            Some(Candidate { text, user: None })
+            Some(Candidate { text, user: None, hint: None })
         })
         .collect();
     out.sort_by(|a, b| a.text.cmp(&b.text));

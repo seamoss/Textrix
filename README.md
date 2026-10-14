@@ -52,7 +52,7 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Ctrl+N / Ctrl+P, Alt+←/→ | next / previous window |
 | Alt+A | jump to the most important active window |
 | PgUp / PgDn | scroll (older history loads at the top) |
-| Tab | complete commands, nicks (adds a mention), server names, file paths |
+| Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
 | Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
@@ -98,6 +98,9 @@ inline code and code blocks, quotes (`▎`), bullet and numbered lists,
 headings, coloured text, links (with the address when the text differs),
 mention pills, and spoilers (hidden until you press `v` in selection mode).
 What you send is Markdown (`markdown = true`) and shows formatted right away.
+Emoji shortcodes (`:fire:`, `:+1:`, GitHub/Slack names) turn into emoji when
+you send, react or edit, except inside backticks; `:thu` + Tab completes
+them, showing which shortcode you're on as you cycle.
 
 ### Chat logs
 

@@ -5,6 +5,7 @@ mod chatlog;
 mod compose;
 mod config;
 mod convert;
+mod emoji;
 mod input;
 mod links;
 mod matrix;
