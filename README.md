@@ -85,6 +85,17 @@ moderator rights; Textrix checks before asking you to confirm.
 When several servers are connected, prefix a command with `-<server>` while in
 the status window (e.g. `/join -work #ops:work.example`).
 
+### Images
+
+Images show inline under their message. Textrix asks the terminal what it
+supports at startup: kitty graphics (kitty, Ghostty, WezTerm), iTerm2 inline
+images, or sixel, falling back to coloured half-block characters elsewhere
+(e.g. Terminal.app). Encrypted images use the sender's thumbnail when there
+is one; otherwise the image itself is fetched (up to 20 MB) and decoded with
+size and memory limits. Inside tmux, graphics need
+`set -g allow-passthrough on`. `s` in selection mode or `/download` saves the
+original.
+
 ### Reading state
 
 - A red **new messages** divider marks where you stopped reading. It starts at
@@ -112,6 +123,8 @@ read_receipts = "public"   # "private" (only your clients see it) or "off"
 bell = true
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
+image_previews = true      # inline images
+image_rows = 10            # their maximum height
 sidebar = true             # window list (F2)
 nicklist = true            # member list (F3)
 scrollback = 5000

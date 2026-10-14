@@ -88,6 +88,11 @@ pub struct Config {
     pub history_page: u16,
     /// Character appended after a nick completed at the start of the line.
     pub completion_char: String,
+    /// Show images inline (kitty, iTerm2 or sixel graphics where the
+    /// terminal supports them, coloured half-blocks otherwise).
+    pub image_previews: bool,
+    /// Maximum height of an inline image, in rows.
+    pub image_rows: u16,
     /// Window list on the left (F2 or /sidebar toggles it).
     pub sidebar: bool,
     /// Member list on the right of group rooms (F3 or /nicklist toggles it).
@@ -108,6 +113,8 @@ impl Default for Config {
             scrollback: 5000,
             history_page: 50,
             completion_char: ":".into(),
+            image_previews: true,
+            image_rows: 10,
             sidebar: true,
             nicklist: true,
         }

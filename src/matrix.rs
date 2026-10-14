@@ -46,7 +46,7 @@ use matrix_sdk::{
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
             relation::Annotation,
             room::{
-                encryption::RoomEncryptionEventContent, message::RoomMessageEventContent,
+                MediaSource, encryption::RoomEncryptionEventContent, message::RoomMessageEventContent,
                 power_levels::UserPowerLevel,
             },
         },
@@ -54,8 +54,10 @@ use matrix_sdk::{
     sync::SyncResponse,
     TransmissionProgress,
     attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
-    media::{MediaFormat, MediaRequestParameters},
+    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
 };
+use ratatui::layout::Size;
+use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use eyeball::SharedObservable;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -87,6 +89,8 @@ pub enum AppEvent {
     /// Other members' read receipts: (user, nick, event they read up to).
     Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
+    /// An inline image preview, encoded for the terminal (`None` on failure).
+    ImagePreview { event_id: OwnedEventId, protocol: Option<Protocol> },
     Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
     Permissions { account: AccountName, room_id: OwnedRoomId, perms: Permissions },
     Focus { account: AccountName, room_id: OwnedRoomId },
@@ -668,6 +672,62 @@ impl Account {
         let sent = room.send_attachment(filename, &mime, data, config).with_send_progress_observable(progress).await;
         reporter.abort();
         Ok(sent?.event_id)
+    }
+
+    /// Fetch an image (preferably a thumbnail) and encode it for the
+    /// terminal to fit in `cells`.
+    pub fn fetch_preview(&self, event_id: OwnedEventId, media: Media, picker: Picker, cells: Size) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let protocol = match acct.load_preview(&media, picker, cells).await {
+                Ok(protocol) => Some(protocol),
+                Err(e) => {
+                    tracing::debug!("no preview for {event_id}: {e:#}");
+                    None
+                }
+            };
+            acct.notify.send(AppEvent::ImagePreview { event_id, protocol });
+        });
+    }
+
+    async fn load_preview(&self, media: &Media, picker: Picker, cells: Size) -> Result<Protocol> {
+        const MAX_FULL_DOWNLOAD: u64 = 20 * 1024 * 1024;
+        let font = picker.font_size();
+        let width = u32::from(cells.width) * u32::from(font.width);
+        let height = u32::from(cells.height) * u32::from(font.height);
+        let media_api = self.client.media();
+        let file = |source: &MediaSource| MediaRequestParameters { source: source.clone(), format: MediaFormat::File };
+        let full = async {
+            if media.size.is_some_and(|s| s > MAX_FULL_DOWNLOAD) {
+                bail!("{} is too large to preview", media.filename);
+            }
+            Ok(media_api.get_media_content(&file(&media.source), true).await?)
+        };
+        let bytes = match (&media.thumbnail, &media.source) {
+            // Encrypted images can only have sender-made thumbnails.
+            (Some(thumbnail), _) => media_api.get_media_content(&file(thumbnail), true).await?,
+            (None, MediaSource::Plain(_)) => {
+                let settings = MediaThumbnailSettings::new(UInt::from(width.max(96)), UInt::from(height.max(96)));
+                let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::Thumbnail(settings) };
+                match media_api.get_media_content(&request, true).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => full.await?,
+                }
+            }
+            (None, _) => full.await?,
+        };
+        // Decoding untrusted images: cap dimensions and memory, off the UI thread.
+        tokio::task::spawn_blocking(move || -> Result<Protocol> {
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(12_000);
+            limits.max_image_height = Some(12_000);
+            limits.max_alloc = Some(256 * 1024 * 1024);
+            reader.limits(limits);
+            let decoded = reader.decode()?;
+            picker.new_protocol(decoded, cells, Resize::Fit(None)).map_err(|e| anyhow::anyhow!("{e}"))
+        })
+        .await?
     }
 
     /// Save an attachment into the Downloads folder.

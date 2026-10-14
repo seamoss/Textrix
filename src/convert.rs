@@ -237,7 +237,20 @@ fn media_of(msgtype: &MessageType) -> Option<Media> {
         MessageType::File(c) => (&c.source, &c.filename, &c.body),
         _ => return None,
     };
-    Some(Media { source: source.clone(), filename: filename.clone().unwrap_or_else(|| body.clone()) })
+    let (is_image, thumbnail, size) = match msgtype {
+        MessageType::Image(c) => {
+            let info = c.info.as_deref();
+            (true, info.and_then(|i| i.thumbnail_source.clone()), info.and_then(|i| i.size).map(u64::from))
+        }
+        _ => (false, None, None),
+    };
+    Some(Media {
+        source: source.clone(),
+        filename: filename.clone().unwrap_or_else(|| body.clone()),
+        is_image,
+        thumbnail,
+        size,
+    })
 }
 
 /// Drop the legacy `> <@user> quoted text` block that older clients prepend

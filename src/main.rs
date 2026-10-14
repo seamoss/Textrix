@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 use crossterm::event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange};
+use ratatui_image::picker::Picker;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -75,9 +76,14 @@ async fn run() -> Result<()> {
         .init();
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let app = App::new(cfg, paths, env, servers, tx);
+    let previews = cfg.image_previews;
+    let mut app = App::new(cfg, paths, env, servers, tx);
 
     let mut terminal = ratatui::init();
+    // Ask the terminal what graphics it supports before anything reads stdin.
+    if previews {
+        app.picker = Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
+    }
     crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
     let result = app::run(&mut terminal, app, rx).await;
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);

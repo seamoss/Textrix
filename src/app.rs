@@ -15,7 +15,8 @@ use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
     events::room::message::{AddMentions, ForwardThread, ReplacementMetadata, ReplyMetadata, RoomMessageEventContent},
 };
-use ratatui::DefaultTerminal;
+use ratatui::{DefaultTerminal, layout::Size};
+use ratatui_image::{picker::Picker, protocol::Protocol};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -25,7 +26,7 @@ use crate::{
     convert::attachment,
     input::{Candidate, Input},
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
-    model::{AccountName, Activity, Item, Line, LineKind, Member, Permissions, RoomMeta},
+    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, RoomMeta},
     notify,
     servers::{EnvFile, ServerDef, Servers},
     ui,
@@ -413,6 +414,17 @@ fn annotate(line: &mut Line, item: &Item) {
     }
 }
 
+/// An inline image preview's state.
+pub enum Preview {
+    Loading,
+    Ready(Protocol),
+    Failed,
+}
+
+/// Encoded previews kept in memory; older ones are fetched again (from the
+/// SDK's media cache) if they scroll back into view.
+const PREVIEWS_MAX: usize = 64;
+
 /// What the next plain-text submit does, chosen in selection mode.
 #[derive(Clone, Debug)]
 enum Compose {
@@ -473,6 +485,12 @@ pub struct App {
     compose: Option<(WinKey, Compose)>,
     /// Text for the clipboard, written after the next draw.
     pub clipboard: Option<String>,
+    /// Terminal graphics support, probed at startup; `None` disables previews.
+    pub picker: Option<Picker>,
+    pub previews: HashMap<OwnedEventId, Preview>,
+    preview_order: VecDeque<OwnedEventId>,
+    /// Images the renderer wants, fetched after the draw.
+    pub preview_requests: Vec<(OwnedEventId, Media)>,
 }
 
 struct Cmd {
@@ -608,6 +626,10 @@ impl App {
             editing: None,
             compose: None,
             clipboard: None,
+            picker: None,
+            previews: HashMap::new(),
+            preview_order: VecDeque::new(),
+            preview_requests: Vec::new(),
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
         app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
@@ -868,6 +890,16 @@ impl App {
                     self.windows[idx].lines.iter_mut().rev().find(|l| l.pending && l.txn_id.as_ref() == Some(&txn_id))
                 {
                     line.progress = Some(percent);
+                }
+            }
+            AppEvent::ImagePreview { event_id, protocol } => {
+                let preview = protocol.map_or(Preview::Failed, Preview::Ready);
+                self.previews.insert(event_id.clone(), preview);
+                self.preview_order.push_back(event_id);
+                while self.preview_order.len() > PREVIEWS_MAX {
+                    if let Some(old) = self.preview_order.pop_front() {
+                        self.previews.remove(&old);
+                    }
                 }
             }
             AppEvent::Typing { account, room_id, nicks } => {
@@ -1174,8 +1206,17 @@ impl App {
 
     // ---- per-frame upkeep ------------------------------------------------
 
-    /// Called after every draw: lazy history, member lists, read markers.
+    /// Called after every draw: lazy history, member lists, read markers,
+    /// image previews.
     pub fn after_draw(&mut self) {
+        if !self.preview_requests.is_empty()
+            && let (Some(picker), Ok((acct, _))) = (self.picker.clone(), self.room_ctx())
+        {
+            let cells = Size::new(self.view_width.saturating_sub(8).clamp(8, 64), self.cfg.image_rows.max(2));
+            for (event_id, media) in std::mem::take(&mut self.preview_requests) {
+                acct.fetch_preview(event_id, media, picker.clone(), cells);
+            }
+        }
         let page = self.cfg.history_page;
         let receipts = self.cfg.read_receipts;
         let Some(key) = self.win().room.clone() else { return };
@@ -2555,6 +2596,9 @@ mod tests {
         server.media = Some(crate::model::Media {
             source: matrix_sdk::ruma::events::room::MediaSource::Plain("mxc://x/y".into()),
             filename: "notes.txt".into(),
+            is_image: false,
+            thumbnail: None,
+            size: None,
         });
         assert!(!w.push(server, 100));
         assert_eq!(w.lines.len(), 1);
@@ -2664,7 +2708,7 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: "!r:x.org".try_into().unwrap() };
         app.windows.push(Window::new(Some(key), "room".into()));
         app.active = 1;
-        let mut mine = |id: &str, body: &str| {
+        let mine = |id: &str, body: &str| {
             let mut l = msg(id, body);
             l.own = true;
             l

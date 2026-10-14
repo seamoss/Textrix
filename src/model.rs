@@ -99,6 +99,11 @@ impl Line {
 pub struct Media {
     pub source: MediaSource,
     pub filename: String,
+    /// Images get inline previews.
+    pub is_image: bool,
+    /// A sender-provided thumbnail (the only kind encrypted images have).
+    pub thumbnail: Option<MediaSource>,
+    pub size: Option<u64>,
 }
 
 /// One converted timeline event.

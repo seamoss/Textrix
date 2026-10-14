@@ -13,11 +13,14 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "7"
 eyeball = "0.8"
 futures-util = "0.3"
+image = { version = "0.25", default-features = false }
 imagesize = "0.15"
 matrix-sdk = { version = "0.19.1", features = ["bundled-sqlite", "markdown"] }
 mime = "0.3"
 mime_guess = "2"
 ratatui = "0.30"
+# Pure Rust: the default `chafa-dyn` feature would link the C libchafa.
+ratatui-image = { version = "12.0.0-rc.2", default-features = false, features = ["crossterm", "image-defaults"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

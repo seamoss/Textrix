@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
-use matrix_sdk::ruma::{EventId, UserId};
+use matrix_sdk::ruma::{EventId, OwnedEventId, UserId};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
@@ -13,8 +13,10 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
+use ratatui_image::Image;
+
 use crate::{
-    app::{App, ConnStatus},
+    app::{App, ConnStatus, Preview},
     config::Config,
     input::display_width,
     model::{Activity, Line, LineKind},
@@ -173,8 +175,13 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width as usize;
     let height = area.height as usize;
     let selected = app.focus_event();
+    let images = app.picker.is_some();
+    let (previews, requests) = (&mut app.previews, &mut app.preview_requests);
     let cfg = &app.cfg;
     let win = &mut app.windows[app.active];
+    // Images sit under their message, lined up with the message text.
+    let image_x = display_len(&Local::now().format(&cfg.timestamp_format).to_string()) as u16 + 1;
+    let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
     let visible: Vec<&Line> = win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
 
     // Who has read up to which event (not shown on their own messages).
@@ -205,6 +212,23 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
             })
             .unwrap_or_default();
         let is_selected = selected.is_some() && line.event_id == selected;
+        if images
+            && !line.redacted
+            && let (Some(media), Some(id)) = (line.media.as_ref().filter(|m| m.is_image), &line.event_id)
+        {
+            match previews.get(id) {
+                Some(Preview::Ready(protocol)) => {
+                    let height = protocol.size().height;
+                    placements.push((id.clone(), rows.len(), height));
+                    rows.extend((0..height).map(|_| TLine::default()));
+                }
+                Some(Preview::Loading | Preview::Failed) => {}
+                None => {
+                    previews.insert(id.clone(), Preview::Loading);
+                    requests.push((id.clone(), media.clone()));
+                }
+            }
+        }
         let below = rows.len();
         let mut rendered = render_line_with(line, width, cfg, &read);
         if is_selected {
@@ -246,13 +270,31 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
         win.unseen_below = false;
     }
 
+    let total = rows.len();
     rows.reverse();
-    let end = rows.len() - win.scroll.min(rows.len());
+    let end = total - win.scroll.min(total);
     let start = end.saturating_sub(height);
     let shown = rows[start..end].to_vec();
     let pad = height - shown.len();
     let area = Rect { y: area.y + pad as u16, height: shown.len() as u16, ..area };
     f.render_widget(Paragraph::new(shown), area);
+
+    // Draw previews whose reserved rows are fully on screen.
+    for (id, below, rows_tall) in placements {
+        let Some(Preview::Ready(protocol)) = app.previews.get(&id) else { continue };
+        let top = total - (below + rows_tall as usize);
+        let bottom = total - 1 - below;
+        if top < start || bottom >= end {
+            continue;
+        }
+        let size = protocol.size();
+        let x = area.x + image_x;
+        if x + size.width > area.right() {
+            continue;
+        }
+        let rect = Rect { x, y: area.y + (top - start) as u16, width: size.width, height: size.height };
+        f.render_widget(Image::new(protocol), rect);
+    }
 }
 
 fn new_messages(width: usize) -> TLine<'static> {
