@@ -118,6 +118,8 @@ pub struct Window {
     orphans: HashMap<OwnedEventId, Vec<Item>>,
     /// `/jump` target: keep loading history until this event shows up.
     seek: Option<OwnedEventId>,
+    /// Columns it was last drawn at (0 until it's been on screen).
+    pub width: u16,
 }
 
 const ORPHANS_MAX: usize = 1000;
@@ -161,6 +163,7 @@ impl Window {
             perms: None,
             orphans: HashMap::new(),
             seek: None,
+            width: 0,
         }
     }
 
@@ -516,6 +519,17 @@ struct Layout {
     closed: Vec<WinKey>,
 }
 
+/// Several windows on screen at once, like irssi's split windows. Panes
+/// hold window identities (`None` is the status window), so they survive
+/// windows opening, closing and moving. The active window is always one of
+/// them: the focused pane.
+pub struct Split {
+    pub panes: Vec<Option<WinKey>>,
+    pub side_by_side: bool,
+}
+
+const PANES_MAX: usize = 4;
+
 pub struct App {
     pub cfg: Config,
     paths: Paths,
@@ -553,12 +567,13 @@ pub struct App {
     pub clipboard: Option<String>,
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
+    pub split: Option<Split>,
     /// Terminal graphics support, probed at startup; `None` disables previews.
     pub picker: Option<Picker>,
     pub previews: HashMap<OwnedEventId, Preview>,
     preview_order: VecDeque<OwnedEventId>,
     /// Images the renderer wants, fetched after the draw.
-    pub preview_requests: Vec<(OwnedEventId, Media)>,
+    pub preview_requests: Vec<(String, OwnedEventId, Media)>,
     /// Other people's presence, per server.
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
     /// Joined spaces per server, for grouping the window list.
@@ -664,6 +679,9 @@ const COMMANDS: &[Cmd] = &[
         args: "<n>|list|close|move <n>|goto <name>",
         help: "Manage windows (alias /win; /wc closes, /wl lists)",
     },
+    Cmd { name: "split", args: "<window>", help: "Show another window in a pane below (F6 moves between panes)" },
+    Cmd { name: "vsplit", args: "<window>", help: "Show another window in a pane beside this one" },
+    Cmd { name: "unsplit", args: "[all]", help: "Close this pane (the window stays open), or all but this one" },
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
@@ -710,6 +728,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Alt+Up", "select a message (keys below)"),
     ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
     ("F1 / F2 / F3", "this help / window list / member list"),
+    ("F6 / Shift+F6", "focus the next / previous split pane"),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line"),
@@ -840,6 +859,7 @@ impl App {
             compose: None,
             clipboard: None,
             help: None,
+            split: None,
             picker: None,
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
@@ -1371,8 +1391,11 @@ impl App {
             }
         };
         let cap = self.cfg.scrollback;
-        let width = self.view_width;
-        let viewing = idx == self.active;
+        let width = match self.windows[idx].width {
+            0 => self.view_width,
+            w => w,
+        };
+        let viewing = self.on_screen(idx);
         let mut ring = false;
         let mut mirrored = Vec::new();
 
@@ -1400,7 +1423,7 @@ impl App {
                         if line.thread_root.as_ref() == Some(root) || line.event_id.as_ref() == Some(root) =>
                     {
                         let added = self.windows[*tidx].push(line.clone(), cap);
-                        if added && live && !line.own && *tidx != self.active {
+                        if added && live && !line.own && !self.on_screen(*tidx) {
                             let level = if line.highlight { Activity::Highlight } else { Activity::Message };
                             self.windows[*tidx].activity = self.windows[*tidx].activity.max(level);
                         }
@@ -1467,7 +1490,7 @@ impl App {
         }
         for copy in mirrored {
             self.windows[0].push(copy, cap);
-            if self.active != 0 {
+            if !self.on_screen(0) {
                 self.windows[0].activity = Activity::Highlight;
             }
         }
@@ -1493,7 +1516,7 @@ impl App {
             }
         };
         let level = self.windows[idx].update(&meta);
-        if idx != self.active {
+        if !self.on_screen(idx) {
             let w = &mut self.windows[idx];
             w.activity = w.activity.max(level);
         }
@@ -1532,9 +1555,23 @@ impl App {
         if idx == 0 {
             return;
         }
-        self.windows.remove(idx);
+        let removed = self.windows.remove(idx).room;
         if self.active >= idx && self.active > 0 {
             self.active -= 1;
+        }
+        // Its pane goes too, unless focus has to land somewhere new.
+        let active = self.windows[self.active].room.clone();
+        if let Some(split) = &mut self.split
+            && let Some(slot) = split.panes.iter().position(|k| *k == removed)
+        {
+            if split.panes.contains(&active) {
+                split.panes.remove(slot);
+            } else {
+                split.panes[slot] = active;
+            }
+        }
+        if self.split.as_ref().is_some_and(|s| s.panes.len() < 2) {
+            self.split = None;
         }
     }
 
@@ -1615,18 +1652,30 @@ impl App {
             }
         }
         if !self.preview_requests.is_empty()
-            && let (Some(picker), Ok((acct, _))) = (self.picker.clone(), self.room_ctx())
+            && let Some(picker) = self.picker.clone()
         {
             let cells = Size::new(self.view_width.saturating_sub(8).clamp(8, 64), self.cfg.image_rows.max(2));
-            for (event_id, media) in std::mem::take(&mut self.preview_requests) {
-                acct.fetch_preview(event_id, media, picker.clone(), cells);
+            for (account, event_id, media) in std::mem::take(&mut self.preview_requests) {
+                match self.connected(&account) {
+                    Some(acct) => acct.fetch_preview(event_id, media, picker.clone(), cells),
+                    // Asked again once the server is back.
+                    None => drop(self.previews.remove(&event_id)),
+                }
             }
         }
+        for idx in self.screen_windows() {
+            self.window_upkeep(idx);
+        }
+    }
+
+    /// Members, older history and read markers for a window on screen.
+    fn window_upkeep(&mut self, idx: usize) {
         let page = self.cfg.history_page;
         let receipts = self.cfg.read_receipts;
-        let Some(key) = self.win().room.clone() else { return };
+        let focused = idx == self.active;
+        let Some(key) = self.windows[idx].room.clone() else { return };
         let Some(acct) = self.connected(&key.account) else { return };
-        let w = &mut self.windows[self.active];
+        let w = &mut self.windows[idx];
 
         if !w.members_requested {
             w.members_requested = true;
@@ -1637,7 +1686,9 @@ impl App {
         if let Some(target) = w.seek.clone() {
             if w.contains(&target) {
                 w.seek = None;
-                self.select = Some(target);
+                if focused {
+                    self.select = Some(target);
+                }
                 return;
             }
             if matches!(w.history, History::Done) {
@@ -1840,6 +1891,8 @@ impl App {
             F(1) => self.help = Some(HelpView::default()),
             F(2) => self.show_sidebar = !self.show_sidebar,
             F(3) => self.show_nicklist = !self.show_nicklist,
+            F(6) if key.modifiers.contains(KeyModifiers::SHIFT) => self.cycle_pane(-1),
+            F(6) => self.cycle_pane(1),
             _ => {}
         }
         if edited {
@@ -1870,8 +1923,40 @@ impl App {
         if let Some(latest) = left.latest_event() {
             left.marker = Some(latest);
         }
+        // A window already in a pane gets the focus; otherwise it replaces
+        // the focused pane's window.
+        let to = self.windows[idx].room.clone();
+        if let Some(split) = &mut self.split
+            && !split.panes.contains(&to)
+        {
+            let from = &self.windows[self.active].room;
+            match split.panes.iter().position(|k| k == from) {
+                Some(slot) => split.panes[slot] = to,
+                None => split.panes.push(to),
+            }
+        }
         self.active = idx;
         self.windows[idx].activity = Activity::None;
+    }
+
+    /// Windows on screen, in pane order (just the active one unless split).
+    pub fn screen_windows(&self) -> Vec<usize> {
+        let Some(split) = &self.split else { return vec![self.active] };
+        split.panes.iter().filter_map(|key| self.windows.iter().position(|w| w.room == *key)).collect()
+    }
+
+    pub fn on_screen(&self, idx: usize) -> bool {
+        idx == self.active || self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[idx].room))
+    }
+
+    /// F6 / Shift+F6: focus the next or previous pane.
+    fn cycle_pane(&mut self, step: isize) {
+        let panes = self.screen_windows();
+        if panes.len() < 2 {
+            return;
+        }
+        let pos = panes.iter().position(|&i| i == self.active).unwrap_or(0) as isize;
+        self.switch_to(panes[(pos + step).rem_euclid(panes.len() as isize) as usize]);
     }
 
     fn cycle_window(&mut self, step: isize) {
@@ -2458,6 +2543,9 @@ impl App {
             "ban" => self.cmd_moderate(Moderation::Ban, args),
             "unban" => self.cmd_moderate(Moderation::Unban, args),
             "window" => self.cmd_window(args),
+            "split" => self.cmd_split(args, false),
+            "vsplit" => self.cmd_split(args, true),
+            "unsplit" => self.cmd_unsplit(args),
             "wc" => self.cmd_window("close"),
             "wl" => self.cmd_window("list"),
             "clear" => {
@@ -3158,6 +3246,66 @@ impl App {
         Ok(())
     }
 
+    fn find_window(&self, name: &str) -> Result<usize, String> {
+        if let Ok(n) = name.parse::<usize>() {
+            return (1..=self.windows.len()).contains(&n).then(|| n - 1).ok_or_else(|| format!("no window {n}"));
+        }
+        let wanted = name.to_lowercase();
+        self.windows
+            .iter()
+            .position(|w| w.name.to_lowercase() == wanted)
+            .or_else(|| self.windows.iter().position(|w| w.name.to_lowercase().contains(&wanted)))
+            .ok_or_else(|| format!("no window matching {name}"))
+    }
+
+    /// `/split` and `/vsplit`: show another window in a new pane. Focus
+    /// stays where you are typing; F6 moves it. With no window, an existing
+    /// split just changes direction.
+    fn cmd_split(&mut self, args: &str, side_by_side: bool) -> Result<(), String> {
+        let target = args.trim();
+        if target.is_empty() {
+            let Some(split) = &mut self.split else {
+                let name = if side_by_side { "vsplit" } else { "split" };
+                return Err(format!("usage: /{name} <window number or name>"));
+            };
+            split.side_by_side = side_by_side;
+            return Ok(());
+        }
+        let idx = self.find_window(target)?;
+        if self.on_screen(idx) {
+            return Err(format!("{} is already on screen", self.windows[idx].name));
+        }
+        let current = self.windows[self.active].room.clone();
+        let split = self.split.get_or_insert_with(|| Split { panes: vec![current.clone()], side_by_side });
+        if split.panes.len() >= PANES_MAX {
+            return Err(format!("{PANES_MAX} panes at most; /unsplit closes this one"));
+        }
+        split.side_by_side = side_by_side;
+        let slot = split.panes.iter().position(|k| *k == current).map_or(split.panes.len(), |i| i + 1);
+        split.panes.insert(slot, self.windows[idx].room.clone());
+        self.windows[idx].activity = Activity::None;
+        Ok(())
+    }
+
+    fn cmd_unsplit(&mut self, args: &str) -> Result<(), String> {
+        let Some(split) = &mut self.split else { return Err("nothing is split; /split <window> adds a pane".into()) };
+        if args.trim() == "all" {
+            self.split = None;
+            return Ok(());
+        }
+        let current = &self.windows[self.active].room;
+        let slot = split.panes.iter().position(|k| k == current).unwrap_or(0);
+        split.panes.remove(slot);
+        let next = split.panes[slot.min(split.panes.len() - 1)].clone();
+        if split.panes.len() < 2 {
+            self.split = None;
+        }
+        if let Some(idx) = self.windows.iter().position(|w| w.room == next) {
+            self.switch_to(idx);
+        }
+        Ok(())
+    }
+
     fn goto_name(&mut self, name: &str) -> Result<(), String> {
         let wanted = name.to_lowercase();
         let idx = self
@@ -3614,6 +3762,49 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let paths = Paths { base: std::env::temp_dir(), env_file: std::env::temp_dir().join("none") };
         App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx)
+    }
+
+    fn room_window(app: &mut App, room: &str, name: &str) -> usize {
+        let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
+        app.windows.push(Window::new(Some(key), name.into()));
+        app.windows.len() - 1
+    }
+
+    #[test]
+    fn split_panes_follow_focus_and_window_changes() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let b = room_window(&mut app, "!b:x.org", "beta");
+        let c = room_window(&mut app, "!c:x.org", "gamma");
+        app.switch_to(a);
+        assert!(app.cmd_split("", false).is_err(), "nothing to change yet");
+        assert!(app.cmd_split("alpha", false).is_err(), "already on screen");
+        app.cmd_split("beta", false).unwrap();
+        assert_eq!(app.screen_windows(), [a, b]);
+        assert_eq!(app.active, a, "focus stays where you're typing");
+
+        app.cycle_pane(1);
+        assert_eq!(app.active, b);
+        // Switching to a hidden window swaps it into the focused pane...
+        app.switch_to(c);
+        assert_eq!(app.screen_windows(), [a, c]);
+        // ...and to a visible one just moves the focus.
+        app.switch_to(a);
+        assert_eq!((app.active, app.screen_windows()), (a, vec![a, c]));
+
+        app.cmd_split("3", true).unwrap();
+        assert_eq!(app.screen_windows(), [a, b, c]);
+        assert!(app.split.as_ref().unwrap().side_by_side);
+
+        // Closing a shown window drops its pane; panes track identity, not
+        // position, so the others keep their windows.
+        app.remove_window(b);
+        let (a, c) = (a, c - 1);
+        assert_eq!(app.screen_windows(), [a, c]);
+        app.cmd_unsplit("").unwrap();
+        assert!(app.split.is_none(), "one pane left means no split");
+        assert_eq!(app.active, c);
+        assert!(app.cmd_unsplit("").is_err());
     }
 
     #[test]

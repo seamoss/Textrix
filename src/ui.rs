@@ -55,13 +55,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [side, main, nicks] =
         Layout::horizontal([Constraint::Length(side_w), Constraint::Min(20), Constraint::Length(nick_w)]).areas(middle);
 
-    app.view_width = main.width;
-    app.view_height = main.height;
     draw_topic(f, topic, app);
     if side_w > 0 {
         draw_sidebar(f, side, app);
     }
-    draw_messages(f, main, app);
+    draw_panes(f, main, app);
     if nick_w > 0 {
         draw_nicklist(f, nicks, app);
     }
@@ -270,7 +268,12 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     } else {
         activity_style(w.activity)
     };
-    let mut parts = vec![Span::styled(number, if active { style } else { DIM })];
+    let number_style = match (active, app.on_screen(i)) {
+        (true, _) => style,
+        (false, true) => Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        (false, false) => DIM,
+    };
+    let mut parts = vec![Span::styled(number, number_style)];
     parts.extend(avatar);
     if let Some((symbol, color)) = dot {
         parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
@@ -347,15 +350,66 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(text).style(BAR), area);
 }
 
-fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
+/// The message area: one window, or several split panes, each with a
+/// title bar.
+fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
+    let panes = app.screen_windows();
+    if panes.len() < 2 {
+        let idx = app.active;
+        (app.view_width, app.view_height, app.windows[idx].width) = (area.width, area.height, area.width);
+        return draw_messages(f, area, app, idx);
+    }
+    let side_by_side = app.split.as_ref().is_some_and(|s| s.side_by_side);
+    let fill = vec![Constraint::Fill(1); panes.len()];
+    let areas = if side_by_side { Layout::horizontal(fill).split(area) } else { Layout::vertical(fill).split(area) };
+    for (n, (&idx, &pane)) in panes.iter().zip(areas.iter()).enumerate() {
+        let mut pane = pane;
+        if side_by_side && n > 0 {
+            let divider = Block::new().borders(Borders::LEFT).border_style(DIM);
+            f.render_widget(&divider, pane);
+            pane = divider.inner(pane);
+        }
+        let [body, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(pane);
+        draw_pane_bar(f, bar, app, idx);
+        if idx == app.active {
+            (app.view_width, app.view_height) = (body.width, body.height);
+        }
+        app.windows[idx].width = body.width;
+        draw_messages(f, body, app, idx);
+    }
+}
+
+/// A split pane's own status line: which window it is, and whether it has
+/// the focus.
+fn draw_pane_bar(f: &mut Frame, area: Rect, app: &App, idx: usize) {
+    let w = &app.windows[idx];
+    let focused = idx == app.active;
+    let mut text = format!("{} {}:{}", if focused { '▶' } else { ' ' }, idx + 1, w.name);
+    if w.encrypted {
+        text.push_str("(+E)");
+    }
+    if !w.typing.is_empty() {
+        text.push_str(&format!("  typing: {}", w.typing.join(", ")));
+    }
+    if w.scroll > 0 {
+        text.push_str(if w.unseen_below { "  [more, new below]" } else { "  [more]" });
+    }
+    let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let style =
+        if focused { BAR.add_modifier(Modifier::BOLD) } else { Style::new().fg(Color::Gray).bg(Color::DarkGray) };
+    f.render_widget(Paragraph::new(text).style(style), area);
+}
+
+fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let width = area.width as usize;
     let height = area.height as usize;
-    let selected = app.focus_event();
-    let thread_window = app.windows[app.active].thread_root().map(ToOwned::to_owned);
+    let selected = if idx == app.active { app.focus_event() } else { None };
+    let thread_window = app.windows[idx].thread_root().map(ToOwned::to_owned);
+    let account = app.windows[idx].room.as_ref().map(|k| k.account.clone());
     let images = app.picker.is_some();
     let (previews, requests) = (&mut app.previews, &mut app.preview_requests);
     let cfg = &app.cfg;
-    let win = &mut app.windows[app.active];
+    let win = &mut app.windows[idx];
     // Images sit under their message, lined up with the message text.
     let image_x = display_len(&Local::now().format(&cfg.timestamp_format).to_string()) as u16 + 1;
     let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
@@ -401,8 +455,10 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
                 None => {
-                    previews.insert(id.clone(), Preview::Loading);
-                    requests.push((id.clone(), media.clone()));
+                    if let Some(account) = &account {
+                        previews.insert(id.clone(), Preview::Loading);
+                        requests.push((account.clone(), id.clone(), media.clone()));
+                    }
                 }
             }
         }
@@ -745,7 +801,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         .windows
         .iter()
         .enumerate()
-        .filter(|(i, w)| *i != app.active && w.activity > Activity::None)
+        .filter(|(i, w)| !app.on_screen(*i) && w.activity > Activity::None)
         .map(|(i, w)| (i + 1, w.activity))
         .collect();
     if !active.is_empty() {
