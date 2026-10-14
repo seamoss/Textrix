@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
+use chrono::Local;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
@@ -20,11 +21,12 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     compose::{Say, compose},
-    config::{Config, Paths},
+    config::{Config, NotifyMode, Paths},
     convert::attachment,
     input::{Candidate, Input},
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
-    model::{AccountName, Activity, Item, Line, LineKind, Member, RoomMeta},
+    model::{AccountName, Activity, Item, Line, LineKind, Member, Permissions, RoomMeta},
+    notify,
     servers::{EnvFile, ServerDef, Servers},
     ui,
 };
@@ -51,6 +53,8 @@ pub struct AccountState {
     pub status: ConnStatus,
     /// `Some(false)` once we know this device is not cross-signed.
     pub verified: Option<bool>,
+    /// Away message set with `/away`.
+    pub away: Option<String>,
     pub account: Option<Account>,
 }
 
@@ -88,6 +92,8 @@ pub struct Window {
     pub marker: Option<OwnedEventId>,
     /// How far other members have read: user -> (nick, event).
     pub read_by: HashMap<OwnedUserId, (String, OwnedEventId)>,
+    /// What your power level allows here, once the member list loaded.
+    pub perms: Option<Permissions>,
     /// Edits/reactions/redactions whose target is not loaded yet.
     orphans: HashMap<OwnedEventId, Vec<Item>>,
 }
@@ -126,6 +132,7 @@ impl Window {
             last_receipt: None,
             marker: None,
             read_by: HashMap::new(),
+            perms: None,
             orphans: HashMap::new(),
         }
     }
@@ -153,6 +160,11 @@ impl Window {
 
     pub fn account(&self) -> Option<&str> {
         self.room.as_ref().map(|k| k.account.as_str())
+    }
+
+    /// Unread messages according to the server.
+    pub fn unread(&self) -> u64 {
+        self.unread.0
     }
 
     fn find_mut(&mut self, id: &EventId) -> Option<&mut Line> {
@@ -401,6 +413,25 @@ fn annotate(line: &mut Line, item: &Item) {
     }
 }
 
+/// What the next plain-text submit does, chosen in selection mode.
+#[derive(Clone, Debug)]
+enum Compose {
+    Reply { event: OwnedEventId, sender: OwnedUserId, nick: String },
+    React { event: OwnedEventId, nick: String },
+}
+
+/// An edit in progress: ↑/↓ walk through your own messages (each loads
+/// into the input line), Enter saves, Esc puts your draft back.
+#[derive(Clone, Debug)]
+struct EditSession {
+    key: WinKey,
+    event: OwnedEventId,
+    original: String,
+    emote: bool,
+    /// What was in the input line before editing started.
+    draft: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Layout {
     windows: Vec<WinKey>,
@@ -419,12 +450,29 @@ pub struct App {
     pub quit: bool,
     pub bell: bool,
     pub redraw_all: bool,
+    pub show_sidebar: bool,
+    pub show_nicklist: bool,
     pub view_width: u16,
     pub view_height: u16,
     layout: Layout,
     typing_since: Option<(WinKey, Instant)>,
     /// Mentions captured from the input line being submitted.
     mentions: Vec<(String, OwnedUserId)>,
+    /// Whether the terminal has focus (when it reports focus changes).
+    focused: bool,
+    notify_mode: NotifyMode,
+    /// (title, body) waiting to be written after the next draw.
+    pub notifications: Vec<(String, String)>,
+    /// The message picked in selection mode (Alt+Up) in the active window.
+    pub select: Option<OwnedEventId>,
+    /// Waiting for y/n before deleting this message.
+    pub confirm_delete: Option<OwnedEventId>,
+    /// The edit to go back to if a delete started from it is declined.
+    resume_edit: Option<EditSession>,
+    editing: Option<EditSession>,
+    compose: Option<(WinKey, Compose)>,
+    /// Text for the clipboard, written after the next draw.
+    pub clipboard: Option<String>,
 }
 
 struct Cmd {
@@ -452,10 +500,19 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "say", args: "<text>", help: "Send text as-is, even if it starts with / (or type //)" },
     Cmd { name: "reply", args: "[nick] <text>", help: "Reply to the last message (from nick, if given)" },
     Cmd { name: "react", args: "[nick] <emoji>", help: "React to the last message (from nick, if given)" },
-    Cmd { name: "edit", args: "<text>", help: "Replace your last message" },
+    Cmd {
+        name: "edit",
+        args: "[text]",
+        help: "Edit a message: no text opens the editor (also Shift+Up, or Ctrl+E on an empty line)",
+    },
     Cmd { name: "redact", args: "", help: "Delete your last message (alias /del)" },
     Cmd { name: "upload", args: "<path>", help: "Send a file or image (Tab completes paths)" },
     Cmd { name: "download", args: "[nick]", help: "Save the last attachment (from nick) to Downloads" },
+    Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
+    Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
+    Cmd { name: "away", args: "[-all] [message]", help: "Set away with a message, or come back (no message)" },
+    Cmd { name: "ignore", args: "[nick|@user]", help: "Hide a user everywhere, or list ignored users" },
+    Cmd { name: "unignore", args: "<@user>", help: "Stop ignoring a user" },
     Cmd { name: "names", args: "", help: "List room members" },
     Cmd { name: "whois", args: "<nick|@user>", help: "Show a user's profile and device trust" },
     Cmd { name: "nick", args: "<name>", help: "Set your display name on this server" },
@@ -469,6 +526,8 @@ const COMMANDS: &[Cmd] = &[
         help: "Manage windows (alias /win; /wc closes, /wl lists)",
     },
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
+    Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
+    Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
     Cmd { name: "connect", args: "<server>", help: "Connect a server from the dotfile" },
     Cmd { name: "disconnect", args: "<server>", help: "Stop syncing a server (session is kept)" },
@@ -514,11 +573,13 @@ impl App {
                     nick: None,
                     status: ConnStatus::Offline,
                     verified: None,
+                    away: None,
                     account: None,
                 };
                 (AccountName::from(def.name.as_str()), state)
             })
             .collect();
+        let (show_sidebar, show_nicklist) = (cfg.sidebar, cfg.nicklist);
         let mut app = Self {
             cfg,
             paths,
@@ -531,18 +592,32 @@ impl App {
             quit: false,
             bell: false,
             redraw_all: false,
+            show_sidebar,
+            show_nicklist,
             view_width: 80,
             view_height: 24,
             layout,
             typing_since: None,
             mentions: Vec::new(),
+            focused: true,
+            notify_mode: NotifyMode::Off,
+            notifications: Vec::new(),
+            select: None,
+            confirm_delete: None,
+            resume_edit: None,
+            editing: None,
+            compose: None,
+            clipboard: None,
         };
+        app.notify_mode = notify::resolve(app.cfg.notifications);
         app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
         app.status(Line::info(format!("servers from {}", app.env.path().display())));
         for warning in servers.warnings {
             app.status(Line::error(warning));
         }
-        app.status(Line::info("type /help for commands; Alt+1..0 or Ctrl+N/Ctrl+P switch windows"));
+        app.status(Line::info(
+            "F1 or /help for commands; Alt+1..0 or Ctrl+N/P switch windows; Alt+Up selects messages",
+        ));
         app
     }
 
@@ -810,6 +885,11 @@ impl App {
                     }
                 }
             }
+            AppEvent::Permissions { account, room_id, perms } => {
+                if let Some(idx) = self.window_idx(&account, &room_id) {
+                    self.windows[idx].perms = Some(perms);
+                }
+            }
             AppEvent::Focus { account, room_id } => {
                 let idx = match self.window_idx(&account, &room_id) {
                     Some(idx) => Some(idx),
@@ -887,6 +967,21 @@ impl App {
                     state.verified = Some(verified);
                 }
             }
+            AppEvent::Away { account, message } => {
+                let text = match &message {
+                    Some(msg) => format!("{account}: you are now away: {msg}"),
+                    None => format!("{account}: you are back"),
+                };
+                if let Some(state) = self.accounts.get_mut(&account) {
+                    state.away = message;
+                }
+                self.status(Line::info(text));
+            }
+            AppEvent::Ignored { account, user_id } => {
+                for w in self.windows.iter_mut().filter(|w| w.account() == Some(&*account)) {
+                    w.lines.retain(|l| l.sender.as_ref() != Some(&user_id));
+                }
+            }
             AppEvent::LoggedOut { account } => {
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.account = None;
@@ -960,8 +1055,16 @@ impl App {
             if !viewing || w.scroll > 0 {
                 w.activity = w.activity.max(level);
             }
-            if level == Activity::Highlight && !viewing {
-                ring = true;
+            if level != Activity::Highlight || (viewing && self.focused) {
+                continue;
+            }
+            ring = true;
+            if self.notify_mode != NotifyMode::Off {
+                let title = if w.is_dm { line.nick.clone() } else { format!("{} in {}", line.nick, w.name) };
+                let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
+                self.notifications.push((title, body));
+            }
+            if !viewing {
                 // Like irssi's hilight window: copy it to the status window.
                 let mut copy = Line::new(line.kind, line.body.clone());
                 (copy.ts, copy.nick, copy.sender) = (line.ts, format!("{}/{}", w.name, line.nick), line.sender.clone());
@@ -1116,6 +1219,8 @@ impl App {
                 self.input.insert_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
                 self.typed();
             }
+            Event::FocusGained => self.focused = true,
+            Event::FocusLost => self.focused = false,
             _ => {}
         }
     }
@@ -1124,6 +1229,53 @@ impl App {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if let Some(event) = self.confirm_delete.take() {
+            let resume = self.resume_edit.take();
+            if matches!(key.code, Char('y' | 'Y')) {
+                self.select = None;
+                match self.room_ctx() {
+                    Ok((acct, room_id)) => acct.redact(room_id, event),
+                    Err(e) => self.error(e),
+                }
+                if let Some(session) = resume {
+                    self.input.set_text(&session.draft);
+                }
+            } else if let Some(session) = resume {
+                // Declined: back to editing that message.
+                self.input.set_text(&session.original);
+                self.editing = Some(session);
+            }
+            return;
+        }
+        if self.select.is_some() {
+            self.on_select_key(key);
+            return;
+        }
+        if self.editing.is_some() {
+            match key.code {
+                Up => return self.step_edit(true),
+                Down => return self.step_edit(false),
+                Esc => return self.cancel_edit(),
+                Enter => return self.finish_edit(),
+                _ => {}
+            }
+        }
+        if key.code == Up && alt {
+            self.enter_select();
+            return;
+        }
+        if (key.code == Up && key.modifiers.contains(KeyModifiers::SHIFT))
+            || (ctrl && key.code == Char('e') && self.input.is_empty())
+        {
+            self.start_edit(None);
+            return;
+        }
+        if key.code == Esc {
+            if self.compose.take().is_some() {
+                self.input.clear();
+            }
+            return;
+        }
         if key.code != Tab {
             self.input.end_completion();
         }
@@ -1192,6 +1344,9 @@ impl App {
             Down => self.input.history_next(),
             PageUp => self.scroll(true),
             PageDown => self.scroll(false),
+            F(1) => self.cmd_help(""),
+            F(2) => self.show_sidebar = !self.show_sidebar,
+            F(3) => self.show_nicklist = !self.show_nicklist,
             _ => {}
         }
         if edited {
@@ -1210,6 +1365,13 @@ impl App {
             return;
         }
         self.stop_typing();
+        self.select = None;
+        self.confirm_delete = None;
+        self.resume_edit = None;
+        self.cancel_edit();
+        if self.compose.take().is_some() {
+            self.input.clear();
+        }
         // Everything in the window you leave counts as seen.
         let left = &mut self.windows[self.active];
         if let Some(latest) = left.latest_event() {
@@ -1267,6 +1429,285 @@ impl App {
         {
             acct.typing(key.room_id, false);
         }
+    }
+
+    // ---- selection mode --------------------------------------------------
+
+    fn selectable(&self) -> Vec<OwnedEventId> {
+        self.win()
+            .lines
+            .iter()
+            .filter(|l| l.is_message() && !l.pending)
+            .filter_map(|l| l.event_id.clone())
+            .collect()
+    }
+
+    fn selected_line(&self) -> Option<&Line> {
+        let id = self.select.as_ref()?;
+        self.win().lines.iter().rev().find(|l| l.event_id.as_ref() == Some(id))
+    }
+
+    fn enter_select(&mut self) {
+        match self.selectable().pop() {
+            Some(last) => self.select = Some(last),
+            None => self.info("no messages to select here"),
+        }
+    }
+
+    /// Move the selection; moving below the newest message leaves selection
+    /// mode. At the top, the renderer pulls in older history.
+    fn move_select(&mut self, delta: isize) {
+        let ids = self.selectable();
+        let Some(pos) = self.select.as_ref().and_then(|s| ids.iter().position(|id| id == s)) else {
+            self.select = None;
+            return;
+        };
+        let target = pos as isize + delta;
+        if target >= ids.len() as isize {
+            self.select = None;
+            self.win_mut().scroll = 0;
+        } else {
+            self.select = Some(ids[target.max(0) as usize].clone());
+        }
+    }
+
+    fn on_select_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let Some(line) = self.selected_line().cloned() else {
+            self.select = None;
+            return;
+        };
+        let event = line.event_id.clone().expect("selectable lines have ids");
+        let key_here = self.win().room.clone();
+        match key.code {
+            Up | Char('k') => self.move_select(-1),
+            Down | Char('j') => self.move_select(1),
+            PageUp => self.move_select(-10),
+            PageDown => self.move_select(10),
+            Home | Char('g') => self.select = self.selectable().first().cloned(),
+            End | Char('G') => self.select = self.selectable().pop(),
+            Esc | Char('q') | Enter => self.select = None,
+            Char('r') => match (line.sender.clone(), key_here) {
+                (Some(sender), Some(here)) => {
+                    self.compose = Some((here, Compose::Reply { event, sender, nick: line.nick.clone() }));
+                    self.select = None;
+                }
+                _ => self.error("can't reply to that"),
+            },
+            Char('e') => {
+                self.select = None;
+                self.start_edit(Some(event));
+            }
+            Char('d') => self.request_delete(event, None),
+            Char('+' | '=') => {
+                if let Some(here) = key_here {
+                    self.compose = Some((here, Compose::React { event, nick: line.nick.clone() }));
+                    self.input.clear();
+                    self.select = None;
+                }
+            }
+            Char('s') => match (line.media.clone(), self.room_ctx()) {
+                (Some(media), Ok((acct, room_id))) => acct.download(room_id, media),
+                (None, _) => self.error("that message has no attachment"),
+                (_, Err(e)) => self.error(e),
+            },
+            Char('c') => {
+                self.clipboard = Some(line.body.clone());
+                self.info(format!("copied {} characters to the clipboard", line.body.chars().count()));
+            }
+            Char('i') => {
+                let sender = line.sender.as_ref().map(|s| s.to_string()).unwrap_or_default();
+                self.info(format!("{} [{sender}] at {}", line.nick, line.ts.format("%Y-%m-%d %H:%M:%S")));
+                self.info(format!(" event {event}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// `<nick> “first words…”` of the message awaiting delete confirmation.
+    pub fn delete_summary(&self) -> Option<String> {
+        let id = self.confirm_delete.as_ref()?;
+        let line = self.win().lines.iter().rev().find(|l| l.event_id.as_ref() == Some(id))?;
+        Some(format!("<{}> “{}”", line.nick, snippet(&line.body)))
+    }
+
+    /// Ask y/n before deleting, after checking your power level allows it.
+    fn request_delete(&mut self, event: OwnedEventId, resume: Option<EditSession>) {
+        let own = self.win().lines.iter().rev().find(|l| l.event_id.as_ref() == Some(&event)).is_some_and(|l| l.own);
+        let allowed = self.win().perms.is_none_or(|p| if own { p.can_redact_own } else { p.can_redact_other });
+        if !allowed {
+            if let Some(session) = resume {
+                self.input.set_text(&session.original);
+                self.editing = Some(session);
+            }
+            return self.error(if own {
+                "your power level doesn't allow deleting messages here"
+            } else {
+                "only moderators can delete other people's messages here"
+            });
+        }
+        self.confirm_delete = Some(event);
+        self.resume_edit = resume;
+    }
+
+    // ---- edit mode -------------------------------------------------------
+
+    /// Your own text messages in this window, oldest first.
+    fn editable(&self) -> Vec<&Line> {
+        self.win()
+            .lines
+            .iter()
+            .filter(|l| l.own && is_target(l) && l.media.is_none())
+            .filter(|l| matches!(l.kind, LineKind::Message | LineKind::Emote | LineKind::Notice))
+            .collect()
+    }
+
+    /// Matrix only accepts edits from a message's sender, and only if your
+    /// power level lets you post in the room.
+    fn check_can_edit(&self) -> Result<(), String> {
+        self.room_ctx()?;
+        if self.win().perms.is_some_and(|p| !p.can_send) {
+            return Err("your power level here doesn't allow sending messages, so you can't edit either".into());
+        }
+        Ok(())
+    }
+
+    /// Shift+Up, Ctrl+E on an empty line, `/edit`, or `e` in selection mode.
+    fn start_edit(&mut self, at: Option<OwnedEventId>) {
+        if let Err(e) = self.check_can_edit() {
+            return self.error(e);
+        }
+        let editable = self.editable();
+        let target = match &at {
+            Some(id) => editable.iter().find(|l| l.event_id.as_ref() == Some(id)).copied(),
+            None => editable.last().copied(),
+        };
+        let Some(line) = target.cloned() else {
+            return self.error(match at {
+                Some(_) => "only your own text messages can be edited",
+                None => "you have no message here to edit",
+            });
+        };
+        let draft = match self.editing.take() {
+            Some(session) => session.draft,
+            None => self.input.text(),
+        };
+        self.load_edit(&line, draft);
+    }
+
+    fn load_edit(&mut self, line: &Line, draft: String) {
+        let (Some(key), Some(event)) = (self.win().room.clone(), line.event_id.clone()) else { return };
+        let emote = line.kind == LineKind::Emote;
+        self.editing = Some(EditSession { key, event, original: line.body.clone(), emote, draft });
+        self.input.set_text(&line.body);
+    }
+
+    /// ↑ to an older message of yours, ↓ to a newer one; ↓ past the newest
+    /// stops editing.
+    fn step_edit(&mut self, older: bool) {
+        let Some(session) = self.editing.clone() else { return };
+        let editable: Vec<Line> = self.editable().into_iter().cloned().collect();
+        let Some(pos) = editable.iter().position(|l| l.event_id.as_ref() == Some(&session.event)) else {
+            return self.cancel_edit();
+        };
+        match (older, pos) {
+            (true, 0) => self.info("that's your oldest loaded message here; PgUp loads more history"),
+            (true, p) => self.load_edit(&editable[p - 1], session.draft),
+            (false, p) if p + 1 < editable.len() => self.load_edit(&editable[p + 1], session.draft),
+            (false, _) => self.cancel_edit(),
+        }
+    }
+
+    fn cancel_edit(&mut self) {
+        if let Some(session) = self.editing.take() {
+            self.input.set_text(&session.draft);
+        }
+    }
+
+    /// Enter: send the edit; unchanged text just closes the editor, and an
+    /// emptied message offers to delete it instead.
+    fn finish_edit(&mut self) {
+        let Some(session) = self.editing.take() else { return };
+        self.mentions = std::mem::take(&mut self.input.mentions);
+        let text = self.input.text();
+        if text.trim().is_empty() {
+            let event = session.event.clone();
+            return self.request_delete(event, Some(session));
+        }
+        self.input.set_text(&session.draft);
+        if text != session.original
+            && let Err(e) = self.send_edit(session.event, session.emote, &text)
+        {
+            self.error(e);
+        }
+        self.mentions.clear();
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.editing.is_some()
+    }
+
+    /// The message to highlight: selected, being edited, or about to be
+    /// deleted.
+    pub fn focus_event(&self) -> Option<OwnedEventId> {
+        let here = self.win().room.as_ref();
+        self.confirm_delete
+            .clone()
+            .or_else(|| self.select.clone())
+            .or_else(|| self.editing.as_ref().filter(|s| Some(&s.key) == here).map(|s| s.event.clone()))
+    }
+
+    /// Dim text after the cursor: matching commands while typing a command
+    /// name, then that command's usage once it's complete.
+    pub fn input_hint(&self) -> Option<String> {
+        if self.editing.is_some() {
+            return Some("  Enter saves · ↑/↓ your other messages · Esc cancels".into());
+        }
+        if self.compose_label().is_some() {
+            return Some("Enter sends · Esc cancels".into());
+        }
+        let text = self.input.text();
+        let typed = text.strip_prefix('/').filter(|t| !t.starts_with('/') && !t.contains('\n'))?;
+        let (word, rest) = match typed.find(' ') {
+            Some(i) => (&typed[..i], Some(&typed[i + 1..])),
+            None => (typed, None),
+        };
+        let word = word.to_lowercase();
+        let real = ALIASES.iter().find(|(a, _)| *a == word).map_or(word.as_str(), |(_, r)| *r);
+        let real = match real {
+            "wc" | "wl" => "window",
+            other => other,
+        };
+        let exact = COMMANDS.iter().find(|c| c.name == real);
+        match (exact, rest) {
+            (Some(cmd), Some(rest)) if rest.trim().is_empty() => Some(format!("{} — {}", cmd.args, cmd.help)),
+            (Some(_), Some(_)) => None,
+            (Some(cmd), None) => Some(format!(" {} — {}", cmd.args, cmd.help)),
+            (None, None) => {
+                let names: Vec<&str> =
+                    COMMANDS.iter().map(|c| c.name).filter(|n| n.starts_with(word.as_str())).collect();
+                (!names.is_empty()).then(|| format!("  {}", names.join(" ")))
+            }
+            (None, Some(_)) => Some("  unknown command; /help lists them".into()),
+        }
+    }
+
+    /// The prompt label while a reply/edit/reaction target is chosen.
+    pub fn compose_label(&self) -> Option<String> {
+        if let Some(session) = &self.editing {
+            let editable = self.editable();
+            let pos = editable.iter().position(|l| l.event_id.as_ref() == Some(&session.event))?;
+            let when = editable[pos].ts.format("%H:%M");
+            return Some(format!("edit {when} {}/{}", editable.len() - pos, editable.len()));
+        }
+        let (key, compose) = self.compose.as_ref()?;
+        if self.win().room.as_ref() != Some(key) {
+            return None;
+        }
+        Some(match compose {
+            Compose::Reply { nick, .. } => format!("reply to {nick}"),
+            Compose::React { nick, .. } => format!("react to {nick}"),
+        })
     }
 
     fn candidates(&self) -> Vec<Candidate> {
@@ -1336,6 +1777,20 @@ impl App {
         if text.trim().is_empty() {
             return;
         }
+        if let Some((key, target)) = self.compose.take()
+            && self.win().room.as_ref() == Some(&key)
+            && !text.starts_with('/')
+        {
+            let result = match target {
+                Compose::Reply { event, sender, .. } => self.send_reply(event, sender, &text),
+                Compose::React { event, .. } => self.send_react(event, text.trim()),
+            };
+            if let Err(e) = result {
+                self.error(e);
+            }
+            self.mentions.clear();
+            return;
+        }
         self.win_mut().scroll = 0;
         if let Some(rest) = text.strip_prefix("//") {
             self.say(&format!("/{rest}"), Say::Text);
@@ -1370,10 +1825,35 @@ impl App {
             }
             "msg" => self.cmd_msg(args),
             "reply" => self.cmd_reply(args),
+            "edit" if args.trim().is_empty() => {
+                self.start_edit(None);
+                Ok(())
+            }
             "edit" => self.cmd_edit(args),
             "redact" => self.cmd_redact(),
             "react" => self.cmd_react(args),
             "upload" => self.cmd_upload(args),
+            "lastlog" => self.cmd_lastlog(args),
+            "list" => self.pick_account(args).map(|(acct, search)| {
+                let search = Some(search.trim()).filter(|s| !s.is_empty()).map(str::to_owned);
+                acct.list_public(self.here(), search);
+            }),
+            "away" => self.cmd_away(args),
+            "ignore" => self.pick_account(args).and_then(|(acct, who)| {
+                match who.trim() {
+                    "" => acct.list_ignored(self.here()),
+                    who => acct.ignore(self.here(), self.resolve_user(who)?, true),
+                }
+                Ok(())
+            }),
+            "unignore" => self.pick_account(args).and_then(|(acct, who)| {
+                let who = who.trim();
+                if who.is_empty() {
+                    return Err("usage: /unignore <@user>".into());
+                }
+                acct.ignore(self.here(), self.resolve_user(who)?, false);
+                Ok(())
+            }),
             "download" => self.cmd_download(args),
             "join" => self.pick_account(args).and_then(|(acct, target)| {
                 let target = target.trim();
@@ -1439,6 +1919,14 @@ impl App {
             }
             "servers" => {
                 self.cmd_servers();
+                Ok(())
+            }
+            "sidebar" => {
+                self.show_sidebar = !self.show_sidebar;
+                Ok(())
+            }
+            "nicklist" => {
+                self.show_nicklist = !self.show_nicklist;
                 Ok(())
             }
             "connect" => self.cmd_connect(args),
@@ -1515,7 +2003,6 @@ impl App {
     }
 
     fn cmd_reply(&mut self, args: &str) -> Result<(), String> {
-        let (acct, room_id) = self.room_ctx()?;
         let (target, text) = self.win().answer_target(args);
         if text.trim().is_empty() {
             return Err("usage: /reply [nick] <text>".into());
@@ -1524,12 +2011,17 @@ impl App {
         let (event_id, sender) =
             (target.event_id.clone().expect("filtered"), target.sender.clone().ok_or("unknown sender")?);
         let text = text.to_owned();
-        let content = compose(&text, Say::Text, &self.mentions, self.cfg.markdown).make_reply_to(
+        self.send_reply(event_id, sender, &text)
+    }
+
+    fn send_reply(&mut self, event_id: OwnedEventId, sender: OwnedUserId, text: &str) -> Result<(), String> {
+        let (acct, room_id) = self.room_ctx()?;
+        let content = compose(text, Say::Text, &self.mentions, self.cfg.markdown).make_reply_to(
             ReplyMetadata::new(&event_id, &sender, None),
             ForwardThread::Yes,
             AddMentions::Yes,
         );
-        self.send_content(acct, room_id, content, &text, LineKind::Message, Some(event_id));
+        self.send_content(acct, room_id, content, text, LineKind::Message, Some(event_id));
         Ok(())
     }
 
@@ -1537,10 +2029,17 @@ impl App {
         if text.trim().is_empty() {
             return Err("usage: /edit <text>".into());
         }
-        let (acct, room_id) = self.room_ctx()?;
         let target = self.win().last_message(true).ok_or("you have no message here to edit")?;
-        let event_id = target.event_id.clone().expect("filtered");
-        let kind = if target.kind == LineKind::Emote { Say::Emote } else { Say::Text };
+        let (event_id, emote) = (target.event_id.clone().expect("filtered"), target.kind == LineKind::Emote);
+        self.send_edit(event_id, emote, text)
+    }
+
+    fn send_edit(&mut self, event_id: OwnedEventId, emote: bool, text: &str) -> Result<(), String> {
+        if text.trim().is_empty() {
+            return Err("an edit can't be empty; use d in selection mode or /redact to delete".into());
+        }
+        let (acct, room_id) = self.room_ctx()?;
+        let kind = if emote { Say::Emote } else { Say::Text };
         let content = compose(text, kind, &self.mentions, self.cfg.markdown)
             .make_replacement(ReplacementMetadata::new(event_id.clone(), None));
         if let Some(line) = self.win_mut().find_mut(&event_id) {
@@ -1559,14 +2058,23 @@ impl App {
     }
 
     fn cmd_react(&mut self, args: &str) -> Result<(), String> {
-        let (acct, room_id) = self.room_ctx()?;
         let (target, key) = self.win().answer_target(args.trim());
         let key = key.trim();
         if key.is_empty() {
             return Err("usage: /react [nick] <emoji>".into());
         }
         let target = target.ok_or("nothing to react to")?;
-        acct.react(room_id, target.event_id.clone().expect("filtered"), key.to_owned());
+        let event_id = target.event_id.clone().expect("filtered");
+        let key = key.to_owned();
+        self.send_react(event_id, &key)
+    }
+
+    fn send_react(&mut self, event_id: OwnedEventId, key: &str) -> Result<(), String> {
+        if key.is_empty() {
+            return Err("type an emoji (or any text) to react with".into());
+        }
+        let (acct, room_id) = self.room_ctx()?;
+        acct.react(room_id, event_id, key.to_owned());
         Ok(())
     }
 
@@ -1603,6 +2111,80 @@ impl App {
         })?;
         let media = line.media.clone().expect("filtered");
         acct.download(room_id, media);
+        Ok(())
+    }
+
+    fn cmd_lastlog(&mut self, args: &str) -> Result<(), String> {
+        const USAGE: &str = "usage: /lastlog [-n N] [-nick nick] <text>";
+        let (mut limit, mut nick, mut rest) = (None, None, args.trim());
+        loop {
+            if let Some(r) = rest.strip_prefix("-n ") {
+                let (n, r) = split_first(r);
+                limit = Some(n.parse::<usize>().map_err(|_| USAGE)?);
+                rest = r;
+            } else if let Some(r) = rest.strip_prefix("-nick ") {
+                let (n, r) = split_first(r);
+                nick = Some(n.to_lowercase());
+                rest = r;
+            } else {
+                break;
+            }
+        }
+        let needle = rest.trim().to_lowercase();
+        if needle.is_empty() && nick.is_none() {
+            return Err(USAGE.into());
+        }
+        let today = Local::now().date_naive();
+        let w = self.win();
+        let loaded = w.lines.iter().filter(|l| l.event_id.is_some()).count();
+        let mut hits: Vec<String> = w
+            .lines
+            .iter()
+            .filter(|l| l.event_id.is_some() && !l.redacted)
+            .filter(|l| nick.as_ref().is_none_or(|n| l.nick.to_lowercase() == *n))
+            .filter(|l| needle.is_empty() || l.body.to_lowercase().contains(&needle))
+            .map(|l| {
+                let when = if l.ts.date_naive() == today { l.ts.format("%H:%M") } else { l.ts.format("%b %d %H:%M") };
+                let who = match l.kind {
+                    LineKind::Message | LineKind::Utd => format!("<{}> ", l.nick),
+                    LineKind::Emote => format!("* {} ", l.nick),
+                    LineKind::Notice => format!("-{}- ", l.nick),
+                    _ => String::new(),
+                };
+                format!("{when} {who}{}", l.body)
+            })
+            .collect();
+        let found = hits.len();
+        if let Some(n) = limit {
+            hits = hits.split_off(found.saturating_sub(n));
+        }
+        if found == 0 {
+            self.info(format!("Lastlog: no matches in {loaded} loaded lines (PgUp loads older history)"));
+            return Ok(());
+        }
+        self.info(format!("Lastlog: {found} match(es) in {loaded} loaded lines"));
+        for hit in hits {
+            self.info(hit);
+        }
+        self.info("End of Lastlog");
+        Ok(())
+    }
+
+    fn cmd_away(&mut self, args: &str) -> Result<(), String> {
+        let (all, message) = match args.trim().strip_prefix("-all") {
+            Some(rest) => (true, rest.trim()),
+            None => (false, args.trim()),
+        };
+        let message = Some(message).filter(|m| !m.is_empty()).map(str::to_owned);
+        if all {
+            let accounts: Vec<Account> = self.accounts.values().filter_map(|s| s.account.clone()).collect();
+            if accounts.is_empty() {
+                return Err("no server is connected".into());
+            }
+            accounts.iter().for_each(|acct| acct.set_away(message.clone()));
+        } else {
+            self.pick_account("")?.0.set_away(message);
+        }
         Ok(())
     }
 
@@ -1780,7 +2362,12 @@ impl App {
                 self.info(row);
             }
             self.info("Keys: Alt+1..0/Alt+Q..P window 1-20, Ctrl+N/P next/prev, Alt+A next active,");
-            self.info("      PgUp/PgDn scroll, Tab complete, Up/Down history, Ctrl+A/E/U/K/W/Y edit");
+            self.info("      PgUp/PgDn scroll, Tab complete, Up/Down history, Ctrl+A/E/U/K/W/Y edit,");
+            self.info("      F1 help, F2 window list, F3 member list, Ctrl+L redraw");
+            self.info("Edit: Shift+Up (or Ctrl+E on an empty line), ↑/↓ pick your message, Enter saves,");
+            self.info("      clearing the text deletes, Esc restores what you were typing");
+            self.info("Select: Alt+Up, then ↑/↓ PgUp/PgDn g/G to move; r reply, e edit, d delete,");
+            self.info("      + react, s save attachment, c copy, i details, Esc to leave");
             return;
         }
         let real = ALIASES.iter().find(|(a, _)| *a == wanted).map_or(wanted.as_str(), |(_, r)| *r);
@@ -1892,6 +2479,12 @@ pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: Unbounded
         if std::mem::take(&mut app.bell) {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07").and_then(|()| out.flush());
+        }
+        for (title, body) in std::mem::take(&mut app.notifications) {
+            notify::send(app.notify_mode, &title, &body);
+        }
+        if let Some(text) = app.clipboard.take() {
+            notify::copy_to_clipboard(&text);
         }
         app.after_draw();
         if app.quit {
@@ -2039,6 +2632,60 @@ mod tests {
         assert_eq!(parse_path("file:///tmp/a%20b.txt"), PathBuf::from("/tmp/a b.txt"));
         let home = dirs::home_dir().unwrap();
         assert_eq!(parse_path("~/x.png"), home.join("x.png"));
+    }
+
+    fn test_app() -> App {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let paths = Paths { base: std::env::temp_dir(), env_file: std::env::temp_dir().join("none") };
+        App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx)
+    }
+
+    #[test]
+    fn input_hints_guide_command_typing() {
+        let mut app = test_app();
+        app.input.set_text("/re");
+        let hint = app.input_hint().unwrap();
+        for name in ["reply", "react", "redact", "recover"] {
+            assert!(hint.contains(name), "{hint}");
+        }
+        app.input.set_text("/reply ");
+        assert!(app.input_hint().unwrap().starts_with("[nick] <text>"));
+        app.input.set_text("/wc");
+        assert!(app.input_hint().unwrap().contains("Manage windows"));
+        app.input.set_text("/reply hi there");
+        assert!(app.input_hint().is_none(), "no hint once arguments are typed");
+        app.input.set_text("hello");
+        assert!(app.input_hint().is_none());
+    }
+
+    #[test]
+    fn edit_mode_walks_your_own_messages_and_restores_the_draft() {
+        let mut app = test_app();
+        let key = WinKey { account: "t".into(), room_id: "!r:x.org".try_into().unwrap() };
+        app.windows.push(Window::new(Some(key), "room".into()));
+        app.active = 1;
+        let mut mine = |id: &str, body: &str| {
+            let mut l = msg(id, body);
+            l.own = true;
+            l
+        };
+        let (first, second) = (mine("$1", "first of mine"), mine("$3", "second of mine"));
+        app.win_mut().push(first, 100);
+        app.win_mut().push(msg("$2", "someone else"), 100);
+        app.win_mut().push(second.clone(), 100);
+        app.input.set_text("half-typed draft");
+
+        app.load_edit(&second, app.input.text());
+        assert_eq!(app.input.text(), "second of mine");
+        assert_eq!(app.compose_label().unwrap(), format!("edit {} 1/2", second.ts.format("%H:%M")));
+
+        app.step_edit(true);
+        assert_eq!(app.input.text(), "first of mine", "skips other people's messages");
+        app.step_edit(false);
+        assert_eq!(app.input.text(), "second of mine");
+        app.step_edit(false);
+        assert!(!app.is_editing(), "down past the newest leaves edit mode");
+        assert_eq!(app.input.text(), "half-typed draft");
     }
 
     #[test]

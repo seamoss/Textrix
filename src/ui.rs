@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line as TLine, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -38,15 +38,124 @@ const NICK_COLORS: [Color; 10] = [
 ];
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let [topic, main, status, input] =
+    let [topic, middle, status, input] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
             .areas(f.area());
+
+    // Side panes give way on narrow terminals.
+    let total = middle.width;
+    let side_w = if app.show_sidebar && total >= 60 { sidebar_width(app) } else { 0 };
+    let win = &app.windows[app.active];
+    let wants_nicks = app.show_nicklist && win.room.is_some() && !win.is_dm && win.members.len() > 2;
+    let nick_w = if wants_nicks && total >= side_w + 70 { nicklist_width(app) } else { 0 };
+    let [side, main, nicks] =
+        Layout::horizontal([Constraint::Length(side_w), Constraint::Min(20), Constraint::Length(nick_w)]).areas(middle);
+
     app.view_width = main.width;
     app.view_height = main.height;
     draw_topic(f, topic, app);
+    if side_w > 0 {
+        draw_sidebar(f, side, app);
+    }
     draw_messages(f, main, app);
+    if nick_w > 0 {
+        draw_nicklist(f, nicks, app);
+    }
     draw_status(f, status, app);
     draw_input(f, input, app);
+}
+
+fn activity_style(level: Activity) -> Style {
+    match level {
+        Activity::Highlight => Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Activity::Message => Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+        Activity::Event => Style::new().fg(Color::Cyan),
+        Activity::None => Style::new().fg(Color::Gray),
+    }
+}
+
+fn sidebar_width(app: &App) -> u16 {
+    let longest = app.windows.iter().map(|w| w.name.chars().count()).max().unwrap_or(6);
+    (longest.clamp(8, 22) + 9) as u16
+}
+
+/// irssi adv_windowlist-style: window number, name and unread count,
+/// coloured by activity, grouped by server when there are several.
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+    let inner = area.width.saturating_sub(1) as usize;
+    let many_servers = app.accounts.len() > 1;
+    let mut rows: Vec<(TLine<'static>, bool)> = Vec::new();
+    let mut last_server: Option<&str> = None;
+    for (i, w) in app.windows.iter().enumerate() {
+        if many_servers && let Some(server) = w.account()
+            && last_server != Some(server)
+        {
+            rows.push((TLine::from(Span::styled(format!(" {server}"), DIM.add_modifier(Modifier::BOLD))), false));
+            last_server = Some(server);
+        }
+        let active = i == app.active;
+        let unread = if !active && w.unread() > 0 { w.unread().to_string() } else { String::new() };
+        let number = format!("{:>2} ", i + 1);
+        let room_w = inner.saturating_sub(number.len() + unread.len() + 1);
+        let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
+        let pad = inner.saturating_sub(number.len() + display_len(&name) + unread.len());
+        let style = if active {
+            Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            activity_style(w.activity)
+        };
+        let row = TLine::from(vec![
+            Span::styled(number, if active { style } else { DIM }),
+            Span::styled(name, style),
+            Span::styled(" ".repeat(pad), style),
+            Span::styled(unread, if active { style } else { activity_style(w.activity) }),
+        ]);
+        rows.push((row, active));
+    }
+    // Keep the active window in view.
+    let height = area.height as usize;
+    let active_row = rows.iter().position(|(_, a)| *a).unwrap_or(0);
+    let start = (active_row + 1).saturating_sub(height);
+    let shown: Vec<TLine> = rows.into_iter().skip(start).take(height).map(|(r, _)| r).collect();
+    let block = Block::new().borders(Borders::RIGHT).border_style(DIM);
+    f.render_widget(Paragraph::new(shown).block(block), area);
+}
+
+fn nicklist_width(app: &App) -> u16 {
+    let win = &app.windows[app.active];
+    let longest = win.members.iter().map(|m| m.name.chars().count()).max().unwrap_or(6);
+    (longest.clamp(6, 18) + 3) as u16
+}
+
+fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) {
+    let win = &app.windows[app.active];
+    let inner = area.width.saturating_sub(1) as usize;
+    let height = area.height as usize;
+    let mut rows = vec![TLine::from(Span::styled(format!("Users ({})", win.members.len()), DIM))];
+    let room = height.saturating_sub(1);
+    let overflow = win.members.len() > room;
+    let take = if overflow { room.saturating_sub(1) } else { room };
+    for m in win.members.iter().take(take) {
+        let prefix_style = match m.prefix {
+            '@' => Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            '+' => Style::new().fg(Color::Green),
+            _ => Style::new(),
+        };
+        let name: String = m.name.chars().filter(|c| !c.is_control()).take(inner.saturating_sub(1)).collect();
+        rows.push(TLine::from(vec![
+            Span::styled(m.prefix.to_string(), prefix_style),
+            Span::styled(name, Style::new().fg(nick_color(m.user_id.as_str()))),
+        ]));
+    }
+    if overflow {
+        rows.push(TLine::from(Span::styled(format!("… {} more", win.members.len() - take), DIM)));
+    }
+    let block = Block::new().borders(Borders::LEFT).border_style(DIM);
+    f.render_widget(Paragraph::new(rows).block(block), area);
+}
+
+fn display_len(s: &str) -> usize {
+    s.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
 
 fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
@@ -63,10 +172,9 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
 fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width as usize;
     let height = area.height as usize;
+    let selected = app.focus_event();
     let cfg = &app.cfg;
     let win = &mut app.windows[app.active];
-    let need = height + win.scroll;
-
     let visible: Vec<&Line> = win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
 
     // Who has read up to which event (not shown on their own messages).
@@ -78,9 +186,12 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
     // The "new messages" divider only matters if someone else said something.
     let last_from_others = visible.iter().rposition(|l| l.is_message() && !l.own && l.event_id.is_some());
 
+    let mut need = height + win.scroll;
     let mut rows: Vec<TLine<'static>> = Vec::new();
-    let mut exhausted = true;
-    for i in (0..visible.len()).rev() {
+    let mut found_selected = selected.is_none();
+    let mut i = visible.len();
+    while i > 0 && (rows.len() < need || !found_selected) {
+        i -= 1;
         let line = visible[i];
         let read: Vec<&str> = line
             .event_id
@@ -93,7 +204,26 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
                 nicks
             })
             .unwrap_or_default();
-        rows.extend(render_line_with(line, width, cfg, &read).into_iter().rev());
+        let is_selected = selected.is_some() && line.event_id == selected;
+        let below = rows.len();
+        let mut rendered = render_line_with(line, width, cfg, &read);
+        if is_selected {
+            for row in &mut rendered {
+                *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
+            }
+        }
+        rows.extend(rendered.into_iter().rev());
+        if is_selected {
+            // Scroll just enough to keep the selected message on screen.
+            found_selected = true;
+            let (lo, hi) = (below, rows.len());
+            if lo < win.scroll {
+                win.scroll = lo;
+            } else if hi > win.scroll + height {
+                win.scroll = hi.saturating_sub(height);
+            }
+            need = height + win.scroll;
+        }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(line.ts));
         }
@@ -104,11 +234,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
         {
             rows.push(new_messages(width));
         }
-        if rows.len() >= need {
-            exhausted = i == 0;
-            break;
-        }
     }
+    let exhausted = i == 0;
 
     let max_scroll = rows.len().saturating_sub(height);
     if exhausted && win.scroll > max_scroll {
@@ -351,6 +478,9 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     }
 
     for (name, state) in &app.accounts {
+        if state.away.is_some() {
+            item(&mut spans, vec![Span::styled(format!("{name}: away"), BAR.fg(Color::Yellow))]);
+        }
         if state.verified == Some(false) {
             item(&mut spans, vec![Span::styled(format!("{name}: unverified"), BAR.fg(Color::Yellow))]);
         }
@@ -369,12 +499,27 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled("more", style)]);
     }
 
+    if app.confirm_delete.is_some() {
+        let what = app.delete_summary().unwrap_or_else(|| "this message".into());
+        let prompt = format!("delete {what}? y/n");
+        item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
+    } else if app.select.is_some() {
+        let keys = "r reply  e edit  d delete  + react  s save  c copy  i info  Esc";
+        item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
+    } else if app.is_editing() {
+        let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
+        item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
+    }
+
     f.render_widget(Paragraph::new(TLine::from(spans)).style(BAR), area);
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let win = &app.windows[app.active];
-    let label: String = win.name.chars().take(24).collect();
+    let label: String = match app.compose_label() {
+        Some(label) => label.chars().take(32).collect(),
+        None => win.name.chars().take(24).collect(),
+    };
     let prompt = format!("[{label}] ");
     let prompt_w: usize = prompt.chars().map(|c| c.width().unwrap_or(0)).sum();
     let avail = (area.width as usize).saturating_sub(prompt_w).max(1);
@@ -405,8 +550,15 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         used += w;
     }
 
-    let line = TLine::from(vec![Span::styled(prompt, Style::new().fg(Color::Cyan)), Span::raw(text)]);
-    f.render_widget(Paragraph::new(line), area);
+    let mut spans = vec![Span::styled(prompt, Style::new().fg(Color::Cyan)), Span::raw(text)];
+    if app.input.cursor() == chars.len()
+        && let Some(hint) = app.input_hint()
+    {
+        let room = avail.saturating_sub(used + 1);
+        let hint: String = hint.chars().take(room).collect();
+        spans.push(Span::styled(hint, DIM));
+    }
+    f.render_widget(Paragraph::new(TLine::from(spans)), area);
     let x = area.x + (prompt_w + cursor_w - skip_w).min(area.width.saturating_sub(1) as usize) as u16;
     f.set_cursor_position(Position::new(x, area.y));
 }

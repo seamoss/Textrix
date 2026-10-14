@@ -52,10 +52,15 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Ctrl+N / Ctrl+P, Alt+←/→ | next / previous window |
 | Alt+A | jump to the most important active window |
 | PgUp / PgDn | scroll (older history loads at the top) |
-| Tab | complete commands, nicks (adds a mention), server names |
+| Tab | complete commands, nicks (adds a mention), server names, file paths |
 | Up / Down | input history |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `s` save attachment, `c` copy, `i` details, Esc leaves |
+| Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
+| F1 / F2 / F3 | help / window list / member list |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Ctrl+L | redraw |
+
+While you type a command, its usage appears in dim text after the cursor.
 
 On macOS, set your terminal's Option key to act as Meta/Esc+ for the Alt
 bindings.
@@ -67,10 +72,15 @@ bindings.
 | Area | Commands |
 |---|---|
 | Rooms | `/create [-public] <name>`, `/join`, `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
-| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit`, `/redact` |
+| Directory | `/list [search]` (public rooms) |
+| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear` |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/whois`, `/verify`, `/recover`, `/quit` |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/quit` |
+
+Editing follows Matrix's rules: only your own text messages, and only where
+your power level lets you post. Deleting someone else's message needs
+moderator rights; Textrix checks before asking you to confirm.
 
 When several servers are connected, prefix a command with `-<server>` while in
 the status window (e.g. `/join -work #ops:work.example`).
@@ -81,8 +91,11 @@ the status window (e.g. `/join -work #ops:work.example`).
   your shared read marker (the same one Element uses) and moves when you leave
   a window or send a message.
 - `✓ nick` after a line shows how far other members have read.
-- Highlights and DMs from other windows are copied into the status window and
-  ring the terminal bell.
+- Highlights and DMs from other windows (or any window while the terminal is
+  in the background) are copied into the status window, ring the bell, and
+  pop a desktop notification in iTerm2, Ghostty, WezTerm and kitty. Inside
+  tmux, notifications need `set -g allow-passthrough on`, and `c` (copy) in
+  selection mode needs `set -g set-clipboard on`.
 - Textrix moves your read marker as you read, and sends read receipts as set
   by `read_receipts`.
 
@@ -97,6 +110,10 @@ markdown = true
 send_typing = true
 read_receipts = "public"   # "private" (only your clients see it) or "off"
 bell = true
+notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
+notify_preview = true      # include message text in notifications
+sidebar = true             # window list (F2)
+nicklist = true            # member list (F3)
 scrollback = 5000
 history_page = 50
 completion_char = ":"

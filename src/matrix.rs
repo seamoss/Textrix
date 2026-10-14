@@ -5,7 +5,10 @@ use std::{
     collections::BTreeMap,
     future::Future,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -22,17 +25,22 @@ use matrix_sdk::{
     room::{MessagesOptions, Receipts},
     ruma::{
         OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId, RoomOrAliasId, UInt,
+        directory::Filter as DirectoryFilter,
+        presence::PresenceState,
         api::{
             client::{
+                directory::get_public_rooms_filtered,
                 filter::{FilterDefinition, LazyLoadOptions},
+                presence::set_presence,
                 room::create_room::{self, v3::RoomPreset},
                 sync::sync_events::v3::Filter,
             },
             error::ErrorKind,
         },
         events::{
-            AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, StateEvent,
+            AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, MessageLikeEventType, StateEvent,
             fully_read::FullyReadEventContent,
+            ignored_user_list::IgnoredUserListEventContent,
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
             reaction::ReactionEventContent,
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
@@ -59,7 +67,7 @@ use tokio::{
 use crate::{
     config::{Paths, ReceiptMode, create_private_dir},
     convert::Converter,
-    model::{AccountName, Item, Line, Media, Member, RoomMeta},
+    model::{AccountName, Item, Line, Media, Member, Permissions, RoomMeta},
     servers::{EnvFile, Secret, ServerDef, write_private},
 };
 
@@ -80,6 +88,7 @@ pub enum AppEvent {
     Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
     Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
+    Permissions { account: AccountName, room_id: OwnedRoomId, perms: Permissions },
     Focus { account: AccountName, room_id: OwnedRoomId },
     Sent { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, event_id: OwnedEventId },
     SendFailed { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, error: String },
@@ -90,6 +99,9 @@ pub enum AppEvent {
     /// Whether this device is cross-signed (trusted by your other sessions).
     Trust { account: AccountName, verified: bool },
     LoggedOut { account: AccountName },
+    Away { account: AccountName, message: Option<String> },
+    /// Drop an ignored user's lines from the account's windows.
+    Ignored { account: AccountName, user_id: OwnedUserId },
     /// A line for a room window (or the status window when `room_id` is None).
     Notice { account: Option<AccountName>, room_id: Option<OwnedRoomId>, line: Line },
 }
@@ -142,6 +154,8 @@ pub struct Account {
     dir: PathBuf,
     verify: Arc<Mutex<VerifySlot>>,
     tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>>,
+    /// Presence sent with every sync; set by `/away`.
+    away: Arc<AtomicBool>,
 }
 
 /// Log in (or restore the saved session) for one dotfile server.
@@ -214,6 +228,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, tx: Tx) -> Resu
         dir,
         verify: Default::default(),
         tasks: Default::default(),
+        away: Default::default(),
     })
 }
 
@@ -311,7 +326,8 @@ impl Account {
         let mut failing = false;
         let mut backoff = Duration::from_secs(1);
         loop {
-            match self.client.sync_once(settings.clone()).await {
+            let presence = if self.away.load(Ordering::Relaxed) { PresenceState::Unavailable } else { PresenceState::Online };
+            match self.client.sync_once(settings.clone().set_presence(presence)).await {
                 Ok(response) => {
                     self.process_sync(response, first).await;
                     if first || failing {
@@ -753,6 +769,82 @@ impl Account {
         });
     }
 
+    /// `/away [message]`: unavailable with a status message, or back online.
+    pub fn set_away(&self, message: Option<String>) {
+        let acct = self.clone();
+        self.spawn_op(None, async move {
+            let state = if message.is_some() { PresenceState::Unavailable } else { PresenceState::Online };
+            let mut request = set_presence::v3::Request::new(acct.user_id.clone(), state);
+            request.status_msg = message.clone();
+            acct.client.send(request).await?;
+            acct.away.store(message.is_some(), Ordering::Relaxed);
+            acct.notify.send(AppEvent::Away { account: acct.name.clone(), message });
+            Ok(())
+        });
+    }
+
+    /// Hide a user everywhere (server-side ignore list), or undo it.
+    pub fn ignore(&self, out: Option<OwnedRoomId>, user: OwnedUserId, ignore: bool) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            if ignore {
+                acct.client.account().ignore_user(&user).await?;
+                acct.notify.send(AppEvent::Ignored { account: acct.name.clone(), user_id: user.clone() });
+                acct.notify.line(out, Line::info(format!("ignoring {user}")));
+            } else {
+                acct.client.account().unignore_user(&user).await?;
+                acct.notify.line(out, Line::info(format!("no longer ignoring {user}")));
+            }
+            Ok(())
+        });
+    }
+
+    pub fn list_ignored(&self, out: Option<OwnedRoomId>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let ignored = match acct.client.account().account_data::<IgnoredUserListEventContent>().await? {
+                Some(raw) => raw.deserialize()?.ignored_users.into_keys().collect(),
+                None => Vec::new(),
+            };
+            if ignored.is_empty() {
+                acct.notify.line(out.clone(), Line::info("you are not ignoring anyone"));
+            }
+            for user in ignored {
+                acct.notify.line(out.clone(), Line::info(format!("ignoring {user}")));
+            }
+            Ok(())
+        });
+    }
+
+    /// `/list [search]`: the server's public room directory.
+    pub fn list_public(&self, out: Option<OwnedRoomId>, search: Option<String>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let mut request = get_public_rooms_filtered::v3::Request::new();
+            request.limit = Some(UInt::from(50u32));
+            request.filter = DirectoryFilter::new();
+            request.filter.generic_search_term = search.clone();
+            let response = acct.client.public_rooms_filtered(request).await?;
+            let what = search.map(|s| format!(" matching \"{s}\"")).unwrap_or_default();
+            let total = response.total_room_count_estimate.map(|n| format!(" of ~{n}")).unwrap_or_default();
+            acct.notify.line(
+                out.clone(),
+                Line::info(format!("{}: {} public room(s){what}{total}", acct.name, response.chunk.len())),
+            );
+            for room in response.chunk {
+                let address = room.canonical_alias.map(|a| a.to_string()).unwrap_or_else(|| room.room_id.to_string());
+                let name = room.name.unwrap_or_else(|| address.clone());
+                let topic = room.topic.map(|t| format!(" — {}", t.lines().next().unwrap_or(""))).unwrap_or_default();
+                acct.notify.line(
+                    out.clone(),
+                    Line::info(format!("  {name} [{address}] {} user(s){topic}", room.num_joined_members)),
+                );
+            }
+            acct.notify.line(out, Line::info("/join <address> to join one"));
+            Ok(())
+        });
+    }
+
     /// Create a room and switch to it: invite-only and end-to-end encrypted,
     /// or joinable by anyone who has its address when `public`.
     pub fn create_room(&self, name: String, public: bool) {
@@ -968,6 +1060,14 @@ impl Account {
         let acct = self.clone();
         self.spawn_op(Some(room_id.clone()), async move {
             let room = acct.room(&room_id)?;
+            if let Some(me) = room.get_member_no_sync(&acct.user_id).await? {
+                let perms = Permissions {
+                    can_send: me.can_send_message(MessageLikeEventType::RoomMessage),
+                    can_redact_own: me.can_redact_own(),
+                    can_redact_other: me.can_redact_other(),
+                };
+                acct.notify.send(AppEvent::Permissions { account: acct.name.clone(), room_id: room_id.clone(), perms });
+            }
             let mut members: Vec<Member> = room
                 .members(RoomMemberships::JOIN)
                 .await?

@@ -144,6 +144,15 @@ pub enum Activity {
     Highlight,
 }
 
+/// What your power level lets you do in a room.
+#[derive(Clone, Copy, Debug)]
+pub struct Permissions {
+    /// Sending (and therefore editing) messages.
+    pub can_send: bool,
+    pub can_redact_own: bool,
+    pub can_redact_other: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Member {
     pub name: String,

@@ -76,12 +76,22 @@ pub struct Config {
     pub read_receipts: ReceiptMode,
     /// Ring the terminal bell on highlights and direct messages.
     pub bell: bool,
+    /// Desktop notifications for highlights and DMs while you're looking
+    /// elsewhere: "auto" (detect the terminal), "osc9", "osc777", "osc99"
+    /// (kitty), or "off".
+    pub notifications: NotifyMode,
+    /// Include the message text in notifications.
+    pub notify_preview: bool,
     /// Lines kept per window.
     pub scrollback: usize,
     /// Events fetched per history request.
     pub history_page: u16,
     /// Character appended after a nick completed at the start of the line.
     pub completion_char: String,
+    /// Window list on the left (F2 or /sidebar toggles it).
+    pub sidebar: bool,
+    /// Member list on the right of group rooms (F3 or /nicklist toggles it).
+    pub nicklist: bool,
 }
 
 impl Default for Config {
@@ -93,9 +103,13 @@ impl Default for Config {
             send_typing: true,
             read_receipts: ReceiptMode::Public,
             bell: true,
+            notifications: NotifyMode::Auto,
+            notify_preview: true,
             scrollback: 5000,
             history_page: 50,
             completion_char: ":".into(),
+            sidebar: true,
+            nicklist: true,
         }
     }
 }
@@ -105,6 +119,16 @@ impl Default for Config {
 pub enum ReceiptMode {
     Public,
     Private,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyMode {
+    Auto,
+    Osc9,
+    Osc777,
+    Osc99,
     Off,
 }
 

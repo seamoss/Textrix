@@ -43,6 +43,10 @@ impl Input {
         &self.buf
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
@@ -63,6 +67,12 @@ impl Input {
         }
         self.clear();
         text
+    }
+
+    /// Replace the line (e.g. with a message to edit), cursor at the end.
+    pub fn set_text(&mut self, text: &str) {
+        self.clear();
+        self.insert_str(text);
     }
 
     pub fn clear(&mut self) {

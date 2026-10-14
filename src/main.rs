@@ -7,13 +7,14 @@ mod convert;
 mod input;
 mod matrix;
 mod model;
+mod notify;
 mod servers;
 mod ui;
 
 use std::process::ExitCode;
 
 use anyhow::{Result, bail};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -77,9 +78,9 @@ async fn run() -> Result<()> {
     let app = App::new(cfg, paths, env, servers, tx);
 
     let mut terminal = ratatui::init();
-    crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
+    crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
     let result = app::run(&mut terminal, app, rx).await;
-    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
     result
 }
