@@ -1,6 +1,6 @@
 //! irssi-style layout: topic bar, scrollback, status bar, input line.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
 use matrix_sdk::ruma::{EventId, OwnedEventId, UserId};
@@ -85,46 +85,69 @@ fn sidebar_width(app: &App) -> u16 {
 
 /// irssi adv_windowlist-style: window number, name and unread count,
 /// coloured by activity, grouped by server when there are several.
+/// One row of the window list.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SidebarEntry {
+    Header(String),
+    Window(usize),
+}
+
+/// Window list layout: the status window, then each server's windows,
+/// grouped under their spaces when there are any. Window numbers never
+/// change, only the order they're listed in.
+pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
+    let mut out = vec![SidebarEntry::Window(0)];
+    let mut servers: Vec<&str> = Vec::new();
+    for w in &app.windows[1..] {
+        if let Some(server) = w.account()
+            && !servers.contains(&server)
+        {
+            servers.push(server);
+        }
+    }
+    for server in servers {
+        if app.accounts.len() > 1 {
+            out.push(SidebarEntry::Header(server.to_owned()));
+        }
+        let windows: Vec<usize> = (1..app.windows.len()).filter(|&i| app.windows[i].account() == Some(server)).collect();
+        let spaces = app.spaces.get(server).map(Vec::as_slice).unwrap_or_default();
+        let mut placed: HashSet<usize> = HashSet::new();
+        for space in spaces {
+            let members: Vec<usize> = windows
+                .iter()
+                .copied()
+                .filter(|i| !placed.contains(i))
+                .filter(|&i| app.windows[i].room.as_ref().is_some_and(|k| space.children.contains(&k.room_id)))
+                .collect();
+            if !members.is_empty() {
+                out.push(SidebarEntry::Header(format!("◆ {}", space.name)));
+                placed.extend(&members);
+                out.extend(members.into_iter().map(SidebarEntry::Window));
+            }
+        }
+        let rest: Vec<usize> = windows.into_iter().filter(|i| !placed.contains(i)).collect();
+        if !rest.is_empty() && !placed.is_empty() {
+            out.push(SidebarEntry::Header("◇ other".into()));
+        }
+        out.extend(rest.into_iter().map(SidebarEntry::Window));
+    }
+    out
+}
+
+/// irssi adv_windowlist-style: window number, name and unread count,
+/// coloured by activity, grouped by server and space.
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let inner = area.width.saturating_sub(1) as usize;
-    let many_servers = app.accounts.len() > 1;
-    let mut rows: Vec<(TLine<'static>, bool)> = Vec::new();
-    let mut last_server: Option<&str> = None;
-    for (i, w) in app.windows.iter().enumerate() {
-        if many_servers && let Some(server) = w.account()
-            && last_server != Some(server)
-        {
-            rows.push((TLine::from(Span::styled(format!(" {server}"), DIM.add_modifier(Modifier::BOLD))), false));
-            last_server = Some(server);
-        }
-        let active = i == app.active;
-        let unread = match (active, w.typing.is_empty(), w.unread()) {
-            (false, false, _) => "✎".to_owned(),
-            (false, true, n) if n > 0 => n.to_string(),
-            _ => String::new(),
-        };
-        let number = format!("{:>2} ", i + 1);
-        let dot = w.dm_presence(app).map(|p| presence_dot(p.kind));
-        let dot_w = if dot.is_some() { 2 } else { 0 };
-        let room_w = inner.saturating_sub(number.len() + dot_w + display_len(&unread) + 1);
-        let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
-        let pad = inner.saturating_sub(number.len() + dot_w + display_len(&name) + display_len(&unread));
-        let style = if active {
-            Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else {
-            activity_style(w.activity)
-        };
-        let mut parts = vec![Span::styled(number, if active { style } else { DIM })];
-        if let Some((symbol, color)) = dot {
-            parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
-        }
-        parts.extend([
-            Span::styled(name, style),
-            Span::styled(" ".repeat(pad), style),
-            Span::styled(unread, if active { style } else { activity_style(w.activity) }),
-        ]);
-        rows.push((TLine::from(parts), active));
-    }
+    let rows: Vec<(TLine<'static>, bool)> = sidebar_entries(app)
+        .into_iter()
+        .map(|entry| match entry {
+            SidebarEntry::Header(text) => {
+                let text: String = text.chars().take(inner).collect();
+                (TLine::from(Span::styled(format!(" {text}"), DIM.add_modifier(Modifier::BOLD))), false)
+            }
+            SidebarEntry::Window(i) => (window_row(app, i, inner), i == app.active),
+        })
+        .collect();
     // Keep the active window in view.
     let height = area.height as usize;
     let active_row = rows.iter().position(|(_, a)| *a).unwrap_or(0);
@@ -132,6 +155,37 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let shown: Vec<TLine> = rows.into_iter().skip(start).take(height).map(|(r, _)| r).collect();
     let block = Block::new().borders(Borders::RIGHT).border_style(DIM);
     f.render_widget(Paragraph::new(shown).block(block), area);
+}
+
+fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
+    let w = &app.windows[i];
+    let active = i == app.active;
+    let unread = match (active, w.typing.is_empty(), w.unread()) {
+        (false, false, _) => "✎".to_owned(),
+        (false, true, n) if n > 0 => n.to_string(),
+        _ => String::new(),
+    };
+    let number = format!("{:>2} ", i + 1);
+    let dot = w.dm_presence(app).map(|p| presence_dot(p.kind));
+    let dot_w = if dot.is_some() { 2 } else { 0 };
+    let room_w = inner.saturating_sub(number.len() + dot_w + display_len(&unread) + 1);
+    let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
+    let pad = inner.saturating_sub(number.len() + dot_w + display_len(&name) + display_len(&unread));
+    let style = if active {
+        Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        activity_style(w.activity)
+    };
+    let mut parts = vec![Span::styled(number, if active { style } else { DIM })];
+    if let Some((symbol, color)) = dot {
+        parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
+    }
+    parts.extend([
+        Span::styled(name, style),
+        Span::styled(" ".repeat(pad), style),
+        Span::styled(unread, if active { style } else { activity_style(w.activity) }),
+    ]);
+    TLine::from(parts)
 }
 
 fn nicklist_width(app: &App) -> u16 {

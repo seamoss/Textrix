@@ -183,6 +183,14 @@ pub fn ago(elapsed: chrono::TimeDelta) -> String {
     }
 }
 
+/// A joined space and the rooms it lists.
+#[derive(Clone, Debug)]
+pub struct SpaceInfo {
+    pub room_id: OwnedRoomId,
+    pub name: String,
+    pub children: Vec<OwnedRoomId>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RoomMeta {
     pub room_id: OwnedRoomId,
@@ -192,6 +200,8 @@ pub struct RoomMeta {
     pub is_dm: bool,
     /// The other person in a direct-message room.
     pub dm_user: Option<OwnedUserId>,
+    /// Spaces group rooms; they don't get a chat window.
+    pub is_space: bool,
     /// Where you stopped reading (`m.fully_read`), shared with other clients.
     pub fully_read: Option<OwnedEventId>,
     pub unread: u64,

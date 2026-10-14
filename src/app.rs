@@ -27,7 +27,7 @@ use crate::{
     input::{Candidate, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
-    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta},
+    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta, SpaceInfo},
     notify,
     servers::{EnvFile, ServerDef, Servers},
     ui,
@@ -516,6 +516,8 @@ pub struct App {
     pub preview_requests: Vec<(OwnedEventId, Media)>,
     /// Other people's presence, per server.
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
+    /// Joined spaces per server, for grouping the window list.
+    pub spaces: HashMap<AccountName, Vec<SpaceInfo>>,
     /// Results of the last `/search`, for `/jump N`.
     search_hits: Vec<(WinKey, OwnedEventId)>,
     /// Where `/search` printed its results, and how many deep searches are
@@ -533,7 +535,17 @@ struct Cmd {
 const COMMANDS: &[Cmd] = &[
     Cmd { name: "help", args: "[command]", help: "Show commands, or help for one" },
     Cmd { name: "join", args: "<#alias:server|!room>", help: "Join a room or accept an invite (alias /j)" },
-    Cmd { name: "create", args: "[-public] <name>", help: "Create a room (encrypted and invite-only unless -public)" },
+    Cmd {
+        name: "create",
+        args: "[-public] [-space] <name>",
+        help: "Create a room (encrypted and invite-only unless -public), or a space",
+    },
+    Cmd { name: "spaces", args: "", help: "List your spaces and their rooms" },
+    Cmd {
+        name: "space",
+        args: "<name> [add|remove|leave]",
+        help: "Browse a space, add/remove the current room, or leave the space",
+    },
     Cmd { name: "name", args: "<new name>", help: "Rename this room" },
     Cmd { name: "topic", args: "[text]", help: "Show or set the room topic" },
     Cmd { name: "info", args: "", help: "Show this room's ID, aliases, encryption and settings" },
@@ -670,6 +682,7 @@ impl App {
             preview_order: VecDeque::new(),
             preview_requests: Vec::new(),
             presence: HashMap::new(),
+            spaces: HashMap::new(),
             search_hits: Vec::new(),
             search_out: None,
             search_pending: 0,
@@ -964,6 +977,10 @@ impl App {
                     self.windows[out].push(line, cap);
                 }
             }
+            AppEvent::Spaces { account, mut spaces } => {
+                spaces.sort_by_cached_key(|s| s.name.to_lowercase());
+                self.spaces.insert(account, spaces);
+            }
             AppEvent::Presence { account, updates } => {
                 self.presence.entry(account).or_default().extend(updates);
             }
@@ -1189,6 +1206,13 @@ impl App {
     }
 
     fn upsert_room(&mut self, account: &str, meta: RoomMeta) {
+        if meta.is_space {
+            // Spaces are listed by /spaces and group the window list instead.
+            if let Some(idx) = self.window_idx(account, &meta.room_id) {
+                self.remove_window(idx);
+            }
+            return;
+        }
         let idx = match self.window_idx(account, &meta.room_id) {
             Some(idx) => idx,
             None => {
@@ -2016,6 +2040,8 @@ impl App {
                 Ok(())
             }),
             "create" => self.cmd_create(args),
+            "spaces" => self.cmd_spaces(),
+            "space" => self.cmd_space(args),
             "name" => self.room_ctx().and_then(|(acct, room_id)| {
                 let name = args.trim();
                 if name.is_empty() {
@@ -2472,15 +2498,82 @@ impl App {
     }
 
     fn cmd_create(&mut self, args: &str) -> Result<(), String> {
-        let (acct, args) = self.pick_account(args)?;
-        let (public, name) = match args.trim().strip_prefix("-public") {
-            Some(rest) => (true, rest.trim()),
-            None => (false, args.trim()),
+        let (acct, mut rest) = self.pick_account(args)?;
+        let (mut public, mut space) = (false, false);
+        loop {
+            rest = rest.trim_start();
+            if let Some(r) = rest.strip_prefix("-public") {
+                (public, rest) = (true, r);
+            } else if let Some(r) = rest.strip_prefix("-space") {
+                (space, rest) = (true, r);
+            } else {
+                break;
+            }
+        }
+        let name = rest.trim();
+        if name.is_empty() {
+            return Err("usage: /create [-public] [-space] <name>".into());
+        }
+        acct.create_room(name.to_owned(), public, space);
+        Ok(())
+    }
+
+    /// The space a name refers to on the current window's server.
+    fn find_space(&self, name: &str) -> Result<(Account, SpaceInfo), String> {
+        let (acct, _) = self.pick_account("")?;
+        let wanted = name.to_lowercase();
+        let spaces = self.spaces.get(&acct.name).map(Vec::as_slice).unwrap_or_default();
+        let space = spaces
+            .iter()
+            .find(|s| s.name.to_lowercase() == wanted)
+            .or_else(|| spaces.iter().find(|s| s.name.to_lowercase().contains(&wanted)))
+            .cloned()
+            .ok_or_else(|| format!("no space matching {name}; /spaces lists them"))?;
+        Ok((acct, space))
+    }
+
+    fn cmd_spaces(&mut self) -> Result<(), String> {
+        let (acct, _) = self.pick_account("")?;
+        let spaces = self.spaces.get(&acct.name).cloned().unwrap_or_default();
+        if spaces.is_empty() {
+            self.info("you're not in any spaces; /create -space <name> makes one");
+            return Ok(());
+        }
+        for space in spaces {
+            self.info(format!("◆ {} ({} room(s))", space.name, space.children.len()));
+            for child in &space.children {
+                let row = match self.window_idx(&acct.name, child) {
+                    Some(idx) => format!("   {:>2}: {}", idx + 1, self.windows[idx].name),
+                    None => match acct.quick_meta(child) {
+                        Some(meta) => format!("       {} (window closed)", meta.name),
+                        None => format!("       {child} (not joined)"),
+                    },
+                };
+                self.info(row);
+            }
+        }
+        self.info("/space <name> browses one, including rooms you haven't joined");
+        Ok(())
+    }
+
+    fn cmd_space(&mut self, args: &str) -> Result<(), String> {
+        let args = args.trim();
+        let (name, action) = match args.rsplit_once(' ') {
+            Some((name, action @ ("add" | "remove" | "leave"))) => (name.trim(), Some(action)),
+            _ => (args, None),
         };
         if name.is_empty() {
-            return Err("usage: /create [-public] <name>".into());
+            return Err("usage: /space <name> [add|remove|leave]".into());
         }
-        acct.create_room(name.to_owned(), public);
+        let (acct, space) = self.find_space(name)?;
+        match action {
+            None => acct.space_hierarchy(self.here(), space.room_id),
+            Some("leave") => acct.forget(space.room_id),
+            Some(action) => {
+                let (_, room_id) = self.room_ctx()?;
+                acct.space_child(self.here(), space.room_id, room_id, action == "add");
+            }
+        }
         Ok(())
     }
 
@@ -3007,6 +3100,28 @@ mod tests {
         assert_eq!(app.active, 1, "switched to the first room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"));
         assert!(app.cmd_jump("9").is_err());
+    }
+
+    #[test]
+    fn window_list_groups_rooms_by_space_without_renumbering() {
+        use crate::ui::{SidebarEntry::{Header, Window as Win}, sidebar_entries};
+        let mut app = test_app();
+        for (room, name) in [("!b:x.org", "loose room"), ("!a:x.org", "in space")] {
+            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap() };
+            app.windows.push(Window::new(Some(key), name.into()));
+        }
+        assert_eq!(sidebar_entries(&app), vec![Win(0), Win(1), Win(2)], "no spaces, no headers");
+
+        let space = SpaceInfo {
+            room_id: "!s:x.org".try_into().unwrap(),
+            name: "Work".into(),
+            children: vec!["!a:x.org".try_into().unwrap()],
+        };
+        app.spaces.insert("t".into(), vec![space]);
+        assert_eq!(
+            sidebar_entries(&app),
+            vec![Win(0), Header("◆ Work".into()), Win(2), Header("◇ other".into()), Win(1)]
+        );
     }
 
     #[test]

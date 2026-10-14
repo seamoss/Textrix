@@ -24,22 +24,30 @@ use matrix_sdk::{
     },
     room::{MessagesOptions, Receipts},
     ruma::{
-        OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId, RoomOrAliasId, UInt,
+        OwnedEventId, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId, UInt,
         directory::Filter as DirectoryFilter,
+        room::RoomType,
+        serde::Raw,
         presence::PresenceState,
         api::{
             client::{
                 directory::get_public_rooms_filtered,
                 filter::{FilterDefinition, LazyLoadOptions},
                 presence::{get_presence, set_presence},
-                room::create_room::{self, v3::RoomPreset},
+                room::create_room::{
+                    self,
+                    v3::{CreationContent, RoomPreset},
+                },
+                space::get_hierarchy,
                 sync::sync_events::v3::Filter,
             },
             error::ErrorKind,
         },
         events::{
             AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, MessageLikeEventType, StateEvent,
+            SyncStateEvent,
             fully_read::FullyReadEventContent,
+            space::child::SpaceChildEventContent,
             ignored_user_list::IgnoredUserListEventContent,
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
             reaction::ReactionEventContent,
@@ -51,6 +59,7 @@ use matrix_sdk::{
             },
         },
     },
+    deserialized_responses::RawSyncOrStrippedState,
     sync::SyncResponse,
     TransmissionProgress,
     attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
@@ -69,7 +78,7 @@ use tokio::{
 use crate::{
     config::{Paths, ReceiptMode, create_private_dir},
     convert::Converter,
-    model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta},
+    model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo},
     servers::{EnvFile, Secret, ServerDef, write_private},
 };
 
@@ -90,6 +99,7 @@ pub enum AppEvent {
     Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
     Presence { account: AccountName, updates: Vec<(OwnedUserId, Presence)> },
+    Spaces { account: AccountName, spaces: Vec<SpaceInfo> },
     /// Matches from `/search -deep` in one room, newest first.
     SearchResults { account: AccountName, room_id: OwnedRoomId, hits: Vec<Line> },
     /// An inline image preview, encoded for the terminal (`None` on failure).
@@ -289,10 +299,32 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         encrypted: room.encryption_state().is_encrypted(),
         is_dm: room.is_direct().await.unwrap_or(false),
         dm_user: dm_user(room),
+        is_space: room.is_space(),
         fully_read,
         unread: counts.notification_count,
         highlights: counts.highlight_count,
     }
+}
+
+/// Joined spaces and the rooms they list (`m.space.child` with a `via`).
+async fn joined_spaces(client: &Client) -> Vec<SpaceInfo> {
+    let mut spaces = Vec::new();
+    for room in client.joined_rooms().into_iter().filter(|r| r.is_space()) {
+        let mut children = Vec::new();
+        if let Ok(events) = room.get_state_events_static::<SpaceChildEventContent>().await {
+            for event in events {
+                if let RawSyncOrStrippedState::Sync(raw) = event
+                    && let Ok(SyncStateEvent::Original(ev)) = raw.deserialize()
+                    && !ev.content.via.is_empty()
+                {
+                    children.push(ev.state_key);
+                }
+            }
+        }
+        let name = room.display_name().await.map(|n| n.to_string()).unwrap_or_else(|_| room.room_id().to_string());
+        spaces.push(SpaceInfo { room_id: room.room_id().to_owned(), name, children });
+    }
+    spaces
 }
 
 fn dm_user(room: &Room) -> Option<OwnedUserId> {
@@ -321,6 +353,7 @@ impl Account {
                 rooms.push(room_meta(&room).await);
             }
             acct.notify.send(AppEvent::Rooms { account: acct.name.clone(), rooms });
+            acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
             acct.watch_room_keys().await;
         }));
 
@@ -394,8 +427,12 @@ impl Account {
                 metas.push(room_meta(&room).await);
             }
         }
+        let spaces_changed = metas.iter().any(|m| m.is_space) || response.rooms.left.keys().next().is_some();
         if !metas.is_empty() {
             self.notify.send(AppEvent::Rooms { account: self.name.clone(), rooms: metas });
+        }
+        if spaces_changed {
+            self.notify.send(AppEvent::Spaces { account: self.name.clone(), spaces: joined_spaces(&self.client).await });
         }
 
         for (room_id, update) in response.rooms.joined {
@@ -574,6 +611,7 @@ impl Account {
             encrypted: room.encryption_state().is_encrypted(),
             is_dm: room.direct_targets_length() > 0,
             dm_user: dm_user(&room),
+            is_space: room.is_space(),
             fully_read: None,
             unread: counts.notification_count,
             highlights: counts.highlight_count,
@@ -976,11 +1014,21 @@ impl Account {
 
     /// Create a room and switch to it: invite-only and end-to-end encrypted,
     /// or joinable by anyone who has its address when `public`.
-    pub fn create_room(&self, name: String, public: bool) {
+    pub fn create_room(&self, name: String, public: bool, space: bool) {
         let acct = self.clone();
         self.spawn_op(None, async move {
             let mut request = create_room::v3::Request::new();
             request.name = Some(name);
+            if space {
+                let mut creation = CreationContent::new();
+                creation.room_type = Some(RoomType::Space);
+                request.creation_content = Some(Raw::new(&creation)?);
+                request.preset = Some(if public { RoomPreset::PublicChat } else { RoomPreset::PrivateChat });
+                let room = acct.client.create_room(request).await?;
+                acct.notify.info(format!("created space {}; add rooms with /space <name> add", room.room_id()));
+                acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
+                return Ok(());
+            }
             if public {
                 request.preset = Some(RoomPreset::PublicChat);
             } else {
@@ -992,6 +1040,49 @@ impl Account {
             }
             let room = acct.client.create_room(request).await?;
             acct.announce_and_focus(&room).await;
+            Ok(())
+        });
+    }
+
+    /// Put a room into a space (or take it out), as `m.space.child` state
+    /// in the space.
+    pub fn space_child(&self, out: Option<OwnedRoomId>, space_id: OwnedRoomId, child: OwnedRoomId, add: bool) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let space = acct.room(&space_id)?;
+            // Our own server is in both rooms, so it's a safe way in; an
+            // empty `via` removes the child.
+            let via: Vec<OwnedServerName> = if add { vec![acct.user_id.server_name().to_owned()] } else { Vec::new() };
+            space.send_state_event_for_key(&child, SpaceChildEventContent::new(via)).await?;
+            let what = if add { "added to" } else { "removed from" };
+            acct.notify.line(out, Line::info(format!("{what} the space")));
+            acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
+            Ok(())
+        });
+    }
+
+    /// `/space <name>`: everything the space lists, joined or not.
+    pub fn space_hierarchy(&self, out: Option<OwnedRoomId>, space_id: OwnedRoomId) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let mut request = get_hierarchy::v1::Request::new(space_id.clone());
+            request.max_depth = Some(UInt::from(2u32));
+            request.limit = Some(UInt::from(100u32));
+            let response = acct.client.send(request).await?;
+            let rooms: Vec<_> = response.rooms.into_iter().filter(|r| r.summary.room_id != space_id).collect();
+            acct.notify.line(out.clone(), Line::info(format!("{} room(s) in this space:", rooms.len())));
+            for chunk in rooms {
+                let s = chunk.summary;
+                let joined = acct.client.get_room(&s.room_id).is_some_and(|r| r.state() == RoomState::Joined);
+                let address = s.canonical_alias.map(|a| a.to_string()).unwrap_or_else(|| s.room_id.to_string());
+                let name = s.name.unwrap_or_else(|| address.clone());
+                let kind = if s.room_type == Some(RoomType::Space) { " (space)" } else { "" };
+                let state = if joined { "joined" } else { "/join to enter" };
+                acct.notify.line(
+                    out.clone(),
+                    Line::info(format!("  {name}{kind} [{address}] {} member(s), {state}", s.num_joined_members)),
+                );
+            }
             Ok(())
         });
     }
