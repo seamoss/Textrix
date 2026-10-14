@@ -633,6 +633,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
+    Cmd {
+        name: "reload",
+        args: "",
+        help: "Re-read config.toml and the server dotfile (connects new servers, drops removed ones)",
+    },
     Cmd { name: "connect", args: "<server>", help: "Connect a server from the dotfile" },
     Cmd { name: "disconnect", args: "<server>", help: "Stop syncing a server (session is kept)" },
     Cmd { name: "logout", args: "<server>", help: "Log out and delete the local session and keys" },
@@ -2243,6 +2248,10 @@ impl App {
                 self.show_nicklist = !self.show_nicklist;
                 Ok(())
             }
+            "reload" => {
+                self.cmd_reload();
+                Ok(())
+            }
             "connect" => self.cmd_connect(args),
             "disconnect" => self.cmd_disconnect(args),
             "logout" => self.server_arg(args).map(|acct| acct.logout()),
@@ -2906,6 +2915,74 @@ impl App {
         }
     }
 
+    /// `/reload`: apply config.toml and the dotfile without restarting. A
+    /// broken file leaves the current settings in place.
+    fn cmd_reload(&mut self) {
+        match Config::load(&self.paths.config_file()) {
+            Ok(cfg) => {
+                if cfg.image_previews && self.picker.is_none() {
+                    self.info("image previews start after a restart (graphics support is checked at startup)");
+                }
+                if !cfg.image_previews {
+                    self.picker = None;
+                    self.previews.clear();
+                }
+                self.notify_mode = notify::resolve(cfg.notifications);
+                (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
+                self.cfg = cfg;
+                self.info(format!("reloaded {}", self.paths.config_file().display()));
+            }
+            Err(e) => self.error(format!("{e:#}; keeping the current settings")),
+        }
+
+        let servers = match self.env.servers() {
+            Ok(servers) => servers,
+            Err(e) => return self.error(format!("{e:#}; keeping the current servers")),
+        };
+        for warning in servers.warnings {
+            self.status(Line::error(warning));
+        }
+        let names: HashSet<&str> = servers.defs.iter().map(|d| d.name.as_str()).collect();
+        let removed: Vec<AccountName> = self.accounts.keys().filter(|n| !names.contains(&***n)).cloned().collect();
+        for name in removed {
+            if let Some(acct) = self.accounts.remove(&name).and_then(|s| s.account) {
+                acct.stop();
+            }
+            while let Some(idx) = self.windows.iter().position(|w| w.account() == Some(&*name)) {
+                self.remove_window(idx);
+            }
+            self.status(Line::info(format!("{name}: no longer in the dotfile; disconnected")));
+        }
+        for def in servers.defs {
+            match self.accounts.get_mut(def.name.as_str()) {
+                Some(state) => {
+                    if state.def.user != def.user || state.def.homeserver != def.homeserver {
+                        let name = def.name.clone();
+                        (state.user, state.def) = (def.user.clone(), def);
+                        self.status(Line::info(format!(
+                            "{name}: account details changed; /disconnect {name} and /connect {name} to use them"
+                        )));
+                    }
+                }
+                None => {
+                    let name = AccountName::from(def.name.as_str());
+                    let state = AccountState {
+                        user: def.user.clone(),
+                        def,
+                        nick: None,
+                        status: ConnStatus::Offline,
+                        verified: None,
+                        away: None,
+                        account: None,
+                    };
+                    self.accounts.insert(name.clone(), state);
+                    self.status(Line::info(format!("{name}: new in the dotfile")));
+                    self.connect(&name);
+                }
+            }
+        }
+    }
+
     fn cmd_connect(&mut self, args: &str) -> Result<(), String> {
         let name = args.trim().to_lowercase();
         let state = self.accounts.get(name.as_str()).ok_or_else(|| {
@@ -3370,6 +3447,29 @@ mod tests {
         assert_eq!(app.windows[1].lines[0].thread_count, Some(1), "root shows the new reply");
         assert_eq!(app.windows[2].lines[1].reactions.len(), 1, "reactions reach the thread window");
         assert_eq!(app.window_idx("t", &room_id), Some(1), "room lookups skip thread windows");
+    }
+
+    #[tokio::test]
+    async fn reload_applies_config_and_dotfile_changes() {
+        let dir = std::env::temp_dir().join(format!("textrix-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { base: dir.clone(), env_file: dir.join(".env") };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file.clone()), Servers::default(), tx);
+        assert!(app.show_sidebar);
+
+        crate::servers::write_private(&paths.env_file, b"TEXTRIX_NEW_USER=@me:localhost\n").unwrap();
+        std::fs::write(paths.config_file(), "sidebar = false\n").unwrap();
+        app.cmd_reload();
+        assert!(!app.show_sidebar, "config applied");
+        assert!(app.accounts.contains_key("new"), "new dotfile server picked up");
+
+        std::fs::write(paths.config_file(), "sidebar = maybe\n").unwrap();
+        crate::servers::write_private(&paths.env_file, b"TEXTRIX_OTHER_USER=@me:localhost\n").unwrap();
+        app.cmd_reload();
+        assert!(!app.show_sidebar, "a broken config keeps the current settings");
+        assert!(!app.accounts.contains_key("new") && app.accounts.contains_key("other"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

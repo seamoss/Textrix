@@ -139,7 +139,8 @@ original.
 
 ## Optional preferences
 
-`~/.textrix/config.toml` (all keys optional):
+`~/.textrix/config.toml` (all keys optional; `/reload` applies changes, and
+also picks up servers added to or removed from the dotfile):
 
 ```toml
 timestamp_format = "%H:%M"
