@@ -3,7 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
-use matrix_sdk::ruma::{EventId, OwnedEventId, UserId};
+use matrix_sdk::{
+    notification_settings::RoomNotificationMode,
+    ruma::{EventId, OwnedEventId, UserId},
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
@@ -296,8 +299,11 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + 1);
     let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
     let pad = inner.saturating_sub(number.len() + lead_w + display_len(&name) + display_len(&unread));
+    let muted = app.room_mode(i) == Some(RoomNotificationMode::Mute);
     let style = if active {
         Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else if muted && w.activity == Activity::None {
+        DIM
     } else {
         activity_style(w.activity)
     };

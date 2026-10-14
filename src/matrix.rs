@@ -2,7 +2,7 @@
 //! background tasks and reports back to the UI through [`AppEvent`]s.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     path::{Path, PathBuf},
     sync::{
@@ -26,6 +26,7 @@ use matrix_sdk::{
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
+    notification_settings::{NotificationSettings, RoomNotificationMode},
     room::{IncludeRelations, MessagesOptions, Receipts, RelationsOptions},
     ruma::{
         OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId,
@@ -37,6 +38,7 @@ use matrix_sdk::{
                 discovery::get_capabilities,
                 filter::{FilterDefinition, LazyLoadOptions},
                 presence::{get_presence, set_presence},
+                push::set_pushrule,
                 room::create_room::{
                     self,
                     v3::{CreationContent, RoomPreset},
@@ -51,12 +53,13 @@ use matrix_sdk::{
         directory::Filter as DirectoryFilter,
         events::relation::RelationType,
         events::{
-            AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, MessageLikeEventType, StateEvent,
-            StateEventType, SyncStateEvent,
+            AnyStateEvent, AnySyncEphemeralRoomEvent, GlobalAccountDataEvent, InitialStateEvent, MessageLikeEventType,
+            StateEvent, StateEventType, SyncStateEvent,
             fully_read::FullyReadEventContent,
             ignored_user_list::IgnoredUserListEventContent,
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
             presence::PresenceEvent,
+            push_rules::PushRulesEventContent,
             reaction::ReactionEventContent,
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
             relation::Annotation,
@@ -71,6 +74,7 @@ use matrix_sdk::{
             space::child::SpaceChildEventContent,
         },
         presence::PresenceState,
+        push::{Action, HighlightTweakValue, NewPatternedPushRule, NewPushRule, SoundTweakValue, Tweak},
         room::{JoinRule, RoomType},
         serde::Raw,
     },
@@ -97,6 +101,11 @@ pub type Tx = UnboundedSender<AppEvent>;
 
 pub enum AppEvent {
     Connected(Account),
+    /// Rooms that have their own notification mode (others use the default).
+    PushRules {
+        account: AccountName,
+        modes: HashMap<OwnedRoomId, RoomNotificationMode>,
+    },
     ConnectFailed {
         account: AccountName,
         error: String,
@@ -447,6 +456,32 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
     }
 }
 
+/// What alerts you in a room with this notification mode.
+pub fn describe_notify(mode: Option<RoomNotificationMode>, is_dm: bool) -> &'static str {
+    match (mode, is_dm) {
+        (Some(RoomNotificationMode::AllMessages), _) => "every message (your setting)",
+        (Some(RoomNotificationMode::MentionsAndKeywordsOnly), _) => {
+            "mentions and highlight words; other messages show quietly (your setting)"
+        }
+        (Some(RoomNotificationMode::Mute), _) => "muted (your setting)",
+        (None, true) => "every message (the default for direct messages)",
+        (None, false) => "mentions and highlight words; other messages show as activity (the default)",
+    }
+}
+
+/// Rooms with their own notification mode, for [`AppEvent::PushRules`].
+async fn push_state(settings: &NotificationSettings, account: AccountName) -> AppEvent {
+    let mut modes = HashMap::new();
+    for room in settings.get_rooms_with_user_defined_rules(Some(true)).await {
+        if let Ok(room_id) = OwnedRoomId::try_from(room)
+            && let Some(mode) = settings.get_user_defined_room_notification_mode(&room_id).await
+        {
+            modes.insert(room_id, mode);
+        }
+    }
+    AppEvent::PushRules { account, modes }
+}
+
 /// Joined spaces and the rooms they list (`m.space.child` with a `via`).
 async fn joined_spaces(client: &Client) -> Vec<SpaceInfo> {
     let mut spaces = Vec::new();
@@ -507,6 +542,7 @@ impl Account {
     /// Announce known rooms and start syncing.
     pub fn start(&self) {
         self.register_verification_handler();
+        self.register_push_rules_handler();
 
         let acct = self.clone();
         self.track(tokio::spawn(async move {
@@ -829,6 +865,7 @@ impl Account {
 
     /// Returns whether this device is already trusted.
     async fn after_first_sync(&self) -> bool {
+        self.notify.send(push_state(&self.client.notification_settings().await, self.name.clone()).await);
         if let Ok(Some(nick)) = self.client.account().get_display_name().await {
             self.notify.send(AppEvent::Profile { account: self.name.clone(), nick });
         }
@@ -876,6 +913,83 @@ impl Account {
                 self.notify.send(AppEvent::KeysReceived { account: self.name.clone(), room_id, sessions });
             }
         }
+    }
+
+    /// Push rules changed (here or in another client): refresh the rooms'
+    /// notification modes.
+    fn register_push_rules_handler(&self) {
+        let (notify, name) = (self.notify.clone(), self.name.clone());
+        self.client.add_event_handler(move |_: GlobalAccountDataEvent<PushRulesEventContent>, client: Client| {
+            let (notify, name) = (notify.clone(), name.clone());
+            async move { notify.send(push_state(&client.notification_settings().await, name).await) }
+        });
+    }
+
+    /// `/notify`: a room's notification mode (`None` goes back to the
+    /// default), stored as push rules so every client follows it.
+    pub fn set_notify_mode(&self, out: Option<OwnedRoomId>, room_id: OwnedRoomId, mode: Option<RoomNotificationMode>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let settings = acct.client.notification_settings().await;
+            match mode {
+                Some(mode) => settings.set_room_notification_mode(&room_id, mode).await?,
+                None => settings.delete_user_defined_room_rules(&room_id).await?,
+            }
+            acct.notify.send(push_state(&settings, acct.name.clone()).await);
+            let what = match mode {
+                Some(RoomNotificationMode::AllMessages) => "every message alerts you here",
+                Some(RoomNotificationMode::MentionsAndKeywordsOnly) => {
+                    "only mentions and highlight words alert you here; other messages show quietly"
+                }
+                Some(RoomNotificationMode::Mute) => "muted: nothing here alerts you",
+                None => "back to the default notifications here",
+            };
+            acct.notify.line(out, Line::info(what));
+            Ok(())
+        });
+    }
+
+    /// `/hilight` and `/dehilight`: words that highlight a message in any
+    /// room, kept as push rules so your other clients notify too.
+    pub fn set_highlight(&self, out: Option<OwnedRoomId>, word: String, on: bool) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            if on {
+                // The SDK's own keyword rules only notify; these highlight
+                // as well, like a mention.
+                let actions = vec![
+                    Action::Notify,
+                    Action::SetTweak(Tweak::Sound(SoundTweakValue::Default)),
+                    Action::SetTweak(Tweak::Highlight(HighlightTweakValue::Yes)),
+                ];
+                let rule = NewPatternedPushRule::new(word.clone(), word.clone(), actions);
+                acct.client.send(set_pushrule::v3::Request::new(NewPushRule::Content(rule))).await?;
+                acct.notify.line(out, Line::info(format!("highlighting “{word}” in every room")));
+            } else {
+                let settings = acct.client.notification_settings().await;
+                if !settings.enabled_keywords().await.contains(&word) {
+                    bail!("“{word}” isn't a highlight word; /hilight lists them");
+                }
+                settings.remove_keyword(&word).await?;
+                acct.notify.line(out, Line::info(format!("no longer highlighting “{word}”")));
+            }
+            Ok(())
+        });
+    }
+
+    pub fn list_highlights(&self, out: Option<OwnedRoomId>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let words: Vec<String> =
+                acct.client.notification_settings().await.enabled_keywords().await.into_iter().collect();
+            let text = if words.is_empty() {
+                "no highlight words (mentions of you always highlight); /hilight <word> adds one".to_owned()
+            } else {
+                format!("highlight words: {}", words.join(", "))
+            };
+            acct.notify.line(out, Line::info(text));
+            Ok(())
+        });
     }
 
     fn register_verification_handler(&self) {
@@ -1713,6 +1827,7 @@ impl Account {
                 ),
                 format!(" history  : visible to {}", describe_history(&room.history_visibility_or_default())),
                 format!(" directory: {directory}"),
+                format!(" notify   : {}", describe_notify(room.user_defined_notification_mode().await, meta.is_dm)),
                 format!(" your power level: {power}"),
             ];
             for row in rows {

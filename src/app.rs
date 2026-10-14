@@ -13,6 +13,7 @@ use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use futures_util::StreamExt;
+use matrix_sdk::notification_settings::RoomNotificationMode;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
     events::{
@@ -575,6 +576,8 @@ pub struct App {
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
     pub split: Option<Split>,
+    /// Rooms with their own notification mode, per server.
+    pub push_modes: HashMap<AccountName, HashMap<OwnedRoomId, RoomNotificationMode>>,
     /// Where the last frame drew things, for the mouse.
     pub hits: ui::Hits,
     /// Terminal graphics support, probed at startup; `None` disables previews.
@@ -675,6 +678,13 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
     Cmd { name: "away", args: "[-all] [message]", help: "Set away with a message, or come back (no message)" },
     Cmd { name: "ignore", args: "[nick|@user]", help: "Hide a user everywhere, or list ignored users" },
+    Cmd {
+        name: "notify",
+        args: "[all|mentions|mute|default]",
+        help: "What alerts you in this room (shared with your other clients)",
+    },
+    Cmd { name: "hilight", args: "[word]", help: "Highlight a word in every room, or list highlight words" },
+    Cmd { name: "dehilight", args: "<word>", help: "Stop highlighting a word" },
     Cmd { name: "unignore", args: "<@user>", help: "Stop ignoring a user" },
     Cmd { name: "names", args: "", help: "List room members" },
     Cmd { name: "whois", args: "<nick|@user>", help: "Show a user's profile and device trust" },
@@ -870,6 +880,7 @@ impl App {
             clipboard: None,
             help: None,
             split: None,
+            push_modes: HashMap::new(),
             hits: ui::Hits::default(),
             picker: None,
             previews: HashMap::new(),
@@ -1074,6 +1085,9 @@ impl App {
     pub fn on_event(&mut self, ev: AppEvent) {
         let cap = self.cfg.scrollback;
         match ev {
+            AppEvent::PushRules { account, modes } => {
+                self.push_modes.insert(account, modes);
+            }
             AppEvent::Connected(account) => {
                 let name = account.name.clone();
                 self.status(Line::info(format!(
@@ -1407,6 +1421,10 @@ impl App {
             w => w,
         };
         let viewing = self.on_screen(idx);
+        let mode = self.room_mode(idx);
+        let muted = mode == Some(RoomNotificationMode::Mute);
+        // Mentions-only and muted rooms keep ordinary messages quiet.
+        let quiet = muted || mode == Some(RoomNotificationMode::MentionsAndKeywordsOnly);
         let mut ring = false;
         let mut mirrored = Vec::new();
 
@@ -1434,7 +1452,7 @@ impl App {
                         if line.thread_root.as_ref() == Some(root) || line.event_id.as_ref() == Some(root) =>
                     {
                         let added = self.windows[*tidx].push(line.clone(), cap);
-                        if added && live && !line.own && !self.on_screen(*tidx) {
+                        if added && live && !line.own && !muted && !self.on_screen(*tidx) {
                             let level = if line.highlight { Activity::Highlight } else { Activity::Message };
                             self.windows[*tidx].activity = self.windows[*tidx].activity.max(level);
                         }
@@ -1470,19 +1488,26 @@ impl App {
             if !live || line.own {
                 continue;
             }
-            let level = if line.highlight || (w.is_dm && line.is_message()) {
+            let mut level = if line.highlight || (w.is_dm && line.is_message() && !quiet) {
                 Activity::Highlight
-            } else if line.is_message() {
+            } else if line.is_message() && !quiet {
                 Activity::Message
             } else if line.kind == LineKind::Membership && !self.cfg.show_joins {
                 Activity::None
             } else {
                 Activity::Event
             };
+            if muted {
+                level = level.min(Activity::Event);
+            }
             if !viewing || w.scroll > 0 {
                 w.activity = w.activity.max(level);
             }
-            if level != Activity::Highlight || (viewing && self.focused) {
+            // Highlights and DMs alert you, and so does every message in a
+            // room set to /notify all.
+            let alert =
+                level == Activity::Highlight || (mode == Some(RoomNotificationMode::AllMessages) && line.is_message());
+            if !alert || (viewing && self.focused) {
                 continue;
             }
             ring = true;
@@ -1491,7 +1516,7 @@ impl App {
                 let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
                 self.notifications.push((title, body));
             }
-            if !viewing {
+            if !viewing && level == Activity::Highlight {
                 // Like irssi's hilight window: copy it to the status window.
                 let mut copy = Line::new(line.kind, line.body.clone());
                 (copy.ts, copy.nick, copy.sender) = (line.ts, format!("{}/{}", w.name, line.nick), line.sender.clone());
@@ -2054,6 +2079,12 @@ impl App {
         split.panes.iter().filter_map(|key| self.windows.iter().position(|w| w.room == *key)).collect()
     }
 
+    /// The window's room's own notification mode (`None`: the default).
+    pub fn room_mode(&self, idx: usize) -> Option<RoomNotificationMode> {
+        let key = self.windows[idx].room.as_ref()?;
+        self.push_modes.get(key.account.as_str())?.get(&key.room_id).copied()
+    }
+
     pub fn on_screen(&self, idx: usize) -> bool {
         idx == self.active || self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[idx].room))
     }
@@ -2551,6 +2582,15 @@ impl App {
                 acct.list_public(self.here(), search);
             }),
             "away" => self.cmd_away(args),
+            "notify" => self.cmd_notify(args),
+            "hilight" | "highlight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
+                "" => acct.list_highlights(self.here()),
+                word => acct.set_highlight(self.here(), word.to_owned(), true),
+            }),
+            "dehilight" | "unhilight" => self.pick_account(args).and_then(|(acct, word)| match word.trim() {
+                "" => Err("usage: /dehilight <word>".to_owned()),
+                word => Ok(acct.set_highlight(self.here(), word.to_owned(), false)),
+            }),
             "ignore" => self.pick_account(args).and_then(|(acct, who)| {
                 match who.trim() {
                     "" => acct.list_ignored(self.here()),
@@ -3370,6 +3410,27 @@ impl App {
     /// `/split` and `/vsplit`: show another window in a new pane. Focus
     /// stays where you are typing; F6 moves it. With no window, an existing
     /// split just changes direction.
+    fn cmd_notify(&mut self, args: &str) -> Result<(), String> {
+        let (acct, room_id) = self.room_ctx()?;
+        if self.win().thread_root().is_some() {
+            return Err("notifications are set for the whole room; use /notify in its window".into());
+        }
+        let mode = match args.trim() {
+            "" => {
+                let what = matrix::describe_notify(self.room_mode(self.active), self.win().is_dm);
+                self.info(format!("notifications in {}: {what}", self.win().name));
+                return Ok(());
+            }
+            "all" => Some(RoomNotificationMode::AllMessages),
+            "mentions" => Some(RoomNotificationMode::MentionsAndKeywordsOnly),
+            "mute" | "off" => Some(RoomNotificationMode::Mute),
+            "default" => None,
+            _ => return Err("usage: /notify [all|mentions|mute|default]".into()),
+        };
+        acct.set_notify_mode(self.here(), room_id, mode);
+        Ok(())
+    }
+
     fn cmd_split(&mut self, args: &str, side_by_side: bool) -> Result<(), String> {
         let target = args.trim();
         if target.is_empty() {
@@ -3923,6 +3984,44 @@ mod tests {
         assert_eq!(app.windows[a].scroll, WHEEL_ROWS);
         app.on_wheel(Position::new(10, 2), false);
         assert_eq!(app.windows[a].scroll, 0);
+    }
+
+    #[test]
+    fn notification_modes_quiet_or_raise_alerts() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let incoming = |id: &str| {
+            let mut line = msg(id, "hello");
+            line.sender = Some("@bob:x.org".try_into().unwrap());
+            vec![Item::Line(line)]
+        };
+        let mut set_mode = |app: &mut App, mode| {
+            app.push_modes.insert("t".into(), HashMap::from([(room.clone(), mode)]));
+            (app.windows[a].activity, app.bell) = (Activity::None, false);
+        };
+
+        app.on_timeline("t", &room, incoming("$1"), true);
+        assert_eq!(app.windows[a].activity, Activity::Message);
+        assert!(!app.bell, "ordinary messages don't alert by default");
+
+        set_mode(&mut app, RoomNotificationMode::MentionsAndKeywordsOnly);
+        app.on_timeline("t", &room, incoming("$2"), true);
+        assert_eq!(app.windows[a].activity, Activity::Event, "shown quietly");
+
+        set_mode(&mut app, RoomNotificationMode::Mute);
+        let mut mention = incoming("$3");
+        if let Item::Line(line) = &mut mention[0] {
+            line.highlight = true;
+        }
+        app.on_timeline("t", &room, mention, true);
+        assert_eq!(app.windows[a].activity, Activity::Event);
+        assert!(!app.bell, "muted rooms never alert");
+
+        set_mode(&mut app, RoomNotificationMode::AllMessages);
+        app.on_timeline("t", &room, incoming("$4"), true);
+        assert_eq!(app.windows[a].activity, Activity::Message);
+        assert!(app.bell, "every message alerts in a room set to all");
     }
 
     #[test]

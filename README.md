@@ -93,6 +93,7 @@ bindings.
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/quit` |
+| Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
 your power level lets you post. Deleting someone else's message needs
@@ -164,6 +165,24 @@ original.
   selection mode needs `set -g set-clipboard on`.
 - Textrix moves your read marker as you read, and sends read receipts as set
   by `read_receipts`.
+
+### Notifications
+
+By default, mentions of you, highlight words and direct messages alert you
+(bell, desktop notification, a copy in the status window); other messages
+just light up the window list. `/notify` changes that per room, stored as
+Matrix push rules so Element and your phone follow the same setting:
+
+| `/notify …` | Effect |
+|---|---|
+| `all` | every message alerts you |
+| `mentions` | only mentions and highlight words alert; other messages show quietly |
+| `mute` | nothing alerts, even mentions; the room is dimmed in the window list |
+| `default` | back to the default |
+
+`/hilight <word>` highlights a word in every room, like a mention (also
+synced, so your other clients notify on it too); `/hilight` lists them and
+`/dehilight <word>` removes one. `/info` shows a room's setting.
 
 ## Optional preferences
 
