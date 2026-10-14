@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
+    chatlog::ChatLog,
     compose::{Say, compose},
     config::{Config, NotifyMode, Paths},
     convert::attachment,
@@ -545,6 +546,8 @@ pub struct App {
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
     /// Joined spaces per server, for grouping the window list.
     pub spaces: HashMap<AccountName, Vec<SpaceInfo>>,
+    /// Chat logging, when enabled.
+    log: Option<ChatLog>,
     /// Results of the last `/threads`, for `/thread N`.
     thread_hits: Vec<(WinKey, OwnedEventId)>,
     /// Results of the last `/search`, for `/jump N`.
@@ -633,6 +636,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
+    Cmd { name: "log", args: "[on|off]", help: "Chat logging for this session (log = true in config makes it stick)" },
     Cmd {
         name: "reload",
         args: "",
@@ -723,12 +727,14 @@ impl App {
             preview_requests: Vec::new(),
             presence: HashMap::new(),
             spaces: HashMap::new(),
+            log: None,
             thread_hits: Vec::new(),
             search_hits: Vec::new(),
             search_out: None,
             search_pending: 0,
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
+        app.apply_logging();
         app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
         app.status(Line::info(format!("servers from {}", app.env.path().display())));
         for warning in servers.warnings {
@@ -1248,6 +1254,17 @@ impl App {
         let viewing = idx == self.active;
         let mut ring = false;
         let mut mirrored = Vec::new();
+
+        if live && let Some(log) = self.log.as_mut() {
+            let name = self.windows[idx].name.clone();
+            for item in &items {
+                if let Err(e) = log.write(account, &name, room_id, item) {
+                    self.log = None;
+                    self.status(Line::error(format!("chat logging stopped: {e}")));
+                    break;
+                }
+            }
+        }
 
         // Open thread windows of this room get their thread's messages too.
         let threads: Vec<(usize, OwnedEventId)> = self
@@ -2252,6 +2269,27 @@ impl App {
                 self.cmd_reload();
                 Ok(())
             }
+            "log" => {
+                match args.trim() {
+                    "on" => {
+                        self.cfg.log = true;
+                        self.apply_logging();
+                    }
+                    "off" => {
+                        self.cfg.log = false;
+                        self.apply_logging();
+                    }
+                    "" => {
+                        let text = match &self.log {
+                            Some(log) => format!("logging to {}", log.dir().display()),
+                            None => "chat logging is off (/log on)".to_owned(),
+                        };
+                        self.info(text);
+                    }
+                    _ => return self.error("usage: /log [on|off]"),
+                }
+                Ok(())
+            }
             "connect" => self.cmd_connect(args),
             "disconnect" => self.cmd_disconnect(args),
             "logout" => self.server_arg(args).map(|acct| acct.logout()),
@@ -2915,6 +2953,23 @@ impl App {
         }
     }
 
+    /// Start or stop chat logging to match the config.
+    fn apply_logging(&mut self) {
+        let dir = self.paths.log_dir(self.cfg.log_dir.as_deref());
+        match (self.cfg.log, &self.log) {
+            (true, Some(log)) if log.dir() == dir => {}
+            (true, _) => {
+                self.status(Line::info(format!("logging messages to {} (decrypted, plaintext)", dir.display())));
+                self.log = Some(ChatLog::new(dir));
+            }
+            (false, Some(_)) => {
+                self.log = None;
+                self.status(Line::info("chat logging off"));
+            }
+            (false, None) => {}
+        }
+    }
+
     /// `/reload`: apply config.toml and the dotfile without restarting. A
     /// broken file leaves the current settings in place.
     fn cmd_reload(&mut self) {
@@ -2930,6 +2985,7 @@ impl App {
                 self.notify_mode = notify::resolve(cfg.notifications);
                 (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
                 self.cfg = cfg;
+                self.apply_logging();
                 self.info(format!("reloaded {}", self.paths.config_file().display()));
             }
             Err(e) => self.error(format!("{e:#}; keeping the current settings")),

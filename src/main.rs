@@ -1,6 +1,7 @@
 //! Textrix: an irssi-style terminal client for Matrix.
 
 mod app;
+mod chatlog;
 mod compose;
 mod config;
 mod convert;

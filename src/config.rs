@@ -40,6 +40,16 @@ impl Paths {
         self.base.join("config.toml")
     }
 
+    pub fn log_dir(&self, configured: Option<&str>) -> PathBuf {
+        match configured {
+            Some(dir) => match dir.strip_prefix("~/").zip(dirs::home_dir()) {
+                Some((rest, home)) => home.join(rest),
+                None => PathBuf::from(dir),
+            },
+            None => self.base.join("logs"),
+        }
+    }
+
     pub fn layout_file(&self) -> PathBuf {
         self.base.join("layout.json")
     }
@@ -93,6 +103,11 @@ pub struct Config {
     pub image_previews: bool,
     /// Maximum height of an inline image, in rows.
     pub image_rows: u16,
+    /// Write irssi-style daily logs of what arrives while connected. They
+    /// hold decrypted messages in plaintext, so this is off by default.
+    pub log: bool,
+    /// Where logs go (default `~/.textrix/logs`).
+    pub log_dir: Option<String>,
     /// How to receive updates: "auto" (sliding sync when the server offers
     /// it, else classic), "sliding", or "classic".
     pub sync: SyncMode,
@@ -116,6 +131,8 @@ impl Default for Config {
             scrollback: 5000,
             history_page: 50,
             completion_char: ":".into(),
+            log: false,
+            log_dir: None,
             sync: SyncMode::Auto,
             image_previews: true,
             image_rows: 10,

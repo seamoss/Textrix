@@ -98,6 +98,14 @@ headings, coloured text, links (with the address when the text differs),
 mention pills, and spoilers (hidden until you press `v` in selection mode).
 What you send is Markdown (`markdown = true`) and shows formatted right away.
 
+### Chat logs
+
+Off by default: logs hold decrypted messages in plaintext. `log = true` (or
+`/log on` for just this session) writes irssi-style daily files to
+`~/.textrix/logs/<server>/<room>/<YYYY-MM-DD>.log`, readable only by you,
+covering what arrives while you're connected: messages, emotes, notices,
+joins and parts, edits, deletions and thread replies.
+
 ### Sync
 
 New sessions use Simplified Sliding Sync (MSC4186) when the server offers it,
@@ -151,6 +159,8 @@ read_receipts = "public"   # "private" (only your clients see it) or "off"
 bell = true
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
+log = false                # chat logs (plaintext!); /log on|off per session
+log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
