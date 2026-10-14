@@ -99,6 +99,8 @@ pub struct Window {
     pub perms: Option<Permissions>,
     /// Edits/reactions/redactions whose target is not loaded yet.
     orphans: HashMap<OwnedEventId, Vec<Item>>,
+    /// `/jump` target: keep loading history until this event shows up.
+    seek: Option<OwnedEventId>,
 }
 
 const ORPHANS_MAX: usize = 1000;
@@ -138,6 +140,7 @@ impl Window {
             read_by: HashMap::new(),
             perms: None,
             orphans: HashMap::new(),
+            seek: None,
         }
     }
 
@@ -387,6 +390,14 @@ impl Window {
     }
 }
 
+/// `12: Room  Oct 13 19:27 <nick> what they said…`
+fn search_row(n: usize, room: &str, line: &Line) -> String {
+    let today = Local::now().date_naive();
+    let when = if line.ts.date_naive() == today { line.ts.format("%H:%M") } else { line.ts.format("%b %d %H:%M") };
+    let room: String = room.chars().take(18).collect();
+    format!("{n:>2}: {room}  {when} <{}> {}", line.nick, snippet(&line.text()))
+}
+
 /// The first line of a message, shortened for reply context.
 fn snippet(body: &str) -> String {
     let first = body.lines().next().unwrap_or("");
@@ -505,6 +516,12 @@ pub struct App {
     pub preview_requests: Vec<(OwnedEventId, Media)>,
     /// Other people's presence, per server.
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
+    /// Results of the last `/search`, for `/jump N`.
+    search_hits: Vec<(WinKey, OwnedEventId)>,
+    /// Where `/search` printed its results, and how many deep searches are
+    /// still running.
+    search_out: Option<WinKey>,
+    search_pending: usize,
 }
 
 struct Cmd {
@@ -541,6 +558,12 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "upload", args: "<path>", help: "Send a file or image (Tab completes paths)" },
     Cmd { name: "download", args: "[nick]", help: "Save the last attachment (from nick) to Downloads" },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
+    Cmd {
+        name: "search",
+        args: "[-deep] <text>",
+        help: "Search all rooms' loaded history (-deep: last 500 messages per room)",
+    },
+    Cmd { name: "jump", args: "<N>", help: "Go to /search result N and select it" },
     Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
     Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
@@ -647,6 +670,9 @@ impl App {
             preview_order: VecDeque::new(),
             preview_requests: Vec::new(),
             presence: HashMap::new(),
+            search_hits: Vec::new(),
+            search_out: None,
+            search_pending: 0,
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
         app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
@@ -911,6 +937,31 @@ impl App {
                     self.windows[idx].lines.iter_mut().rev().find(|l| l.pending && l.txn_id.as_ref() == Some(&txn_id))
                 {
                     line.progress = Some(percent);
+                }
+            }
+            AppEvent::SearchResults { account, room_id, hits } => {
+                self.search_pending = self.search_pending.saturating_sub(1);
+                let key = WinKey { account: account.to_string(), room_id: room_id.clone() };
+                let room = self
+                    .window_idx(&account, &room_id)
+                    .map(|i| self.windows[i].name.clone())
+                    .or_else(|| self.connected(&account).and_then(|a| a.quick_meta(&room_id)).map(|m| m.name))
+                    .unwrap_or_else(|| room_id.to_string());
+                let rows: Vec<Line> = hits
+                    .into_iter()
+                    .filter_map(|line| {
+                        let event = line.event_id.clone()?;
+                        let n = self.search_hits.len() + 1;
+                        self.search_hits.push((key.clone(), event));
+                        Some(Line::info(search_row(n, &room, &line)))
+                    })
+                    .collect();
+                let done = (self.search_pending == 0).then(|| {
+                    Line::info(format!("search done: {} result(s); /jump N to go there", self.search_hits.len()))
+                });
+                let out = self.search_out.clone().and_then(|k| self.window_idx(&k.account, &k.room_id)).unwrap_or(0);
+                for line in rows.into_iter().chain(done) {
+                    self.windows[out].push(line, cap);
                 }
             }
             AppEvent::Presence { account, updates } => {
@@ -1252,8 +1303,21 @@ impl App {
             acct.members(key.room_id.clone(), false);
         }
 
+        // A /jump target that isn't loaded yet: keep paging back until it is.
+        if let Some(target) = w.seek.clone() {
+            if w.contains(&target) {
+                w.seek = None;
+                self.select = Some(target);
+                return;
+            }
+            if matches!(w.history, History::Done) {
+                w.seek = None;
+                self.info("couldn't reach that message in this room's history");
+                return;
+            }
+        }
         let retry_ok = w.history_retry.is_none_or(|t| Instant::now() >= t);
-        if w.at_top && retry_ok {
+        if (w.at_top || w.seek.is_some()) && retry_ok {
             let from = match &w.history {
                 History::Unloaded => Some(None),
                 History::More(token) => Some(Some(token.clone())),
@@ -1915,6 +1979,8 @@ impl App {
             "react" => self.cmd_react(args),
             "upload" => self.cmd_upload(args),
             "lastlog" => self.cmd_lastlog(args),
+            "search" => self.cmd_search(args),
+            "jump" => self.cmd_jump(args),
             "urls" => {
                 self.cmd_urls();
                 Ok(())
@@ -2302,6 +2368,89 @@ impl App {
             Ok(()) => self.info(format!("opening {url}")),
             Err(e) => self.error(format!("couldn't open {url}: {e}")),
         }
+    }
+
+    fn cmd_search(&mut self, args: &str) -> Result<(), String> {
+        let (deep, needle) = match args.trim().strip_prefix("-deep") {
+            Some(rest) => (true, rest.trim()),
+            None => (false, args.trim()),
+        };
+        if needle.is_empty() {
+            return Err("usage: /search [-deep] <text>".into());
+        }
+        let needle = needle.to_lowercase();
+        self.search_hits.clear();
+        self.search_out = self.win().room.clone();
+
+        if deep {
+            let rooms: Vec<(Account, OwnedRoomId)> = self
+                .windows
+                .iter()
+                .filter_map(|w| {
+                    let key = w.room.as_ref()?;
+                    Some((self.connected(&key.account)?, key.room_id.clone()))
+                })
+                .collect();
+            if rooms.is_empty() {
+                return Err("no connected rooms to search".into());
+            }
+            self.search_pending = rooms.len();
+            self.info(format!("searching the last 500 messages of {} room(s) for \"{needle}\"…", rooms.len()));
+            for (acct, room_id) in rooms {
+                acct.search_history(room_id, needle.clone(), 5);
+            }
+            return Ok(());
+        }
+
+        // Newest first across every window's loaded history.
+        let mut found: Vec<(WinKey, String, Line)> = self
+            .windows
+            .iter()
+            .filter_map(|w| Some((w.room.clone()?, w)))
+            .flat_map(|(key, w)| {
+                w.lines
+                    .iter()
+                    .filter(|l| l.event_id.is_some() && l.is_message() && !l.redacted)
+                    .filter(|l| l.text().to_lowercase().contains(&needle))
+                    .map(move |l| (key.clone(), w.name.clone(), l.clone()))
+            })
+            .collect();
+        found.sort_by_key(|(_, _, line)| std::cmp::Reverse(line.ts));
+        found.truncate(50);
+        if found.is_empty() {
+            self.info(format!("no loaded messages match \"{needle}\"; try /search -deep"));
+            return Ok(());
+        }
+        let rows: Vec<String> = found
+            .into_iter()
+            .enumerate()
+            .map(|(i, (key, room, line))| {
+                self.search_hits.push((key, line.event_id.clone().expect("filtered")));
+                search_row(i + 1, &room, &line)
+            })
+            .collect();
+        for row in rows {
+            self.info(row);
+        }
+        self.info("/jump N goes to a result");
+        Ok(())
+    }
+
+    fn cmd_jump(&mut self, args: &str) -> Result<(), String> {
+        let n: usize = args.trim().parse().map_err(|_| "usage: /jump <N> (numbers from /search)")?;
+        let (key, event) = self.search_hits.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("no result {n}"))?;
+        let idx = match self.window_idx(&key.account, &key.room_id) {
+            Some(idx) => idx,
+            None => self.reopen(&key.account, &key.room_id).ok_or("that room isn't available")?,
+        };
+        self.switch_to(idx);
+        if self.win().contains(&event) {
+            self.select = Some(event);
+        } else {
+            self.win_mut().seek = Some(event);
+            self.info("loading older history to reach that message…");
+        }
+        Ok(())
     }
 
     fn cmd_away(&mut self, args: &str) -> Result<(), String> {
@@ -2835,6 +2984,29 @@ mod tests {
         app.input.insert_str("second");
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
         assert_eq!(app.input.text(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn search_spans_rooms_newest_first_and_jumps() {
+        let mut app = test_app();
+        for (room, id, body, mins_ago) in
+            [("!a:x.org", "$old", "deploy the thing", 30), ("!b:x.org", "$new", "Deploy finished", 5)]
+        {
+            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap() };
+            app.windows.push(Window::new(Some(key), room.into()));
+            let mut line = msg(id, body);
+            line.ts = Local::now() - chrono::TimeDelta::minutes(mins_ago);
+            app.windows.last_mut().unwrap().push(line, 100);
+            app.windows.last_mut().unwrap().push(msg(&format!("{id}x"), "unrelated"), 100);
+        }
+        app.cmd_search("deploy").unwrap();
+        let hits: Vec<&str> = app.search_hits.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(hits, vec!["$new", "$old"]);
+
+        app.cmd_jump("2").unwrap();
+        assert_eq!(app.active, 1, "switched to the first room");
+        assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"));
+        assert!(app.cmd_jump("9").is_err());
     }
 
     #[test]

@@ -75,6 +75,7 @@ bindings.
 | Rooms | `/create [-public] <name>`, `/join`, `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
 | Directory | `/list [search]` (public rooms) |
 | Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode |
+| Search | `/search <text>` across every room's loaded history, `/search -deep <text>` through each room's last 500 messages (decrypted locally — servers can't search encrypted rooms), `/jump N` to land on a result in selection mode |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |

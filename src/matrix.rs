@@ -90,6 +90,8 @@ pub enum AppEvent {
     Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
     Presence { account: AccountName, updates: Vec<(OwnedUserId, Presence)> },
+    /// Matches from `/search -deep` in one room, newest first.
+    SearchResults { account: AccountName, room_id: OwnedRoomId, hits: Vec<Line> },
     /// An inline image preview, encoded for the terminal (`None` on failure).
     ImagePreview { event_id: OwnedEventId, protocol: Option<Protocol> },
     Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
@@ -831,6 +833,43 @@ impl Account {
                     acct.notify.send(AppEvent::History { account, room_id, items: vec![], end: from, failed: true });
                 }
             }
+        });
+    }
+
+    /// `/search -deep`: page back through a room's history (decrypting as
+    /// we go — the server can't search encrypted rooms) looking for `needle`.
+    pub fn search_history(&self, room_id: OwnedRoomId, needle: String, pages: usize) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let result: Result<Vec<Line>> = async {
+                let room = acct.room(&room_id)?;
+                let mut conv = Converter::new(&room, &acct.user_id);
+                let (mut hits, mut from) = (Vec::new(), None::<String>);
+                for _ in 0..pages {
+                    let mut options = MessagesOptions::backward().from(from.as_deref());
+                    options.limit = UInt::from(100u32);
+                    let messages = room.messages(options).await?;
+                    for ev in &messages.chunk {
+                        if let Some(Item::Line(line)) = conv.convert(ev).await
+                            && line.is_message()
+                            && line.text().to_lowercase().contains(&needle)
+                        {
+                            hits.push(line);
+                        }
+                    }
+                    match messages.end {
+                        Some(end) => from = Some(end),
+                        None => break,
+                    }
+                }
+                Ok(hits)
+            }
+            .await;
+            let hits = result.unwrap_or_else(|e| {
+                tracing::debug!("search in {room_id} failed: {e:#}");
+                Vec::new()
+            });
+            acct.notify.send(AppEvent::SearchResults { account: acct.name.clone(), room_id, hits });
         });
     }
 
