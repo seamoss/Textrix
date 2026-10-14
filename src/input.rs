@@ -202,6 +202,19 @@ impl Input {
         (self.buf[start..self.cursor].iter().collect(), start == 0)
     }
 
+    /// Put the cursor at a clicked column of the visible text, `skip`
+    /// characters being scrolled out of view on the left.
+    pub fn click(&mut self, skip: usize, col: usize) {
+        self.completion = None;
+        let mut pos = skip.min(self.buf.len());
+        let mut used = 0;
+        while pos < self.buf.len() && used + display_width(self.buf[pos]) <= col {
+            used += display_width(self.buf[pos]);
+            pos += 1;
+        }
+        self.cursor = pos;
+    }
+
     /// While cycling through candidates that carry a hint: "hint  2/5".
     pub fn completion_hint(&self) -> Option<String> {
         let c = self.completion.as_ref()?;
@@ -269,6 +282,21 @@ mod tests {
         let mut input = Input::default();
         input.insert_str(s);
         input
+    }
+
+    #[test]
+    fn clicks_place_the_cursor_by_column() {
+        let mut input = typed("a日本b");
+        input.click(0, 0);
+        assert_eq!(input.cursor(), 0);
+        input.click(0, 2);
+        assert_eq!(input.cursor(), 1, "inside a wide character lands before it");
+        input.click(0, 3);
+        assert_eq!(input.cursor(), 2);
+        input.click(1, 0);
+        assert_eq!(input.cursor(), 1, "columns count from the first visible character");
+        input.click(0, 99);
+        assert_eq!(input.cursor(), 4);
     }
 
     #[test]

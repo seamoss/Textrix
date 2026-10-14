@@ -117,6 +117,9 @@ pub struct Config {
     pub nicklist: bool,
     /// Room avatars in the window list (initials where images can't show).
     pub sidebar_avatars: bool,
+    /// Wheel scrolling and clicking (hold Shift, or Option in iTerm2, to
+    /// select text while it's on).
+    pub mouse: bool,
 }
 
 impl Default for Config {
@@ -141,6 +144,7 @@ impl Default for Config {
             sidebar: true,
             nicklist: true,
             sidebar_avatars: true,
+            mouse: true,
         }
     }
 }

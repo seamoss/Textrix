@@ -62,6 +62,14 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Ctrl+L | redraw |
 
+**Mouse** (`mouse = true`): the wheel scrolls the pane under the pointer
+(older history loads at the top) or, in selection mode, moves the
+selection. Click a window in the list to go there, a pane to focus it, a
+message to select it (click again to unselect), a link to open it, a name
+in the member list to mention them, or the input line to move the cursor.
+While the mouse is on, hold Shift (Option in iTerm2 and Terminal.app) and
+drag to select text, or use `c` in selection mode to copy a message.
+
 While you type a command, its usage appears in dim text after the cursor.
 
 On macOS, set your terminal's Option key to act as Meta/Esc+ for the Alt
@@ -179,6 +187,7 @@ image_rows = 10            # their maximum height
 sidebar = true             # window list (F2)
 sidebar_avatars = true     # room avatars there (coloured initials without graphics)
 nicklist = true            # member list (F3)
+mouse = true               # wheel and clicks (hold Shift/Option to select text)
 scrollback = 5000
 history_page = 50
 completion_char = ":"

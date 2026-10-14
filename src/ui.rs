@@ -41,7 +41,37 @@ const NICK_COLORS: [Color; 10] = [
     Color::LightYellow,
 ];
 
+/// Where things were drawn in the last frame, so mouse clicks can find
+/// them.
+#[derive(Default)]
+pub struct Hits {
+    /// Window list rows: (row, window index).
+    pub sidebar: Vec<(Rect, usize)>,
+    pub panes: Vec<PaneHits>,
+    /// Member list rows: (row, index into the active window's members).
+    pub nicklist: Vec<(Rect, usize)>,
+    /// The input line, the column its text starts at, and how many
+    /// characters are scrolled out of view on the left.
+    pub input: Option<(Rect, u16, usize)>,
+}
+
+pub struct PaneHits {
+    pub area: Rect,
+    pub window: usize,
+    /// One per screen row, from the top of `area`.
+    pub rows: Vec<RowHit>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RowHit {
+    /// The message drawn on this row.
+    pub event: Option<OwnedEventId>,
+    /// Underlined (link) stretches: (from column, to column, their text).
+    pub links: Vec<(u16, u16, String)>,
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
+    app.hits = Hits::default();
     let [topic, middle, status, input] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
             .areas(f.area());
@@ -57,14 +87,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_topic(f, topic, app);
     if side_w > 0 {
-        draw_sidebar(f, side, app);
+        app.hits.sidebar = draw_sidebar(f, side, app);
     }
     draw_panes(f, main, app);
     if nick_w > 0 {
-        draw_nicklist(f, nicks, app);
+        app.hits.nicklist = draw_nicklist(f, nicks, app);
     }
     draw_status(f, status, app);
-    draw_input(f, input, app);
+    app.hits.input = Some(draw_input(f, input, app));
     if app.help.is_some() {
         draw_help(f, app);
     }
@@ -194,7 +224,7 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
 
 /// irssi adv_windowlist-style: window number, name and unread count,
 /// coloured by activity, grouped by server and space.
-fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let inner = area.width.saturating_sub(1) as usize;
     let entries = sidebar_entries(app);
     let rows: Vec<(TLine<'static>, bool)> = entries
@@ -216,13 +246,16 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(shown).block(block), area);
 
     // Avatar images go into the gap left for them after the window number.
+    let mut hits = Vec::new();
     for (row, entry) in entries.iter().skip(start).take(height).enumerate() {
         let SidebarEntry::Window(i) = entry else { continue };
+        hits.push((Rect { y: area.y + row as u16, height: 1, ..area }, *i));
         if let Some(Preview::Ready(protocol)) = avatar_of(app, *i) {
             let rect = Rect { x: area.x + 3, y: area.y + row as u16, width: 2, height: 1 };
             f.render_widget(Image::new(protocol), rect);
         }
     }
+    hits
 }
 
 fn avatar_of(app: &App, i: usize) -> Option<&Preview> {
@@ -300,7 +333,7 @@ fn presence_dot(kind: PresenceKind) -> (char, Color) {
     }
 }
 
-fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) {
+fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let win = &app.windows[app.active];
     let inner = area.width.saturating_sub(1) as usize;
     let height = area.height as usize;
@@ -330,6 +363,8 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) {
     }
     let block = Block::new().borders(Borders::LEFT).border_style(DIM);
     f.render_widget(Paragraph::new(rows).block(block), area);
+    // Names start on the row after the "Users" header.
+    (0..take.min(win.members.len())).map(|n| (Rect { y: area.y + 1 + n as u16, height: 1, ..area }, n)).collect()
 }
 
 fn display_len(s: &str) -> usize {
@@ -426,6 +461,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
 
     let mut need = height + win.scroll;
     let mut rows: Vec<TLine<'static>> = Vec::new();
+    // The message on each row, for mouse clicks.
+    let mut row_events: Vec<Option<OwnedEventId>> = Vec::new();
     let mut found_selected = selected.is_none();
     let mut i = visible.len();
     while i > 0 && (rows.len() < need || !found_selected) {
@@ -452,6 +489,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                     let height = protocol.size().height;
                     placements.push((id.clone(), rows.len(), height));
                     rows.extend((0..height).map(|_| TLine::default()));
+                    row_events.extend((0..height).map(|_| Some(id.clone())));
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
                 None => {
@@ -469,6 +507,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
             }
         }
+        row_events.extend(rendered.iter().map(|_| line.event_id.clone()));
         rows.extend(rendered.into_iter().rev());
         if is_selected {
             // Scroll just enough to keep the selected message on screen.
@@ -483,6 +522,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(line.ts));
+            row_events.push(None);
         }
         if i > 0
             && visible[i - 1].event_id.is_some()
@@ -490,6 +530,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && last_from_others.is_some_and(|j| j >= i)
         {
             rows.push(new_messages(width));
+            row_events.push(None);
         }
     }
     let exhausted = i == 0;
@@ -505,10 +546,23 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
 
     let total = rows.len();
     rows.reverse();
+    row_events.reverse();
     let end = total - win.scroll.min(total);
     let start = end.saturating_sub(height);
     let shown = rows[start..end].to_vec();
     let pad = height - shown.len();
+    let hits = PaneHits {
+        area,
+        window: idx,
+        rows: std::iter::repeat_n(RowHit::default(), pad)
+            .chain(
+                shown
+                    .iter()
+                    .zip(&row_events[start..end])
+                    .map(|(row, event)| RowHit { event: event.clone(), links: underlined(row, area.x) }),
+            )
+            .collect(),
+    };
     let area = Rect { y: area.y + pad as u16, height: shown.len() as u16, ..area };
     f.render_widget(Paragraph::new(shown), area);
 
@@ -528,6 +582,27 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         let rect = Rect { x, y: area.y + (top - start) as u16, width: size.width, height: size.height };
         f.render_widget(Image::new(protocol), rect);
     }
+    app.hits.panes.push(hits);
+}
+
+/// Underlined stretches of a drawn row (links), with their columns.
+fn underlined(row: &TLine, x: u16) -> Vec<(u16, u16, String)> {
+    let mut out: Vec<(u16, u16, String)> = Vec::new();
+    let mut at = x;
+    for span in &row.spans {
+        let w = display_len(&span.content) as u16;
+        if span.style.add_modifier.contains(Modifier::UNDERLINED) {
+            match out.last_mut() {
+                Some(last) if last.1 == at => {
+                    last.1 += w;
+                    last.2.push_str(&span.content);
+                }
+                _ => out.push((at, at + w, span.content.to_string())),
+            }
+        }
+        at += w;
+    }
+    out
 }
 
 fn new_messages(width: usize) -> TLine<'static> {
@@ -861,7 +936,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(TLine::from(spans)).style(BAR), area);
 }
 
-fn draw_input(f: &mut Frame, area: Rect, app: &App) {
+fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
     let win = &app.windows[app.active];
     let label: String = match app.compose_label() {
         Some(label) => label.chars().take(32).collect(),
@@ -908,6 +983,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(TLine::from(spans)), area);
     let x = area.x + (prompt_w + cursor_w - skip_w).min(area.width.saturating_sub(1) as usize) as u16;
     f.set_cursor_position(Position::new(x, area.y));
+    (area, area.x + prompt_w as u16, skip)
 }
 
 /// Rows a line occupies at `width`, for keeping the view steady while
@@ -937,6 +1013,19 @@ mod tests {
     fn newline_forces_break_and_long_words_split() {
         let cells: Vec<(char, Style)> = "x\nabcdefgh".chars().map(|c| (c, Style::new())).collect();
         assert_eq!(text(&wrap(&cells, 4, 1)), vec!["x", " abc", " def", " gh"]);
+    }
+
+    #[test]
+    fn underlined_stretches_are_found_by_column() {
+        let u = Style::new().add_modifier(Modifier::UNDERLINED);
+        let row = TLine::from(vec![
+            Span::raw("12:00 "),
+            Span::styled("https://a.example/", u),
+            Span::styled("x", u),
+            Span::raw(" and "),
+            Span::styled("日本", u),
+        ]);
+        assert_eq!(underlined(&row, 2), vec![(8, 27, "https://a.example/x".to_owned()), (32, 36, "日本".to_owned())]);
     }
 
     #[test]

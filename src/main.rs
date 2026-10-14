@@ -82,6 +82,7 @@ async fn run() -> Result<()> {
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let previews = cfg.image_previews;
+    let mouse = cfg.mouse;
     let mut app = App::new(cfg, paths, env, servers, tx);
 
     let mut terminal = ratatui::init();
@@ -100,7 +101,17 @@ async fn run() -> Result<()> {
         )?;
     }
     crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+    if mouse {
+        app::set_mouse_capture(true);
+    }
+    // A crash shouldn't leave the shell receiving mouse reports.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        app::set_mouse_capture(false);
+        restore(info);
+    }));
     let result = app::run(&mut terminal, app, rx).await;
+    app::set_mouse_capture(false);
     if enhanced_keys {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }

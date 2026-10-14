@@ -9,7 +9,9 @@ use std::{
 
 use anyhow::Result;
 use chrono::Local;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
@@ -22,7 +24,10 @@ use matrix_sdk::ruma::{
     },
     room::{AllowRule, JoinRule, Restricted},
 };
-use ratatui::{DefaultTerminal, layout::Size};
+use ratatui::{
+    DefaultTerminal,
+    layout::{Position, Size},
+};
 use ratatui_image::{
     picker::{Picker, ProtocolType},
     protocol::Protocol,
@@ -529,6 +534,8 @@ pub struct Split {
 }
 
 const PANES_MAX: usize = 4;
+/// Rows one notch of the mouse wheel scrolls.
+const WHEEL_ROWS: usize = 3;
 
 pub struct App {
     pub cfg: Config,
@@ -568,6 +575,8 @@ pub struct App {
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
     pub split: Option<Split>,
+    /// Where the last frame drew things, for the mouse.
+    pub hits: ui::Hits,
     /// Terminal graphics support, probed at startup; `None` disables previews.
     pub picker: Option<Picker>,
     pub previews: HashMap<OwnedEventId, Preview>,
@@ -729,6 +738,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
     ("F1 / F2 / F3", "this help / window list / member list"),
     ("F6 / Shift+F6", "focus the next / previous split pane"),
+    ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), name (mentions) or the input"),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line"),
@@ -860,6 +870,7 @@ impl App {
             clipboard: None,
             help: None,
             split: None,
+            hits: ui::Hits::default(),
             picker: None,
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
@@ -1732,7 +1743,105 @@ impl App {
             }
             Event::FocusGained => self.focused = true,
             Event::FocusLost => self.focused = false,
+            Event::Mouse(m) => self.on_mouse(m),
             _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, m: MouseEvent) {
+        let at = Position::new(m.column, m.row);
+        match m.kind {
+            MouseEventKind::ScrollUp => self.on_wheel(at, true),
+            MouseEventKind::ScrollDown => self.on_wheel(at, false),
+            MouseEventKind::Down(MouseButton::Left) => self.on_click(at),
+            _ => {}
+        }
+    }
+
+    /// The wheel scrolls the pane under the pointer (older history loads
+    /// at the top), or moves the selection in selection mode.
+    fn on_wheel(&mut self, at: Position, up: bool) {
+        if let Some(help) = self.help.as_mut() {
+            help.scroll =
+                if up { help.scroll.saturating_sub(WHEEL_ROWS) } else { help.scroll.saturating_add(WHEEL_ROWS) };
+            return;
+        }
+        let Some(idx) = self.hits.panes.iter().find(|p| p.area.contains(at)).map(|p| p.window) else { return };
+        if idx == self.active && self.select.is_some() {
+            return self.move_select(if up { -1 } else { 1 });
+        }
+        let w = &mut self.windows[idx];
+        w.scroll = if up { w.scroll + WHEEL_ROWS } else { w.scroll.saturating_sub(WHEEL_ROWS) };
+    }
+
+    /// Clicks: a window in the list goes there; a pane gets the focus; a
+    /// message is selected (again to unselect); a link opens; a member's
+    /// name is added to your message; the input line moves the cursor.
+    fn on_click(&mut self, at: Position) {
+        if self.help.is_some() || self.confirm_delete.is_some() {
+            return;
+        }
+        if let Some(&(_, idx)) = self.hits.sidebar.iter().find(|(r, _)| r.contains(at)) {
+            return self.switch_to(idx);
+        }
+        if let Some(&(_, n)) = self.hits.nicklist.iter().find(|(r, _)| r.contains(at)) {
+            return self.mention_member(n);
+        }
+        if let Some((area, text_x, skip)) = self.hits.input
+            && area.contains(at)
+        {
+            return self.input.click(skip, at.x.saturating_sub(text_x) as usize);
+        }
+        let Some(pane) = self.hits.panes.iter().find(|p| p.area.contains(at)) else { return };
+        let idx = pane.window;
+        let row = pane.rows.get((at.y - pane.area.y) as usize).cloned().unwrap_or_default();
+        if idx != self.active {
+            self.switch_to(idx);
+        }
+        if self.is_editing() {
+            return;
+        }
+        if let Some(event) = &row.event
+            && let Some((_, _, text)) = row.links.iter().find(|(from, to, _)| (*from..*to).contains(&at.x))
+            && let Some(url) = self.link_in(event, text)
+        {
+            return self.open_url(url);
+        }
+        self.select = match row.event {
+            Some(event) if self.select.as_ref() != Some(&event) && self.selectable().contains(&event) => Some(event),
+            _ => None,
+        };
+    }
+
+    /// The link a clicked piece of underlined text belongs to (a wrapped
+    /// link shows in pieces).
+    fn link_in(&self, event: &EventId, fragment: &str) -> Option<String> {
+        let fragment = fragment.trim().trim_matches(|c: char| "()<>[]\"'".contains(c));
+        if fragment.chars().count() < 3 {
+            return None;
+        }
+        let line = self.win().lines.iter().rev().find(|l| l.event_id.as_deref() == Some(event))?;
+        let text = line.text();
+        let url = links::urls(&line.body).into_iter().chain(links::urls(&text)).find(|u| u.contains(fragment));
+        url.map(ToOwned::to_owned)
+    }
+
+    /// A click on the member list: add that person to your message as a
+    /// mention, like completing their name.
+    fn mention_member(&mut self, n: usize) {
+        let Some(m) = self.win().members.get(n) else { return };
+        let (name, user) = (m.name.clone(), m.user_id.clone());
+        self.input.end_completion();
+        let text = if self.input.is_empty() {
+            format!("{name}{} ", self.cfg.completion_char)
+        } else {
+            let after_word = self.input.cursor() > 0
+                && self.input.chars().get(self.input.cursor() - 1).is_some_and(|c| !c.is_whitespace());
+            format!("{}{name} ", if after_word { " " } else { "" })
+        };
+        self.input.insert_str(&text);
+        if !self.input.mentions.iter().any(|(_, u)| *u == user) {
+            self.input.mentions.push((name, user));
         }
     }
 
@@ -3363,6 +3472,9 @@ impl App {
                 }
                 self.notify_mode = notify::resolve(cfg.notifications);
                 (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
+                if cfg.mouse != self.cfg.mouse {
+                    set_mouse_capture(cfg.mouse);
+                }
                 self.cfg = cfg;
                 self.apply_logging();
                 self.info(format!("reloaded {}", self.paths.config_file().display()));
@@ -3588,6 +3700,17 @@ fn path_candidates(word: &str) -> Vec<Candidate> {
 }
 
 /// The main loop: draw, then wait for a key, a Matrix event, or the clock.
+/// Turn the terminal's mouse reporting on or off.
+pub fn set_mouse_capture(on: bool) {
+    use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    let mut out = std::io::stdout();
+    let result =
+        if on { crossterm::execute!(out, EnableMouseCapture) } else { crossterm::execute!(out, DisableMouseCapture) };
+    if let Err(e) = result {
+        tracing::warn!("mouse capture: {e}");
+    }
+}
+
 pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: UnboundedReceiver<AppEvent>) -> Result<()> {
     let mut keys = EventStream::new();
     let mut clock = tokio::time::interval(Duration::from_secs(1));
@@ -3768,6 +3891,38 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn clicks_find_wrapped_links_and_select_messages() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        app.switch_to(a);
+        let url = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+        let mut line = msg("$1", &format!("see {url}."));
+        line.sender = Some("@alice:x.org".try_into().unwrap());
+        app.windows[a].lines.push_back(line);
+        let event: OwnedEventId = "$1".try_into().unwrap();
+        // The second half of a link wrapped onto the next row still opens it.
+        assert_eq!(app.link_in(&event, "wiki/Rust_(programming_language)").as_deref(), Some(url));
+        assert_eq!(app.link_in(&event, "(https://en.wikipedia"), Some(url.to_owned()));
+        assert_eq!(app.link_in(&event, "alice"), None, "underlined text that isn't a link");
+
+        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new() };
+        let area = ratatui::layout::Rect::new(0, 0, 40, 5);
+        app.hits.panes.push(ui::PaneHits { area, window: a, rows: vec![ui::RowHit::default(), row] });
+        app.on_click(Position::new(10, 1));
+        assert_eq!(app.select.as_ref(), Some(&event), "a click selects the message");
+        app.on_click(Position::new(10, 1));
+        assert_eq!(app.select, None, "clicking it again unselects");
+        app.on_click(Position::new(10, 1));
+        app.on_click(Position::new(10, 0));
+        assert_eq!(app.select, None, "an empty row unselects");
+
+        app.on_wheel(Position::new(10, 2), true);
+        assert_eq!(app.windows[a].scroll, WHEEL_ROWS);
+        app.on_wheel(Position::new(10, 2), false);
+        assert_eq!(app.windows[a].scroll, 0);
     }
 
     #[test]
