@@ -29,8 +29,8 @@ use matrix_sdk::{
     notification_settings::{NotificationSettings, RoomNotificationMode},
     room::{IncludeRelations, MessagesOptions, Receipts, RelationsOptions},
     ruma::{
-        OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId,
-        RoomVersionId, UInt,
+        OwnedDeviceId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId,
+        RoomOrAliasId, RoomVersionId, UInt,
         api::Direction,
         api::{
             client::{
@@ -47,6 +47,7 @@ use matrix_sdk::{
                 space::get_hierarchy,
                 sync::sync_events::v3::Filter,
                 threads::get_threads,
+                uiaa::{AuthData, AuthType, MatrixUserIdentifier, Password as UiaaPassword, UserIdentifier},
             },
             error::ErrorKind,
         },
@@ -1427,6 +1428,111 @@ impl Account {
                 }
             }
             acct.notify.send(AppEvent::Threads { account: acct.name.clone(), room_id, roots });
+            Ok(())
+        });
+    }
+
+    /// `/devices`: every session signed in to this account, most recently
+    /// active first, with whether it's verified.
+    pub fn list_devices(&self, out: Option<OwnedRoomId>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let mut devices = acct.client.devices().await?.devices;
+            devices.sort_by_key(|d| std::cmp::Reverse(d.last_seen_ts));
+            let keys = acct.client.encryption().get_user_devices(&acct.user_id).await?;
+            let this = acct.client.device_id().map(ToOwned::to_owned);
+            let mut rows = vec![format!("{} session(s) for {}:", devices.len(), acct.user_id)];
+            for d in &devices {
+                let trust = match keys.get(&d.device_id) {
+                    Some(device) if device.is_verified() => "verified",
+                    Some(_) => "unverified",
+                    None => "no keys",
+                };
+                let seen = match d.last_seen_ts {
+                    Some(ts) => {
+                        format!("active {}", crate::model::ago(chrono::Local::now() - crate::convert::to_local(ts)))
+                    }
+                    None => "never active".to_owned(),
+                };
+                let from = d.last_seen_ip.as_deref().map(|ip| format!(" from {ip}")).unwrap_or_default();
+                let name: String = d.display_name.as_deref().unwrap_or("(no name)").chars().take(28).collect();
+                let marker = if this.as_ref() == Some(&d.device_id) { "  ← this session" } else { "" };
+                rows.push(format!("  {:<12} {name:<28} {trust:<10} {seen}{from}{marker}", d.device_id));
+            }
+            rows.push("/devices rename <id> <name>; /devices delete <id> signs one out".into());
+            for row in rows {
+                acct.notify.line(out.clone(), Line::info(row));
+            }
+            Ok(())
+        });
+    }
+
+    pub fn rename_device(&self, out: Option<OwnedRoomId>, device_id: OwnedDeviceId, name: String) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            acct.client.rename_device(&device_id, &name).await?;
+            acct.notify.line(out, Line::info(format!("session {device_id} is now called “{name}”")));
+            Ok(())
+        });
+    }
+
+    /// Sign out another session: shown first, removed only when confirmed.
+    /// The server asks for your password again; like at login, it comes
+    /// from the dotfile and goes only into the request.
+    pub fn delete_device(&self, out: Option<OwnedRoomId>, device_id: OwnedDeviceId, confirmed: bool) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            if acct.client.device_id() == Some(&*device_id) {
+                bail!("that's this session; /logout {} signs it out", acct.name);
+            }
+            let devices = acct.client.devices().await?.devices;
+            let Some(device) = devices.iter().find(|d| d.device_id == device_id) else {
+                bail!("no session {device_id}; /devices lists them (IDs are case-sensitive)");
+            };
+            let name = device.display_name.clone().unwrap_or_else(|| "(no name)".into());
+            if !confirmed {
+                acct.notify.line(
+                    out,
+                    Line::info(format!(
+                        "this signs out {device_id} “{name}”: it stops syncing and can't decrypt new messages. \
+                         /devices delete {device_id} confirm to go ahead"
+                    )),
+                );
+                return Ok(());
+            }
+            let ids = [device_id.clone()];
+            let session = match acct.client.delete_devices(&ids, None).await {
+                Ok(_) => None,
+                Err(e) => {
+                    let Some(info) = e.as_uiaa_response() else { return Err(e.into()) };
+                    if !info.flows.iter().any(|f| f.stages == [AuthType::Password]) {
+                        bail!(
+                            "{} wants another way of signing in to remove sessions; use Element for this one",
+                            acct.homeserver
+                        );
+                    }
+                    Some(info.session.clone())
+                }
+            };
+            if let Some(session) = session {
+                let password = acct.env.secret(&acct.name, Secret::Password)?.with_context(|| {
+                    format!(
+                        "removing a session needs your password: set TEXTRIX_{}_PASSWORD in the dotfile",
+                        acct.name.to_uppercase()
+                    )
+                })?;
+                let user = UserIdentifier::Matrix(MatrixUserIdentifier::new(acct.user_id.to_string()));
+                let mut auth = UiaaPassword::new(user, password.expose_secret().to_owned());
+                drop(password);
+                auth.session = session;
+                if let Err(e) = acct.client.delete_devices(&ids, Some(AuthData::Password(auth))).await {
+                    if e.as_uiaa_response().is_some() {
+                        bail!("the server didn't accept the dotfile's password");
+                    }
+                    return Err(e.into());
+                }
+            }
+            acct.notify.line(out, Line::info(format!("signed out {device_id} “{name}”")));
             Ok(())
         });
     }

@@ -725,6 +725,11 @@ const COMMANDS: &[Cmd] = &[
         help: "Emoji-verify this device (no args) or a user",
     },
     Cmd { name: "recover", args: "[server]", help: "Unlock history with the dotfile's RECOVERY_KEY" },
+    Cmd {
+        name: "devices",
+        args: "[rename <id> <name> | delete <id>]",
+        help: "List your sessions, rename one, or sign one out (asks to confirm)",
+    },
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
@@ -2624,6 +2629,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "devices" | "sessions" => self.cmd_devices(args),
             "hilight" | "highlight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
                 "" => acct.list_highlights(self.here()),
                 word => acct.set_highlight(self.here(), word.to_owned(), true),
@@ -3455,6 +3461,30 @@ impl App {
     /// `/split` and `/vsplit`: show another window in a new pane. Focus
     /// stays where you are typing; F6 moves it. With no window, an existing
     /// split just changes direction.
+    fn cmd_devices(&mut self, args: &str) -> Result<(), String> {
+        let (acct, args) = self.pick_account(args)?;
+        let (sub, rest) = split_first(args.trim());
+        match sub {
+            "" | "list" => acct.list_devices(self.here()),
+            "rename" => {
+                let (id, name) = split_first(rest);
+                if id.is_empty() || name.trim().is_empty() {
+                    return Err("usage: /devices rename <id> <name>".into());
+                }
+                acct.rename_device(self.here(), id.into(), name.trim().to_owned());
+            }
+            "delete" | "remove" | "signout" => {
+                let (id, confirm) = split_first(rest);
+                if id.is_empty() {
+                    return Err("usage: /devices delete <id> (IDs from /devices)".into());
+                }
+                acct.delete_device(self.here(), id.into(), confirm.trim() == "confirm");
+            }
+            _ => return Err("usage: /devices [rename <id> <name> | delete <id>]".into()),
+        }
+        Ok(())
+    }
+
     fn cmd_notify(&mut self, args: &str) -> Result<(), String> {
         let (acct, room_id) = self.room_ctx()?;
         if self.win().thread_root().is_some() {

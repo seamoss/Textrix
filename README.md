@@ -43,6 +43,12 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
   `/verify mismatch` after comparing the emoji.
 - The status bar shows `<server>: unverified` until this device is trusted.
 - `/whois <user>` shows identity and per-device trust.
+- `/devices` lists your sessions (most recently active first, verified or
+  not, where they were last seen). `/devices rename <id> <name>` renames
+  one; `/devices delete <id>` shows which session it is, and
+  `/devices delete <id> confirm` signs it out. The server asks for your
+  password again for that, which Textrix answers from the dotfile, like at
+  login. To sign out this session, use `/logout`.
 
 ## Keys
 
@@ -93,7 +99,7 @@ bindings.
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/quit` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
