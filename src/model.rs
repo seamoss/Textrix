@@ -50,6 +50,10 @@ pub struct Line {
     pub media: Option<Media>,
     /// Upload progress of our own pending attachment.
     pub progress: Option<u8>,
+    /// Formatted version of `body`, when the message had HTML formatting.
+    pub rich: Option<Vec<crate::richtext::Span>>,
+    /// Spoilers shown (toggled with `v` in selection mode).
+    pub reveal: bool,
     /// Megolm session needed to decrypt a `Utd` line.
     pub utd_session: Option<String>,
     /// Reaction key -> reacting nicks.
@@ -77,6 +81,8 @@ impl Line {
             reply_snippet: None,
             media: None,
             progress: None,
+            rich: None,
+            reveal: false,
             utd_session: None,
             reactions: Vec::new(),
         }
@@ -88,6 +94,14 @@ impl Line {
 
     pub fn error(body: impl Into<String>) -> Self {
         Self::new(LineKind::Error, body)
+    }
+
+    /// What the message says, formatted text flattened (for snippets).
+    pub fn text(&self) -> String {
+        match &self.rich {
+            Some(spans) if !self.redacted => crate::richtext::plain(spans),
+            _ => self.body.clone(),
+        }
     }
 
     pub fn is_message(&self) -> bool {

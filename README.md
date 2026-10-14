@@ -87,6 +87,14 @@ moderator rights; Textrix checks before asking you to confirm.
 When several servers are connected, prefix a command with `-<server>` while in
 the status window (e.g. `/join -work #ops:work.example`).
 
+### Formatting
+
+Formatted messages render as styled text: bold, italic, strikethrough,
+inline code and code blocks, quotes (`▎`), bullet and numbered lists,
+headings, coloured text, links (with the address when the text differs),
+mention pills, and spoilers (hidden until you press `v` in selection mode).
+What you send is Markdown (`markdown = true`) and shows formatted right away.
+
 ### Images
 
 Images show inline under their message. Textrix asks the terminal what it

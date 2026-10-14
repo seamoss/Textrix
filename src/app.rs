@@ -213,7 +213,7 @@ impl Window {
         if let Some(target) = &line.reply_to
             && let Some(parent) = self.lines.iter().rev().find(|l| l.event_id.as_ref() == Some(target))
         {
-            (line.reply_nick, line.reply_snippet) = (Some(parent.nick.clone()), Some(snippet(&parent.body)));
+            (line.reply_nick, line.reply_snippet) = (Some(parent.nick.clone()), Some(snippet(&parent.text())));
         }
         self.lines.push_back(line);
         while self.lines.len() > cap {
@@ -314,7 +314,7 @@ impl Window {
         let parents: HashMap<OwnedEventId, (String, String)> = self
             .lines
             .iter()
-            .filter_map(|l| Some((l.event_id.clone()?, (l.nick.clone(), snippet(&l.body)))))
+            .filter_map(|l| Some((l.event_id.clone()?, (l.nick.clone(), snippet(&l.text())))))
             .collect();
         for line in self.lines.iter_mut().filter(|l| l.reply_nick.is_none()) {
             if let Some((nick, text)) = line.reply_to.as_ref().and_then(|t| parents.get(t)) {
@@ -396,6 +396,7 @@ fn annotate(line: &mut Line, item: &Item) {
     match item {
         Item::Edit { body, fallback, .. } if !line.redacted => {
             line.body = body.clone();
+            line.rich = fallback.rich.clone();
             line.kind = fallback.kind;
             line.edited = true;
         }
@@ -404,6 +405,7 @@ fn annotate(line: &mut Line, item: &Item) {
             line.redacted = true;
             line.edited = false;
             line.media = None;
+            line.rich = None;
             line.reactions.clear();
         }
         Item::React { key, nick, .. } => match line.reactions.iter_mut().find(|(k, _)| k == key) {
@@ -1562,6 +1564,11 @@ impl App {
                 (None, _) => self.error("that message has no attachment"),
                 (_, Err(e)) => self.error(e),
             },
+            Char('v') => {
+                if let Some(target) = self.win_mut().find_mut(&event) {
+                    target.reveal = !target.reveal;
+                }
+            }
             Char('o') => match links::urls(&line.body).first() {
                 Some(url) => self.open_url((*url).to_owned()),
                 None => self.error("that message has no link"),
@@ -2030,6 +2037,7 @@ impl App {
         let txn_id = TransactionId::new();
         let mut line = Line::new(kind, text);
         line.reply_to = reply_to;
+        line.rich = crate::convert::rich_of(&content.msgtype);
         self.echo(&acct, line, &txn_id);
         acct.send(room_id, content, txn_id);
     }
@@ -2102,8 +2110,10 @@ impl App {
         let kind = if emote { Say::Emote } else { Say::Text };
         let content = compose(text, kind, &self.mentions, self.cfg.markdown)
             .make_replacement(ReplacementMetadata::new(event_id.clone(), None));
+        let rich = crate::convert::rich_of(&content.msgtype);
         if let Some(line) = self.win_mut().find_mut(&event_id) {
             line.body = text.to_owned();
+            line.rich = rich;
             line.edited = true;
         }
         acct.send(room_id, content, TransactionId::new());
@@ -2473,7 +2483,8 @@ impl App {
             self.info("Edit: Shift+Up (or Ctrl+E on an empty line), ↑/↓ pick your message, Enter saves,");
             self.info("      clearing the text deletes, Esc restores what you were typing");
             self.info("Select: Alt+Up, then ↑/↓ PgUp/PgDn g/G to move; r reply, e edit, d delete,");
-            self.info("      + react, s save attachment, o open link, c copy, i details, Esc to leave");
+            self.info("      + react, s save attachment, o open link, v show spoilers, c copy, i details,");
+            self.info("      Esc to leave");
             return;
         }
         let real = ALIASES.iter().find(|(a, _)| *a == wanted).map_or(wanted.as_str(), |(_, r)| *r);

@@ -9,6 +9,7 @@ mod links;
 mod matrix;
 mod model;
 mod notify;
+mod richtext;
 mod servers;
 mod ui;
 

@@ -21,6 +21,7 @@ use crate::{
     input::display_width,
     links,
     model::{Activity, Line, LineKind},
+    richtext::Marks,
 };
 
 const BAR: Style = Style::new().fg(Color::White).bg(Color::Blue);
@@ -374,13 +375,28 @@ fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -
     let prefix_width: usize = cells.iter().map(|(c, _)| display_width(*c)).sum();
     let indent = if prefix_width > width / 2 { 4.min(width.saturating_sub(1)) } else { prefix_width };
 
-    let mut at = 0;
-    for range in links::url_ranges(&line.body) {
-        push(&mut cells, &line.body[at..range.start], body_style);
-        push(&mut cells, &line.body[range.clone()], body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED));
-        at = range.end;
+    match &line.rich {
+        Some(spans) if !line.redacted => {
+            for span in spans {
+                let style = rich_style(body_style, span.marks, line.highlight);
+                if span.marks.spoiler && !line.reveal {
+                    let hidden: String = span.text.chars().map(|c| if c.is_whitespace() { c } else { '░' }).collect();
+                    push(&mut cells, &hidden, style);
+                } else {
+                    push(&mut cells, &span.text, style);
+                }
+            }
+        }
+        _ => {
+            let mut at = 0;
+            for range in links::url_ranges(&line.body) {
+                push(&mut cells, &line.body[at..range.start], body_style);
+                push(&mut cells, &line.body[range.clone()], body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED));
+                at = range.end;
+            }
+            push(&mut cells, &line.body[at..], body_style);
+        }
     }
-    push(&mut cells, &line.body[at..], body_style);
     if line.edited && !line.redacted {
         push(&mut cells, " (edited)", DIM);
     }
@@ -399,6 +415,36 @@ fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -
     }
 
     wrap(&cells, width, indent)
+}
+
+fn rich_style(base: Style, marks: Marks, highlight: bool) -> Style {
+    let mut style = base;
+    for (on, modifier) in [
+        (marks.bold, Modifier::BOLD),
+        (marks.italic, Modifier::ITALIC),
+        (marks.strike, Modifier::CROSSED_OUT),
+        (marks.underline, Modifier::UNDERLINED),
+    ] {
+        if on {
+            style = style.add_modifier(modifier);
+        }
+    }
+    if let Some((r, g, b)) = marks.color {
+        style = style.fg(Color::Rgb(r, g, b));
+    }
+    if marks.code {
+        style = style.fg(Color::LightYellow);
+    }
+    if marks.link {
+        style = style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED);
+    }
+    if marks.mention && !highlight {
+        style = style.fg(Color::LightBlue).add_modifier(Modifier::BOLD);
+    }
+    if marks.dim || marks.spoiler {
+        style = style.fg(Color::DarkGray);
+    }
+    style
 }
 
 /// Drop characters that could corrupt the terminal or the layout.
@@ -553,7 +599,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  s save  o open  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";

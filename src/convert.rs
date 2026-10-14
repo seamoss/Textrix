@@ -13,7 +13,7 @@ use matrix_sdk::{
             SyncStateEvent,
             room::{
                 member::MembershipChange,
-                message::{MessageType, Relation},
+                message::{MessageFormat, MessageType, Relation},
                 redaction::SyncRoomRedactionEvent,
             },
         },
@@ -21,7 +21,10 @@ use matrix_sdk::{
 };
 use serde::Deserialize;
 
-use crate::model::{Item, Line, LineKind, Media};
+use crate::{
+    model::{Item, Line, LineKind, Media},
+    richtext,
+};
 
 pub struct Converter<'a> {
     room: &'a Room,
@@ -157,6 +160,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
                     let (kind, body) = render_msgtype(&replacement.new_content.msgtype);
                     line.kind = kind;
                     line.body = body.clone();
+                    line.rich = rich_of(&replacement.new_content.msgtype);
                     line.edited = true;
                     return Some(Item::Edit { target: replacement.event_id, body, fallback: line });
                 }
@@ -176,6 +180,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
             line.kind = kind;
             line.body = if line.reply_to.is_some() { strip_reply_fallback(&body).to_owned() } else { body };
             line.media = media_of(&content.msgtype);
+            line.rich = rich_of(&content.msgtype);
             Some(Item::Line(line))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(_)) => {
@@ -202,6 +207,17 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
         }
         _ => None,
     }
+}
+
+/// Styled spans for messages that carry HTML formatting.
+pub fn rich_of(msgtype: &MessageType) -> Option<Vec<richtext::Span>> {
+    let formatted = match msgtype {
+        MessageType::Text(c) => c.formatted.as_ref(),
+        MessageType::Emote(c) => c.formatted.as_ref(),
+        MessageType::Notice(c) => c.formatted.as_ref(),
+        _ => None,
+    }?;
+    (formatted.format == MessageFormat::Html).then(|| richtext::render(&formatted.body)).flatten()
 }
 
 fn render_msgtype(msgtype: &MessageType) -> (LineKind, String) {

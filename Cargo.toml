@@ -19,6 +19,7 @@ matrix-sdk = { version = "0.19.1", features = ["bundled-sqlite", "markdown"] }
 mime = "0.3"
 mime_guess = "2"
 ratatui = "0.30"
+ruma-html = { version = "0.9", features = ["matrix"] }
 # Pure Rust: the default `chafa-dyn` feature would link the C libchafa.
 ratatui-image = { version = "12.0.0-rc.2", default-features = false, features = ["crossterm", "image-defaults"] }
 secrecy = "0.10"
