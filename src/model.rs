@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 use matrix_sdk::ruma::{
-    EventId, OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId, events::room::MediaSource,
+    EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedTransactionId, OwnedUserId, events::room::MediaSource,
 };
 
 /// The dotfile name of a server, e.g. `"0x4f02"`.
@@ -208,6 +208,8 @@ pub struct RoomMeta {
     pub dm_user: Option<OwnedUserId>,
     /// Spaces group rooms; they don't get a chat window.
     pub is_space: bool,
+    /// The room's avatar, or the other person's for a DM without one.
+    pub avatar: Option<OwnedMxcUri>,
     /// Where you stopped reading (`m.fully_read`), shared with other clients.
     pub fully_read: Option<OwnedEventId>,
     pub unread: u64,

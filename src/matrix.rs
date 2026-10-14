@@ -24,7 +24,8 @@ use matrix_sdk::{
     },
     room::{IncludeRelations, MessagesOptions, Receipts, RelationsOptions},
     ruma::{
-        OwnedEventId, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId, UInt,
+        OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId,
+        UInt,
         api::Direction,
         directory::Filter as DirectoryFilter,
         events::relation::RelationType,
@@ -111,6 +112,8 @@ pub enum AppEvent {
     Threads { account: AccountName, room_id: OwnedRoomId, roots: Vec<Line> },
     /// Matches from `/search -deep` in one room, newest first.
     SearchResults { account: AccountName, room_id: OwnedRoomId, hits: Vec<Line> },
+    /// A window-list avatar, encoded for the terminal (`None` on failure).
+    Avatar { account: AccountName, room_id: OwnedRoomId, url: OwnedMxcUri, protocol: Option<Protocol> },
     /// An inline image preview, encoded for the terminal (`None` on failure).
     ImagePreview { event_id: OwnedEventId, protocol: Option<Protocol> },
     Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
@@ -315,6 +318,7 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         is_dm: room.is_direct().await.unwrap_or(false),
         dm_user: dm_user(room),
         is_space: room.is_space(),
+        avatar: avatar_of(room).await,
         fully_read,
         unread: counts.notification_count,
         highlights: counts.highlight_count,
@@ -340,6 +344,16 @@ async fn joined_spaces(client: &Client) -> Vec<SpaceInfo> {
         spaces.push(SpaceInfo { room_id: room.room_id().to_owned(), name, children });
     }
     spaces
+}
+
+/// The room's avatar, falling back to the other person's for a DM.
+async fn avatar_of(room: &Room) -> Option<OwnedMxcUri> {
+    if let Some(url) = room.avatar_url() {
+        return Some(url);
+    }
+    let user = dm_user(room)?;
+    let member = room.get_member_no_sync(&user).await.ok()??;
+    member.avatar_url().map(ToOwned::to_owned)
 }
 
 fn dm_user(room: &Room) -> Option<OwnedUserId> {
@@ -764,6 +778,7 @@ impl Account {
             is_dm: room.direct_targets_length() > 0,
             dm_user: dm_user(&room),
             is_space: room.is_space(),
+            avatar: room.avatar_url(),
             fully_read: None,
             unread: counts.notification_count,
             highlights: counts.highlight_count,
@@ -938,18 +953,25 @@ impl Account {
             }
             (None, _) => full.await?,
         };
-        // Decoding untrusted images: cap dimensions and memory, off the UI thread.
-        tokio::task::spawn_blocking(move || -> Result<Protocol> {
-            let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
-            let mut limits = image::Limits::default();
-            limits.max_image_width = Some(12_000);
-            limits.max_image_height = Some(12_000);
-            limits.max_alloc = Some(256 * 1024 * 1024);
-            reader.limits(limits);
-            let decoded = reader.decode()?;
-            picker.new_protocol(decoded, cells, Resize::Fit(None)).map_err(|e| anyhow::anyhow!("{e}"))
-        })
-        .await?
+        encode_image(bytes, picker, cells).await
+    }
+
+    /// A small avatar for the window list, from a server thumbnail.
+    pub fn fetch_avatar(&self, room_id: OwnedRoomId, url: OwnedMxcUri, picker: Picker, cells: Size) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let settings = MediaThumbnailSettings::new(UInt::from(64u32), UInt::from(64u32));
+            let request =
+                MediaRequestParameters { source: MediaSource::Plain(url.clone()), format: MediaFormat::Thumbnail(settings) };
+            let protocol = match acct.client.media().get_media_content(&request, true).await {
+                Ok(bytes) => encode_image(bytes, picker, cells).await.ok(),
+                Err(e) => {
+                    tracing::debug!("no avatar for {room_id}: {e}");
+                    None
+                }
+            };
+            acct.notify.send(AppEvent::Avatar { account: acct.name.clone(), room_id, url, protocol });
+        });
     }
 
     /// Save an attachment into the Downloads folder.
@@ -1760,6 +1782,22 @@ impl Account {
             Ok(())
         });
     }
+}
+
+/// Decode an untrusted image (capped in size and memory, off the UI
+/// thread) and encode it for the terminal to fit `cells`.
+async fn encode_image(bytes: Vec<u8>, picker: Picker, cells: Size) -> Result<Protocol> {
+    tokio::task::spawn_blocking(move || -> Result<Protocol> {
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(12_000);
+        limits.max_image_height = Some(12_000);
+        limits.max_alloc = Some(256 * 1024 * 1024);
+        reader.limits(limits);
+        let decoded = reader.decode()?;
+        picker.new_protocol(decoded, cells, Resize::Fit(None)).map_err(|e| anyhow::anyhow!("{e}"))
+    })
+    .await?
 }
 
 /// A sender-chosen file name reduced to a plain name: no directories, no

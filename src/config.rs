@@ -115,6 +115,8 @@ pub struct Config {
     pub sidebar: bool,
     /// Member list on the right of group rooms (F3 or /nicklist toggles it).
     pub nicklist: bool,
+    /// Room avatars in the window list (initials where images can't show).
+    pub sidebar_avatars: bool,
 }
 
 impl Default for Config {
@@ -138,6 +140,7 @@ impl Default for Config {
             image_rows: 10,
             sidebar: true,
             nicklist: true,
+            sidebar_avatars: true,
         }
     }
 }

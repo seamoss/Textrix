@@ -12,7 +12,7 @@ use chrono::Local;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
-    EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
+    EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
     events::{
         relation::Thread,
         room::message::{
@@ -21,7 +21,10 @@ use matrix_sdk::ruma::{
     },
 };
 use ratatui::{DefaultTerminal, layout::Size};
-use ratatui_image::{picker::Picker, protocol::Protocol};
+use ratatui_image::{
+    picker::{Picker, ProtocolType},
+    protocol::Protocol,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -85,6 +88,7 @@ pub struct Window {
     pub encrypted: bool,
     pub is_dm: bool,
     pub dm_user: Option<OwnedUserId>,
+    pub avatar: Option<OwnedMxcUri>,
     pub lines: VecDeque<Line>,
     pub activity: Activity,
     /// Rows scrolled up from the bottom.
@@ -133,6 +137,7 @@ impl Window {
             encrypted: false,
             is_dm: false,
             dm_user: None,
+            avatar: None,
             lines: VecDeque::new(),
             activity: Activity::None,
             scroll: 0,
@@ -161,6 +166,7 @@ impl Window {
         self.encrypted = meta.encrypted;
         self.is_dm = meta.is_dm;
         self.dm_user = meta.dm_user.clone();
+        self.avatar = meta.avatar.clone();
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -548,6 +554,8 @@ pub struct App {
     pub spaces: HashMap<AccountName, Vec<SpaceInfo>>,
     /// Chat logging, when enabled.
     log: Option<ChatLog>,
+    /// Window-list avatars by (server, room), with the URL they came from.
+    pub avatars: HashMap<(String, OwnedRoomId), (OwnedMxcUri, Preview)>,
     /// Results of the last `/threads`, for `/thread N`.
     thread_hits: Vec<(WinKey, OwnedEventId)>,
     /// Results of the last `/search`, for `/jump N`.
@@ -728,6 +736,7 @@ impl App {
             presence: HashMap::new(),
             spaces: HashMap::new(),
             log: None,
+            avatars: HashMap::new(),
             thread_hits: Vec::new(),
             search_hits: Vec::new(),
             search_out: None,
@@ -1084,6 +1093,10 @@ impl App {
             }
             AppEvent::Presence { account, updates } => {
                 self.presence.entry(account).or_default().extend(updates);
+            }
+            AppEvent::Avatar { account, room_id, url, protocol } => {
+                let preview = protocol.map_or(Preview::Failed, Preview::Ready);
+                self.avatars.insert((account.to_string(), room_id), (url, preview));
             }
             AppEvent::ImagePreview { event_id, protocol } => {
                 let preview = protocol.map_or(Preview::Failed, Preview::Ready);
@@ -1450,9 +1463,37 @@ impl App {
 
     // ---- per-frame upkeep ------------------------------------------------
 
+    /// Whether window-list avatars can be real images (a 2-cell picture in
+    /// half-blocks would be noise, so those terminals get initials).
+    pub fn avatar_images(&self) -> bool {
+        self.cfg.sidebar_avatars && self.picker.as_ref().is_some_and(|p| p.protocol_type() != ProtocolType::Halfblocks)
+    }
+
+    /// Fetch avatars for rooms in the window list that don't have one yet
+    /// (or whose avatar changed).
+    fn request_avatars(&mut self) {
+        let Some(picker) = self.picker.clone().filter(|_| self.show_sidebar && self.avatar_images()) else { return };
+        let wanted: Vec<(String, OwnedRoomId, OwnedMxcUri)> = self
+            .windows
+            .iter()
+            .filter_map(|w| {
+                let key = w.room.as_ref().filter(|k| k.thread.is_none())?;
+                let url = w.avatar.clone()?;
+                let current = self.avatars.get(&(key.account.clone(), key.room_id.clone()));
+                (current.is_none_or(|(have, _)| *have != url)).then(|| (key.account.clone(), key.room_id.clone(), url))
+            })
+            .collect();
+        for (account, room_id, url) in wanted {
+            let Some(acct) = self.connected(&account) else { continue };
+            self.avatars.insert((account, room_id.clone()), (url.clone(), Preview::Loading));
+            acct.fetch_avatar(room_id, url, picker.clone(), Size::new(2, 1));
+        }
+    }
+
     /// Called after every draw: lazy history, member lists, read markers,
-    /// image previews.
+    /// image previews, avatars.
     pub fn after_draw(&mut self) {
+        self.request_avatars();
         if !self.preview_requests.is_empty()
             && let (Some(picker), Ok((acct, _))) = (self.picker.clone(), self.room_ctx())
         {

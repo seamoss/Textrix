@@ -80,7 +80,8 @@ fn activity_style(level: Activity) -> Style {
 
 fn sidebar_width(app: &App) -> u16 {
     let longest = app.windows.iter().map(|w| w.name.chars().count()).max().unwrap_or(6);
-    (longest.clamp(8, 22) + 9) as u16
+    let avatar = if app.cfg.sidebar_avatars { 3 } else { 0 };
+    (longest.clamp(8, 22) + 9 + avatar) as u16
 }
 
 /// irssi adv_windowlist-style: window number, name and unread count,
@@ -138,14 +139,15 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
 /// coloured by activity, grouped by server and space.
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let inner = area.width.saturating_sub(1) as usize;
-    let rows: Vec<(TLine<'static>, bool)> = sidebar_entries(app)
-        .into_iter()
+    let entries = sidebar_entries(app);
+    let rows: Vec<(TLine<'static>, bool)> = entries
+        .iter()
         .map(|entry| match entry {
             SidebarEntry::Header(text) => {
                 let text: String = text.chars().take(inner).collect();
                 (TLine::from(Span::styled(format!(" {text}"), DIM.add_modifier(Modifier::BOLD))), false)
             }
-            SidebarEntry::Window(i) => (window_row(app, i, inner), i == app.active),
+            SidebarEntry::Window(i) => (window_row(app, *i, inner), *i == app.active),
         })
         .collect();
     // Keep the active window in view.
@@ -155,6 +157,37 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let shown: Vec<TLine> = rows.into_iter().skip(start).take(height).map(|(r, _)| r).collect();
     let block = Block::new().borders(Borders::RIGHT).border_style(DIM);
     f.render_widget(Paragraph::new(shown).block(block), area);
+
+    // Avatar images go into the gap left for them after the window number.
+    for (row, entry) in entries.iter().skip(start).take(height).enumerate() {
+        let SidebarEntry::Window(i) = entry else { continue };
+        if let Some(Preview::Ready(protocol)) = avatar_of(app, *i) {
+            let rect = Rect { x: area.x + 3, y: area.y + row as u16, width: 2, height: 1 };
+            f.render_widget(Image::new(protocol), rect);
+        }
+    }
+}
+
+fn avatar_of(app: &App, i: usize) -> Option<&Preview> {
+    let key = app.windows[i].room.as_ref().filter(|k| k.thread.is_none())?;
+    app.avatars.get(&(key.account.clone(), key.room_id.clone())).map(|(_, preview)| preview)
+}
+
+/// The 3-column avatar slot: blank for a drawn image, otherwise a coloured
+/// initial tile.
+fn avatar_slot(app: &App, i: usize) -> Vec<Span<'static>> {
+    let w = &app.windows[i];
+    if matches!(avatar_of(app, i), Some(Preview::Ready(_))) && app.avatar_images() {
+        return vec![Span::raw("   ")];
+    }
+    let Some(key) = &w.room else { return vec![Span::raw("   ")] };
+    let initial = if key.thread.is_some() {
+        '⤷'
+    } else {
+        w.name.chars().find(|c| c.is_alphanumeric()).map_or('#', |c| c.to_uppercase().next().unwrap_or(c))
+    };
+    let tile = Style::new().fg(Color::Black).bg(nick_color(key.room_id.as_str())).add_modifier(Modifier::BOLD);
+    vec![Span::styled(format!("{initial} "), tile), Span::raw(" ")]
 }
 
 fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
@@ -166,17 +199,20 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
         _ => String::new(),
     };
     let number = format!("{:>2} ", i + 1);
+    let avatar = if app.cfg.sidebar_avatars { avatar_slot(app, i) } else { Vec::new() };
     let dot = w.dm_presence(app).map(|p| presence_dot(p.kind));
-    let dot_w = if dot.is_some() { 2 } else { 0 };
-    let room_w = inner.saturating_sub(number.len() + dot_w + display_len(&unread) + 1);
+    // Columns before the name: avatar slot and presence dot.
+    let lead_w = if avatar.is_empty() { 0 } else { 3 } + if dot.is_some() { 2 } else { 0 };
+    let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + 1);
     let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
-    let pad = inner.saturating_sub(number.len() + dot_w + display_len(&name) + display_len(&unread));
+    let pad = inner.saturating_sub(number.len() + lead_w + display_len(&name) + display_len(&unread));
     let style = if active {
         Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
     } else {
         activity_style(w.activity)
     };
     let mut parts = vec![Span::styled(number, if active { style } else { DIM })];
+    parts.extend(avatar);
     if let Some((symbol, color)) = dot {
         parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
     }

@@ -118,6 +118,10 @@ Sliding sync has no presence, so presence dots there only update via
 
 ### Images
 
+The window list shows each room's avatar (a DM falls back to the other
+person's) as a tiny image in terminals with graphics, and a coloured initial
+tile elsewhere.
+
 Images show inline under their message. Textrix asks the terminal what it
 supports at startup: kitty graphics (kitty, Ghostty, WezTerm), iTerm2 inline
 images, or sixel, falling back to coloured half-block characters elsewhere
@@ -165,6 +169,7 @@ sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
 sidebar = true             # window list (F2)
+sidebar_avatars = true     # room avatars there (coloured initials without graphics)
 nicklist = true            # member list (F3)
 scrollback = 5000
 history_page = 50
