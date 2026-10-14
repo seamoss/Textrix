@@ -42,6 +42,10 @@ pub struct Line {
     pub edited: bool,
     pub redacted: bool,
     pub thread: bool,
+    /// The root of the thread this message is in.
+    pub thread_root: Option<OwnedEventId>,
+    /// Replies in the thread this message starts (from the server's summary).
+    pub thread_count: Option<u64>,
     pub reply_to: Option<OwnedEventId>,
     /// Filled in by the window when the replied-to line is known.
     pub reply_nick: Option<String>,
@@ -76,6 +80,8 @@ impl Line {
             edited: false,
             redacted: false,
             thread: false,
+            thread_root: None,
+            thread_count: None,
             reply_to: None,
             reply_nick: None,
             reply_snippet: None,

@@ -256,6 +256,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width as usize;
     let height = area.height as usize;
     let selected = app.focus_event();
+    let thread_window = app.windows[app.active].thread_root().map(ToOwned::to_owned);
     let images = app.picker.is_some();
     let (previews, requests) = (&mut app.previews, &mut app.preview_requests);
     let cfg = &app.cfg;
@@ -311,7 +312,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App) {
             }
         }
         let below = rows.len();
-        let mut rendered = render_line_with(line, width, cfg, &read);
+        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref());
         if is_selected {
             for row in &mut rendered {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
@@ -392,11 +393,18 @@ fn day_changed(ts: DateTime<Local>) -> TLine<'static> {
 /// Format one scrollback line and wrap it to `width`, indenting
 /// continuation rows under the message text.
 pub fn render_line(line: &Line, width: usize, cfg: &Config) -> Vec<TLine<'static>> {
-    render_line_with(line, width, cfg, &[])
+    render_line_with(line, width, cfg, &[], None)
 }
 
-/// `render_line`, plus the nicks whose read receipt sits on this line.
-fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -> Vec<TLine<'static>> {
+/// `render_line`, plus the nicks whose read receipt sits on this line, and
+/// the thread being shown when this is a thread window.
+fn render_line_with(
+    line: &Line,
+    width: usize,
+    cfg: &Config,
+    read_by: &[&str],
+    thread_window: Option<&EventId>,
+) -> Vec<TLine<'static>> {
     let mut cells: Vec<(char, Style)> = Vec::new();
     let push = |cells: &mut Vec<(char, Style)>, s: &str, style: Style| {
         cells.extend(s.chars().filter_map(|c| sanitize(c).map(|c| (c, style))));
@@ -441,8 +449,16 @@ fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -
         LineKind::Error => push(&mut cells, "-!- ", Style::new().fg(Color::Red).add_modifier(Modifier::BOLD)),
         LineKind::Membership | LineKind::Event | LineKind::Info => push(&mut cells, "-!- ", MARKER),
     }
-    if line.reply_to.is_some() || line.thread {
-        let mark = if line.thread { '⤷' } else { '↪' };
+    // Inside its own thread window a thread message needs no "in thread"
+    // context; only explicit replies to a later message say what they answer.
+    let in_this_thread = thread_window.is_some() && line.thread_root.as_deref() == thread_window;
+    let context = if in_this_thread {
+        line.reply_to.is_some() && line.reply_to != line.thread_root
+    } else {
+        line.reply_to.is_some() || line.thread
+    };
+    if context {
+        let mark = if line.thread && !in_this_thread { '⤷' } else { '↪' };
         let to = match (&line.reply_nick, &line.reply_snippet) {
             (Some(nick), Some(text)) => format!("{mark} {nick} “{text}” "),
             (Some(nick), None) => format!("{mark} {nick}: "),
@@ -478,6 +494,10 @@ fn render_line_with(line: &Line, width: usize, cfg: &Config, read_by: &[&str]) -
     }
     if line.edited && !line.redacted {
         push(&mut cells, " (edited)", DIM);
+    }
+    if let Some(count) = line.thread_count {
+        let text = if count == 1 { " [1 reply]".to_owned() } else { format!(" [{count} replies]") };
+        push(&mut cells, &text, Style::new().fg(Color::Cyan));
     }
     if let Some(percent) = line.progress {
         push(&mut cells, &format!(" ({percent}%)"), DIM);
@@ -678,7 +698,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  t thread  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";

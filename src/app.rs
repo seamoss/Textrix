@@ -13,7 +13,12 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
-    events::room::message::{AddMentions, ForwardThread, ReplacementMetadata, ReplyMetadata, RoomMessageEventContent},
+    events::{
+        relation::Thread,
+        room::message::{
+            AddMentions, ForwardThread, ReplacementMetadata, ReplyMetadata, ReplyWithinThread, RoomMessageEventContent,
+        },
+    },
 };
 use ratatui::{DefaultTerminal, layout::Size};
 use ratatui_image::{picker::Picker, protocol::Protocol};
@@ -37,6 +42,9 @@ use crate::{
 pub struct WinKey {
     pub account: String,
     pub room_id: OwnedRoomId,
+    /// Set for a thread window: the thread's root event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<OwnedEventId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +178,11 @@ impl Window {
         self.room.as_ref().map(|k| k.account.as_str())
     }
 
+    /// The root event, if this is a thread window.
+    pub fn thread_root(&self) -> Option<&EventId> {
+        self.room.as_ref()?.thread.as_deref()
+    }
+
     /// The DM partner's presence, if known.
     pub fn dm_presence<'a>(&self, app: &'a App) -> Option<&'a Presence> {
         let user = self.dm_user.as_ref()?;
@@ -256,6 +269,15 @@ impl Window {
                 self.orphan(target, other);
                 None
             }
+        }
+    }
+
+    /// Apply an edit/reaction/redaction only if its target is here.
+    fn annotate_existing(&mut self, item: &Item) {
+        if let Some(target) = item.target().map(ToOwned::to_owned)
+            && let Some(line) = self.find_mut(&target)
+        {
+            annotate(line, item);
         }
     }
 
@@ -398,6 +420,11 @@ fn search_row(n: usize, room: &str, line: &Line) -> String {
     format!("{n:>2}: {room}  {when} <{}> {}", line.nick, snippet(&line.text()))
 }
 
+fn thread_name(root_text: &str) -> String {
+    let short: String = root_text.lines().next().unwrap_or("").chars().take(20).collect();
+    if short.is_empty() { "⤷ thread".into() } else { format!("⤷ {short}") }
+}
+
 /// The first line of a message, shortened for reply context.
 fn snippet(body: &str) -> String {
     let first = body.lines().next().unwrap_or("");
@@ -518,6 +545,8 @@ pub struct App {
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
     /// Joined spaces per server, for grouping the window list.
     pub spaces: HashMap<AccountName, Vec<SpaceInfo>>,
+    /// Results of the last `/threads`, for `/thread N`.
+    thread_hits: Vec<(WinKey, OwnedEventId)>,
     /// Results of the last `/search`, for `/jump N`.
     search_hits: Vec<(WinKey, OwnedEventId)>,
     /// Where `/search` printed its results, and how many deep searches are
@@ -553,6 +582,12 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "invites", args: "", help: "List pending invitations" },
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
     Cmd { name: "part", args: "", help: "Leave the current room (alias /leave)" },
+    Cmd { name: "threads", args: "", help: "List this room's threads" },
+    Cmd {
+        name: "thread",
+        args: "[N]",
+        help: "Open thread N from /threads, or the latest thread here (t in selection mode)",
+    },
     Cmd { name: "forget", args: "", help: "Leave this room and remove it from your room list" },
     Cmd { name: "query", args: "<@user:server>", help: "Open a direct-message window" },
     Cmd { name: "msg", args: "<@user|#alias|!room> <text>", help: "Send without switching windows" },
@@ -683,6 +718,7 @@ impl App {
             preview_requests: Vec::new(),
             presence: HashMap::new(),
             spaces: HashMap::new(),
+            thread_hits: Vec::new(),
             search_hits: Vec::new(),
             search_out: None,
             search_pending: 0,
@@ -793,10 +829,26 @@ impl App {
         self.accounts.get(name)?.account.clone()
     }
 
+    /// The room's own window (not its thread windows).
     fn window_idx(&self, account: &str, room_id: &OwnedRoomId) -> Option<usize> {
-        self.windows
-            .iter()
-            .position(|w| w.room.as_ref().is_some_and(|k| k.account == account && k.room_id == *room_id))
+        self.windows.iter().position(|w| {
+            w.room.as_ref().is_some_and(|k| k.account == account && k.room_id == *room_id && k.thread.is_none())
+        })
+    }
+
+    fn thread_idx(&self, account: &str, room_id: &OwnedRoomId, root: &EventId) -> Option<usize> {
+        self.windows.iter().position(|w| {
+            w.room.as_ref().is_some_and(|k| {
+                k.account == account && k.room_id == *room_id && k.thread.as_deref() == Some(root)
+            })
+        })
+    }
+
+    /// The room's window and any of its thread windows.
+    fn room_windows(&self, account: &str, room_id: &OwnedRoomId) -> Vec<usize> {
+        (0..self.windows.len())
+            .filter(|&i| self.windows[i].room.as_ref().is_some_and(|k| k.account == account && k.room_id == *room_id))
+            .collect()
     }
 
     /// The account and room of the active window.
@@ -908,7 +960,7 @@ impl App {
                 }
             }
             AppEvent::RoomGone { account, room_id } => {
-                let key = WinKey { account: account.to_string(), room_id: room_id.clone() };
+                let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
                 self.layout.closed.retain(|k| *k != key);
                 if let Some(idx) = self.window_idx(&account, &room_id) {
                     let name = self.windows[idx].name.clone();
@@ -955,7 +1007,7 @@ impl App {
             }
             AppEvent::SearchResults { account, room_id, hits } => {
                 self.search_pending = self.search_pending.saturating_sub(1);
-                let key = WinKey { account: account.to_string(), room_id: room_id.clone() };
+                let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
                 let room = self
                     .window_idx(&account, &room_id)
                     .map(|i| self.windows[i].name.clone())
@@ -976,6 +1028,43 @@ impl App {
                 let out = self.search_out.clone().and_then(|k| self.window_idx(&k.account, &k.room_id)).unwrap_or(0);
                 for line in rows.into_iter().chain(done) {
                     self.windows[out].push(line, cap);
+                }
+            }
+            AppEvent::Thread { account, room_id, root, items } => {
+                let Some(idx) = self.thread_idx(&account, &room_id, &root) else { return };
+                let w = &mut self.windows[idx];
+                w.merge_history(items);
+                // Root first, then replies in order (pages can arrive out of order).
+                w.lines.make_contiguous().sort_by_key(|l| (l.event_id.as_ref() != Some(&root), l.ts));
+                w.history = History::Done;
+                if let Some(first) = w.lines.iter().find(|l| l.event_id.as_ref() == Some(&root)) {
+                    let text = first.text();
+                    w.name = thread_name(&text);
+                    w.topic = Some(format!("Thread: <{}> {}", first.nick, text.lines().next().unwrap_or("")));
+                }
+            }
+            AppEvent::Threads { account, room_id, roots } => {
+                let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
+                self.thread_hits.clear();
+                let mut rows = Vec::new();
+                for (n, root) in roots.iter().enumerate() {
+                    let Some(event) = root.event_id.clone() else { continue };
+                    self.thread_hits.push((key.clone(), event));
+                    let replies = match root.thread_count {
+                        Some(1) => " [1 reply]".to_owned(),
+                        Some(c) => format!(" [{c} replies]"),
+                        None => String::new(),
+                    };
+                    rows.push(Line::info(format!("{:>2}: <{}> {}{replies}", n + 1, root.nick, snippet(&root.text()))));
+                }
+                let out = self.window_idx(&account, &room_id).unwrap_or(0);
+                if rows.is_empty() {
+                    rows.push(Line::info("no threads in this room"));
+                } else {
+                    rows.push(Line::info("/thread N opens one"));
+                }
+                for row in rows {
+                    self.windows[out].push(row, cap);
                 }
             }
             AppEvent::Spaces { account, mut spaces } => {
@@ -1047,8 +1136,12 @@ impl App {
                 w.push(Line::error(format!("not sent: {error}")), cap);
             }
             AppEvent::KeysReceived { account, room_id, sessions } => {
-                let Some(idx) = self.window_idx(&account, &room_id) else { return };
-                let events = self.windows[idx].utd_events(Some(&sessions));
+                let mut events: Vec<OwnedEventId> = self
+                    .room_windows(&account, &room_id)
+                    .into_iter()
+                    .flat_map(|i| self.windows[i].utd_events(Some(&sessions)))
+                    .collect();
+                events.dedup();
                 if let (false, Some(acct)) = (events.is_empty(), self.connected(&account)) {
                     acct.redecrypt(room_id, events);
                 }
@@ -1065,20 +1158,19 @@ impl App {
                 }
             }
             AppEvent::Redecrypted { account, room_id, item } => {
-                let Some(idx) = self.window_idx(&account, &room_id) else { return };
-                let w = &mut self.windows[idx];
-                match item {
-                    Item::Line(line) if line.kind != LineKind::Utd => {
-                        let Some(id) = line.event_id.clone() else { return };
-                        if let Some(existing) = w.find_mut(&id) {
-                            let reactions = std::mem::take(&mut existing.reactions);
-                            *existing = line;
-                            existing.reactions = reactions;
+                for idx in self.room_windows(&account, &room_id) {
+                    let w = &mut self.windows[idx];
+                    match &item {
+                        Item::Line(line) if line.kind != LineKind::Utd => {
+                            let Some(id) = line.event_id.clone() else { continue };
+                            if let Some(existing) = w.find_mut(&id) {
+                                let reactions = std::mem::take(&mut existing.reactions);
+                                *existing = line.clone();
+                                existing.reactions = reactions;
+                            }
                         }
-                    }
-                    Item::Line(_) => {}
-                    other => {
-                        w.apply(other, cap, false);
+                        Item::Line(_) => {}
+                        other => w.annotate_existing(other),
                     }
                 }
             }
@@ -1151,8 +1243,36 @@ impl App {
         let viewing = idx == self.active;
         let mut ring = false;
         let mut mirrored = Vec::new();
+
+        // Open thread windows of this room get their thread's messages too.
+        let threads: Vec<(usize, OwnedEventId)> = self
+            .room_windows(account, room_id)
+            .into_iter()
+            .filter_map(|i| Some((i, self.windows[i].thread_root()?.to_owned())))
+            .collect();
+        for (tidx, root) in &threads {
+            for item in &items {
+                match item {
+                    Item::Line(line) if line.thread_root.as_ref() == Some(root) || line.event_id.as_ref() == Some(root) => {
+                        let added = self.windows[*tidx].push(line.clone(), cap);
+                        if added && live && !line.own && *tidx != self.active {
+                            let level = if line.highlight { Activity::Highlight } else { Activity::Message };
+                            self.windows[*tidx].activity = self.windows[*tidx].activity.max(level);
+                        }
+                    }
+                    Item::Line(_) => {}
+                    other => self.windows[*tidx].annotate_existing(other),
+                }
+            }
+        }
+
         for item in items {
             let Some(line) = self.windows[idx].apply(item, cap, live) else { continue };
+            if live && let Some(root) = &line.thread_root
+                && let Some(root_line) = self.windows[idx].find_mut(root)
+            {
+                root_line.thread_count = Some(root_line.thread_count.unwrap_or(0) + 1);
+            }
             let w = &mut self.windows[idx];
             if w.scroll > 0 {
                 w.scroll += ui::line_height(&line, width, &self.cfg);
@@ -1217,7 +1337,7 @@ impl App {
         let idx = match self.window_idx(account, &meta.room_id) {
             Some(idx) => idx,
             None => {
-                let key = WinKey { account: account.to_owned(), room_id: meta.room_id.clone() };
+                let key = WinKey { account: account.to_owned(), room_id: meta.room_id.clone(), thread: None };
                 if self.layout.closed.contains(&key) {
                     return;
                 }
@@ -1234,7 +1354,7 @@ impl App {
     /// Bring back a closed room window, e.g. when someone talks in it.
     fn reopen(&mut self, account: &str, room_id: &OwnedRoomId) -> Option<usize> {
         let meta = self.connected(account)?.quick_meta(room_id)?;
-        let key = WinKey { account: account.to_owned(), room_id: room_id.clone() };
+        let key = WinKey { account: account.to_owned(), room_id: room_id.clone(), thread: None };
         self.layout.closed.retain(|k| *k != key);
         let idx = self.insert_window(Window::room(key, &meta));
         self.windows[idx].unread = (0, 0);
@@ -1271,7 +1391,9 @@ impl App {
     }
 
     fn save_layout(&self) {
-        let mut windows: Vec<WinKey> = self.windows.iter().filter_map(|w| w.room.clone()).collect();
+        // Thread windows are opened on demand and not restored.
+        let mut windows: Vec<WinKey> =
+            self.windows.iter().filter_map(|w| w.room.clone()).filter(|k| k.thread.is_none()).collect();
         // Keep saved positions for servers that are not connected right now.
         for key in &self.layout.windows {
             if !windows.contains(key) && self.connected(&key.account).is_none() {
@@ -1355,6 +1477,7 @@ impl App {
         }
 
         if w.scroll == 0
+            && w.thread_root().is_none()
             && let Some(event_id) = w.latest_event()
             && w.last_receipt.as_ref() != Some(&event_id)
         {
@@ -1672,6 +1795,13 @@ impl App {
                 (None, _) => self.error("that message has no attachment"),
                 (_, Err(e)) => self.error(e),
             },
+            Char('t') => {
+                self.select = None;
+                let root = line.thread_root.clone().unwrap_or(event);
+                if let Err(e) = self.open_thread(root) {
+                    self.error(e);
+                }
+            }
             Char('v') => {
                 if let Some(target) = self.win_mut().find_mut(&event) {
                     target.reveal = !target.reveal;
@@ -2060,7 +2190,12 @@ impl App {
                 acct.decline(self.here(), room_id);
                 Ok(())
             }),
+            "part" if self.win().thread_root().is_some() => {
+                Err("this is a thread window: /wc closes it (/part in the room's own window leaves the room)".into())
+            }
             "part" => self.room_ctx().map(|(acct, room_id)| acct.leave(room_id)),
+            "thread" => self.cmd_thread(args),
+            "threads" => self.room_ctx().map(|(acct, room_id)| acct.list_threads(room_id)),
             "forget" => self.room_ctx().map(|(acct, room_id)| acct.forget(room_id)),
             "query" => self.pick_account(args).and_then(|(acct, who)| {
                 let user = self.resolve_user(who.trim())?;
@@ -2132,8 +2267,34 @@ impl App {
             Ok(ctx) => ctx,
             Err(e) => return self.error(e),
         };
-        let content = compose(text, kind, &self.mentions, self.cfg.markdown);
+        let content = self.as_thread_message(compose(text, kind, &self.mentions, self.cfg.markdown));
         self.send_content(acct, room_id, content, text, kind.line_kind(), None);
+    }
+
+    /// In a thread window: (root, latest event, its sender), for sending
+    /// into the thread.
+    fn thread_context(&self) -> Option<(OwnedEventId, OwnedEventId, OwnedUserId)> {
+        let w = self.win();
+        let root = w.thread_root()?.to_owned();
+        let latest = w.lines.iter().rev().find(|l| l.event_id.is_some() && !l.pending && l.is_message());
+        let fallback_sender = || self.connected(w.account()?).map(|a| a.user_id);
+        let (event, sender) = match latest {
+            Some(l) => (l.event_id.clone()?, l.sender.clone().or_else(fallback_sender)?),
+            None => (root.clone(), fallback_sender()?),
+        };
+        Some((root, event, sender))
+    }
+
+    /// Wrap content as a thread message when sending from a thread window.
+    fn as_thread_message(&self, content: RoomMessageEventContent) -> RoomMessageEventContent {
+        let Some((root, latest, sender)) = self.thread_context() else { return content };
+        let thread = Thread::plain(root.clone(), latest.clone());
+        let metadata = if latest == root {
+            ReplyMetadata::new(&root, &sender, None)
+        } else {
+            ReplyMetadata::new(&latest, &sender, Some(&thread))
+        };
+        content.make_for_thread(metadata, ReplyWithinThread::No, AddMentions::No)
     }
 
     /// Show a local echo, then send.
@@ -2149,6 +2310,10 @@ impl App {
         let txn_id = TransactionId::new();
         let mut line = Line::new(kind, text);
         line.reply_to = reply_to;
+        if let Some(root) = self.win().thread_root() {
+            line.thread = true;
+            line.thread_root = Some(root.to_owned());
+        }
         line.rich = crate::convert::rich_of(&content.msgtype);
         self.echo(&acct, line, &txn_id);
         acct.send(room_id, content, txn_id);
@@ -2196,8 +2361,10 @@ impl App {
 
     fn send_reply(&mut self, event_id: OwnedEventId, sender: OwnedUserId, text: &str) -> Result<(), String> {
         let (acct, room_id) = self.room_ctx()?;
+        // In a thread window the reply stays in the thread.
+        let thread = self.win().thread_root().map(|root| Thread::plain(root.to_owned(), event_id.clone()));
         let content = compose(text, Say::Text, &self.mentions, self.cfg.markdown).make_reply_to(
-            ReplyMetadata::new(&event_id, &sender, None),
+            ReplyMetadata::new(&event_id, &sender, thread.as_ref()),
             ForwardThread::Yes,
             AddMentions::Yes,
         );
@@ -2498,6 +2665,59 @@ impl App {
         Ok(())
     }
 
+    /// Open (or switch to) the window for the thread starting at `root` in
+    /// the current room.
+    fn open_thread(&mut self, root: OwnedEventId) -> Result<(), String> {
+        let (acct, room_id) = self.room_ctx()?;
+        let account = acct.name.to_string();
+        if let Some(idx) = self.thread_idx(&account, &room_id, &root) {
+            self.switch_to(idx);
+            return Ok(());
+        }
+        let key = WinKey { account: account.clone(), room_id: room_id.clone(), thread: Some(root.clone()) };
+        let mut w = Window::new(Some(key), thread_name(""));
+        if let Some(room) = self.window_idx(&account, &room_id).map(|i| &self.windows[i]) {
+            (w.encrypted, w.is_dm, w.members, w.perms) = (room.encrypted, room.is_dm, room.members.clone(), room.perms);
+            w.topic = Some(format!("Thread in {}", room.name));
+            if let Some(first) = room.lines.iter().find(|l| l.event_id.as_ref() == Some(&root)) {
+                w.name = thread_name(&first.text());
+            }
+        }
+        // History comes from the thread's relations, not room pagination.
+        w.members_requested = true;
+        w.history = History::Loading;
+        let idx = self.insert_window(w);
+        self.switch_to(idx);
+        acct.load_thread(room_id, root);
+        Ok(())
+    }
+
+    fn cmd_thread(&mut self, args: &str) -> Result<(), String> {
+        match args.trim() {
+            "" => {
+                if self.win().thread_root().is_some() {
+                    return Err("you're in a thread; /threads lists the room's others".into());
+                }
+                let root = self
+                    .win()
+                    .lines
+                    .iter()
+                    .rev()
+                    .find_map(|l| l.thread_root.clone().or_else(|| l.thread_count.and(l.event_id.clone())))
+                    .ok_or("no threads in the loaded history; /threads asks the server")?;
+                self.open_thread(root)
+            }
+            n => {
+                let n: usize = n.parse().map_err(|_| "usage: /thread [N] (numbers from /threads)")?;
+                let (key, root) =
+                    self.thread_hits.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("no thread {n}"))?;
+                let idx = self.window_idx(&key.account, &key.room_id).ok_or("that room's window is closed")?;
+                self.switch_to(idx);
+                self.open_thread(root)
+            }
+        }
+    }
+
     fn cmd_create(&mut self, args: &str) -> Result<(), String> {
         let (acct, mut rest) = self.pick_account(args)?;
         let (mut public, mut space) = (false, false);
@@ -2630,7 +2850,7 @@ impl App {
                 let Some(key) = self.win().room.clone() else {
                     return Err("the status window can't be closed".into());
                 };
-                if !self.layout.closed.contains(&key) {
+                if key.thread.is_none() && !self.layout.closed.contains(&key) {
                     self.layout.closed.push(key);
                 }
                 self.remove_window(self.active);
@@ -2745,7 +2965,8 @@ impl App {
             self.info("Edit: Shift+Up (or Ctrl+E on an empty line), ↑/↓ pick your message, Enter saves,");
             self.info("      clearing the text deletes, Esc restores what you were typing");
             self.info("Select: Alt+Up, then ↑/↓ PgUp/PgDn g/G to move; r reply, e edit, d delete,");
-            self.info("      + react, s save attachment, o open link, v show spoilers, c copy, i details,");
+            self.info("      + react, t open thread, s save attachment, o open link, v show spoilers, c copy,");
+            self.info("      i details,");
             self.info("      Esc to leave");
             return;
         }
@@ -3043,7 +3264,7 @@ mod tests {
     #[test]
     fn edit_mode_walks_your_own_messages_and_restores_the_draft() {
         let mut app = test_app();
-        let key = WinKey { account: "t".into(), room_id: "!r:x.org".try_into().unwrap() };
+        let key = WinKey { account: "t".into(), room_id: "!r:x.org".try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), "room".into()));
         app.active = 1;
         let mine = |id: &str, body: &str| {
@@ -3086,7 +3307,7 @@ mod tests {
         for (room, id, body, mins_ago) in
             [("!a:x.org", "$old", "deploy the thing", 30), ("!b:x.org", "$new", "Deploy finished", 5)]
         {
-            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap() };
+            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
             app.windows.push(Window::new(Some(key), room.into()));
             let mut line = msg(id, body);
             line.ts = Local::now() - chrono::TimeDelta::minutes(mins_ago);
@@ -3108,7 +3329,7 @@ mod tests {
         use crate::ui::{SidebarEntry::{Header, Window as Win}, sidebar_entries};
         let mut app = test_app();
         for (room, name) in [("!b:x.org", "loose room"), ("!a:x.org", "in space")] {
-            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap() };
+            let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
             app.windows.push(Window::new(Some(key), name.into()));
         }
         assert_eq!(sidebar_entries(&app), vec![Win(0), Win(1), Win(2)], "no spaces, no headers");
@@ -3123,6 +3344,32 @@ mod tests {
             sidebar_entries(&app),
             vec![Win(0), Header("◆ Work".into()), Win(2), Header("◇ other".into()), Win(1)]
         );
+    }
+
+    #[test]
+    fn thread_replies_reach_room_and_thread_windows() {
+        let mut app = test_app();
+        let room_id: OwnedRoomId = "!r:x.org".try_into().unwrap();
+        let root: OwnedEventId = "$root".try_into().unwrap();
+        let room_key = WinKey { account: "t".into(), room_id: room_id.clone(), thread: None };
+        let thread_key = WinKey { thread: Some(root.clone()), ..room_key.clone() };
+        app.windows.push(Window::new(Some(room_key), "room".into()));
+        app.windows.push(Window::new(Some(thread_key), "⤷ thread".into()));
+        app.windows[1].push(msg("$root", "shall we?"), 100);
+        app.windows[2].push(msg("$root", "shall we?"), 100);
+
+        let mut reply = msg("$r1", "yes");
+        (reply.thread, reply.thread_root) = (true, Some(root.clone()));
+        let other = msg("$x", "unrelated chatter");
+        let react = Item::React { target: "$r1".try_into().unwrap(), key: "👍".into(), nick: "bob".into() };
+        app.on_timeline("t", &room_id, vec![Item::Line(reply), Item::Line(other), react], true);
+
+        let bodies = |w: &Window| w.lines.iter().map(|l| l.body.clone()).collect::<Vec<_>>();
+        assert_eq!(bodies(&app.windows[1]), vec!["shall we?", "yes", "unrelated chatter"]);
+        assert_eq!(bodies(&app.windows[2]), vec!["shall we?", "yes"], "only the thread's messages");
+        assert_eq!(app.windows[1].lines[0].thread_count, Some(1), "root shows the new reply");
+        assert_eq!(app.windows[2].lines[1].reactions.len(), 1, "reactions reach the thread window");
+        assert_eq!(app.window_idx("t", &room_id), Some(1), "room lookups skip thread windows");
     }
 
     #[test]

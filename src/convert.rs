@@ -35,6 +35,20 @@ pub struct Converter<'a> {
 #[derive(Deserialize)]
 struct Unsigned {
     transaction_id: Option<OwnedTransactionId>,
+    #[serde(rename = "m.relations")]
+    relations: Option<BundledRelations>,
+}
+
+/// The server's summary of the thread an event starts.
+#[derive(Deserialize)]
+struct BundledRelations {
+    #[serde(rename = "m.thread")]
+    thread: Option<ThreadSummary>,
+}
+
+#[derive(Deserialize)]
+struct ThreadSummary {
+    count: u64,
 }
 
 impl<'a> Converter<'a> {
@@ -72,7 +86,9 @@ impl<'a> Converter<'a> {
         let sender = any.sender().to_owned();
         let own = sender == self.own;
         let highlight = !own && ev.push_actions().is_some_and(|actions| actions.iter().any(|a| a.is_highlight()));
-        let txn_id = ev.raw().get_field::<Unsigned>("unsigned").ok().flatten().and_then(|u| u.transaction_id);
+        let unsigned = ev.raw().get_field::<Unsigned>("unsigned").ok().flatten();
+        let thread_count = unsigned.as_ref().and_then(|u| u.relations.as_ref()?.thread.as_ref()).map(|t| t.count);
+        let txn_id = unsigned.and_then(|u| u.transaction_id);
 
         let mut line = Line::new(LineKind::Message, "");
         line.ts = to_local(any.origin_server_ts());
@@ -82,6 +98,7 @@ impl<'a> Converter<'a> {
         line.own = own;
         line.highlight = highlight;
         line.txn_id = txn_id;
+        line.thread_count = thread_count.filter(|n| *n > 0);
 
         if let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &ev.kind {
             line.kind = LineKind::Utd;
@@ -169,6 +186,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
                     // Show what it answers: the quoted message for an explicit
                     // in-thread reply, otherwise the thread's root.
                     line.thread = true;
+                    line.thread_root = Some(thread.event_id.clone());
                     line.reply_to = match thread.in_reply_to {
                         Some(r) if !thread.is_falling_back => Some(r.event_id),
                         _ => Some(thread.event_id),

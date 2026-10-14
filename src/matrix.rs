@@ -22,10 +22,12 @@ use matrix_sdk::{
         BackupDownloadStrategy, EncryptionSettings,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
     },
-    room::{MessagesOptions, Receipts},
+    room::{IncludeRelations, MessagesOptions, Receipts, RelationsOptions},
     ruma::{
         OwnedEventId, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId, UInt,
+        api::Direction,
         directory::Filter as DirectoryFilter,
+        events::relation::RelationType,
         room::RoomType,
         serde::Raw,
         presence::PresenceState,
@@ -39,6 +41,7 @@ use matrix_sdk::{
                     v3::{CreationContent, RoomPreset},
                 },
                 space::get_hierarchy,
+                threads::get_threads,
                 sync::sync_events::v3::Filter,
             },
             error::ErrorKind,
@@ -102,6 +105,10 @@ pub enum AppEvent {
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
     Presence { account: AccountName, updates: Vec<(OwnedUserId, Presence)> },
     Spaces { account: AccountName, spaces: Vec<SpaceInfo> },
+    /// A thread's root and replies (chronological) for its window.
+    Thread { account: AccountName, room_id: OwnedRoomId, root: OwnedEventId, items: Vec<Item> },
+    /// `/threads`: the room's thread roots, newest first.
+    Threads { account: AccountName, room_id: OwnedRoomId, roots: Vec<Line> },
     /// Matches from `/search -deep` in one room, newest first.
     SearchResults { account: AccountName, room_id: OwnedRoomId, hits: Vec<Line> },
     /// An inline image preview, encoded for the terminal (`None` on failure).
@@ -1053,6 +1060,70 @@ impl Account {
                 Vec::new()
             });
             acct.notify.send(AppEvent::SearchResults { account: acct.name.clone(), room_id, hits });
+        });
+    }
+
+    /// Load a thread for its window: the root, then up to 500 replies.
+    pub fn load_thread(&self, room_id: OwnedRoomId, root: OwnedEventId) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let mut conv = Converter::new(&room, &acct.user_id);
+            let mut items = Vec::new();
+            if let Ok(ev) = room.event(&root, None).await
+                && let Some(item) = conv.convert(&ev).await
+            {
+                items.push(item);
+            }
+            let mut replies = Vec::new();
+            let mut from = None;
+            for _ in 0..5 {
+                let options = RelationsOptions {
+                    from,
+                    dir: Direction::Backward,
+                    limit: Some(UInt::from(100u32)),
+                    include_relations: IncludeRelations::RelationsOfType(RelationType::Thread),
+                    ..Default::default()
+                };
+                let page = room.relations(root.clone(), options).await?;
+                for ev in &page.chunk {
+                    if let Some(item) = conv.convert(ev).await {
+                        replies.push(item);
+                    }
+                }
+                match page.next_batch_token {
+                    Some(token) => from = Some(token),
+                    None => break,
+                }
+            }
+            // Pages come newest first.
+            items.extend(replies.into_iter().rev());
+            acct.notify.send(AppEvent::Thread { account: acct.name.clone(), room_id, root, items });
+            Ok(())
+        });
+    }
+
+    /// `/threads`: ask the server for the room's threads.
+    pub fn list_threads(&self, room_id: OwnedRoomId) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let mut request = get_threads::v1::Request::new(room_id.clone());
+            request.limit = Some(UInt::from(20u32));
+            let response = acct.client.send(request).await?;
+            let mut conv = Converter::new(&room, &acct.user_id);
+            let mut roots = Vec::new();
+            for raw in response.chunk {
+                let Ok(Some(event_id)) = raw.get_field::<OwnedEventId>("event_id") else { continue };
+                // Fetching each root decrypts it.
+                if let Ok(ev) = room.event(&event_id, None).await
+                    && let Some(Item::Line(line)) = conv.convert(&ev).await
+                {
+                    roots.push(line);
+                }
+            }
+            acct.notify.send(AppEvent::Threads { account: acct.name.clone(), room_id, roots });
+            Ok(())
         });
     }
 
