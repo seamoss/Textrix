@@ -2587,9 +2587,12 @@ impl App {
                 "" => acct.list_highlights(self.here()),
                 word => acct.set_highlight(self.here(), word.to_owned(), true),
             }),
-            "dehilight" | "unhilight" => self.pick_account(args).and_then(|(acct, word)| match word.trim() {
-                "" => Err("usage: /dehilight <word>".to_owned()),
-                word => Ok(acct.set_highlight(self.here(), word.to_owned(), false)),
+            "dehilight" | "unhilight" => self.pick_account(args).and_then(|(acct, word)| {
+                if word.trim().is_empty() {
+                    return Err("usage: /dehilight <word>".to_owned());
+                }
+                acct.set_highlight(self.here(), word.trim().to_owned(), false);
+                Ok(())
             }),
             "ignore" => self.pick_account(args).and_then(|(acct, who)| {
                 match who.trim() {
@@ -3996,7 +3999,7 @@ mod tests {
             line.sender = Some("@bob:x.org".try_into().unwrap());
             vec![Item::Line(line)]
         };
-        let mut set_mode = |app: &mut App, mode| {
+        let set_mode = |app: &mut App, mode| {
             app.push_modes.insert("t".into(), HashMap::from([(room.clone(), mode)]));
             (app.windows[a].activity, app.bell) = (Activity::None, false);
         };
