@@ -960,12 +960,12 @@ impl App {
         let Some(state) = self.accounts.get_mut(name) else { return };
         state.status = ConnStatus::Connecting;
         let (def, paths, env, tx) = (state.def.clone(), self.paths.clone(), self.env.clone(), self.tx.clone());
-        let sync_mode = self.cfg.sync;
+        let (sync_mode, history_cache) = (self.cfg.sync, self.cfg.history_cache);
         let homeserver = def.homeserver_or_server_name().unwrap_or("?").to_owned();
         self.status(Line::info(format!("{name}: connecting to {homeserver} as {}", def.user)));
         let name = AccountName::from(name);
         tokio::spawn(async move {
-            let event = match matrix::connect(def, paths, env, sync_mode, tx.clone()).await {
+            let event = match matrix::connect(def, paths, env, sync_mode, history_cache, tx.clone()).await {
                 Ok(account) => AppEvent::Connected(account),
                 Err(e) => AppEvent::ConnectFailed { account: name, error: format!("{e:#}") },
             };
@@ -1182,7 +1182,20 @@ impl App {
                     self.status(Line::info(format!("{account}: you left {name}")));
                 }
             }
-            AppEvent::Timeline { account, room_id, items, live } => self.on_timeline(&account, &room_id, items, live),
+            AppEvent::Timeline { account, room_id, items, live, limited } => {
+                // Messages were skipped since the cache was saved: drop the
+                // cached ones rather than show them joined to these, and
+                // load history from the server as usual.
+                if limited && let Some(idx) = self.window_idx(&account, &room_id) {
+                    self.windows[idx].lines.retain(|l| !l.cached);
+                }
+                self.on_timeline(&account, &room_id, items, live)
+            }
+            AppEvent::Cached { account, room_id, items } => {
+                if let Some(idx) = self.window_idx(&account, &room_id) {
+                    self.windows[idx].merge_history(items);
+                }
+            }
             AppEvent::History { account, room_id, items, end, failed } => {
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
@@ -4293,6 +4306,35 @@ mod tests {
         app.on_timeline("t", &room, incoming("$4"), true);
         assert_eq!(app.windows[a].activity, Activity::Message);
         assert!(app.bell, "every message alerts in a room set to all");
+    }
+
+    #[test]
+    fn cached_history_is_dropped_when_the_sync_skipped_messages() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let cached = |id: &str| {
+            let mut line = msg(id, "from last time");
+            line.cached = true;
+            Item::Line(line)
+        };
+        let timeline = |id: &str, limited| AppEvent::Timeline {
+            account: "t".into(),
+            room_id: room.clone(),
+            items: vec![Item::Line(msg(id, "new"))],
+            live: true,
+            limited,
+        };
+        app.on_event(AppEvent::Cached {
+            account: "t".into(),
+            room_id: room.clone(),
+            items: vec![cached("$1"), cached("$2")],
+        });
+        app.on_event(timeline("$3", false));
+        assert_eq!(ids(&app.windows[a]), ["$1", "$2", "$3"], "a complete sync carries on from the cache");
+
+        app.on_event(timeline("$9", true));
+        assert_eq!(ids(&app.windows[a]), ["$3", "$9"], "a gap means the cached lines no longer join up");
     }
 
     #[test]

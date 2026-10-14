@@ -146,6 +146,20 @@ existing session stays on classic sync (to switch, `/logout` and reconnect).
 Sliding sync has no presence, so presence dots there only update via
 `/whois`. Force a method with `sync = "classic"` or `"sliding"`.
 
+### History at startup
+
+Messages that arrive while Textrix runs are kept in the account's local
+store (the SDK's event cache), so at the next launch each window shows its
+recent messages straight away, before the server has answered. If more
+arrived while Textrix was closed than the first sync delivers, that room's
+cached lines are dropped and its history loads from the server as usual,
+so you never see old and new messages joined across a gap. Older history
+still loads from the server when you scroll up.
+
+The cache holds messages decrypted, in `accounts/<name>/` next to the
+encryption keys and session that could decrypt them anyway (mode 700);
+`/logout` deletes it. `history_cache = false` turns it off and clears it.
+
 ### Images
 
 The window list shows each room's avatar (a DM falls back to the other
@@ -249,6 +263,7 @@ nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 theme = "default"          # or "light", "mono"; [colors] overrides parts (see above)
+history_cache = true       # show recent messages instantly at startup
 scrollback = 5000
 history_page = 50
 completion_char = ":"

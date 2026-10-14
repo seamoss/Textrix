@@ -37,3 +37,8 @@ emojis = "0.9.0"
 [profile.release]
 lto = "thin"
 strip = true
+
+[lints.rust]
+# macOS ld notes that debug builds' unwind tables pass 16 MB, which only
+# slows panic unwinding; it isn't actionable.
+linker_messages = "allow"

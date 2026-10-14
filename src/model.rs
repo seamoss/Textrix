@@ -62,6 +62,8 @@ pub struct Line {
     pub utd_session: Option<String>,
     /// Reaction key -> reacting nicks.
     pub reactions: Vec<(String, Vec<String>)>,
+    /// Shown from the local cache at startup, before the server answered.
+    pub cached: bool,
 }
 
 impl Line {
@@ -91,6 +93,7 @@ impl Line {
             reveal: false,
             utd_session: None,
             reactions: Vec::new(),
+            cached: false,
         }
     }
 

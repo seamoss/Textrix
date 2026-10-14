@@ -133,6 +133,15 @@ pub enum AppEvent {
         room_id: OwnedRoomId,
         items: Vec<Item>,
         live: bool,
+        /// The server skipped older events: anything shown from the cache
+        /// may no longer join up with these.
+        limited: bool,
+    },
+    /// Messages from the local cache at startup, oldest first.
+    Cached {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        items: Vec<Item>,
     },
     History {
         account: AccountName,
@@ -326,10 +335,19 @@ pub struct Account {
     sync_mode: SyncMode,
     /// This connection logged in afresh rather than restoring a session.
     fresh_login: bool,
+    /// Keep synced messages in the store's event cache (`history_cache`).
+    history_cache: bool,
 }
 
 /// Log in (or restore the saved session) for one dotfile server.
-pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, sync_mode: SyncMode, tx: Tx) -> Result<Account> {
+pub async fn connect(
+    def: ServerDef,
+    paths: Paths,
+    env: EnvFile,
+    sync_mode: SyncMode,
+    history_cache: bool,
+    tx: Tx,
+) -> Result<Account> {
     let name: AccountName = def.name.as_str().into();
     let notify = Notifier { name: name.clone(), tx };
     let dir = paths.account_dir(&def.name);
@@ -402,6 +420,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, sync_mode: Sync
         away: Default::default(),
         sync_mode,
         fresh_login: !restored,
+        history_cache,
     })
 }
 
@@ -551,6 +570,12 @@ impl Account {
     pub fn start(&self) {
         self.register_verification_handler();
         self.register_push_rules_handler();
+        // Before syncing, so everything synced from now on is kept.
+        if self.history_cache
+            && let Err(e) = self.client.event_cache().subscribe()
+        {
+            tracing::warn!("event cache: {e}");
+        }
 
         let acct = self.clone();
         self.track(tokio::spawn(async move {
@@ -559,6 +584,7 @@ impl Account {
                 rooms.push(room_meta(&room).await);
             }
             acct.notify.send(AppEvent::Rooms { account: acct.name.clone(), rooms });
+            acct.load_cached_history().await;
             acct.notify
                 .send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
             acct.watch_room_keys().await;
@@ -608,6 +634,46 @@ impl Account {
     pub fn stop(&self) {
         for task in self.tasks.lock().unwrap().drain(..) {
             task.abort();
+        }
+    }
+
+    /// Fill each room's window from the event cache, so there's something
+    /// to read before the server answers. Turning the cache off clears it.
+    async fn load_cached_history(&self) {
+        if !self.history_cache {
+            if let Err(e) = self.client.event_cache().clear_all_rooms().await {
+                tracing::warn!("clearing the event cache: {e}");
+            }
+            return;
+        }
+        for room in self.client.joined_rooms().into_iter().filter(|r| !r.is_space()) {
+            let events = match room.event_cache().await {
+                Ok((cache, _handles)) => cache.events().await.unwrap_or_default(),
+                Err(e) => {
+                    tracing::warn!("event cache for {}: {e}", room.room_id());
+                    continue;
+                }
+            };
+            if events.is_empty() {
+                continue;
+            }
+            let mut conv = Converter::new(&room, &self.user_id);
+            let mut items = Vec::new();
+            for ev in &events {
+                match conv.convert(ev).await {
+                    Some(Item::Line(mut line)) => {
+                        line.cached = true;
+                        items.push(Item::Line(line));
+                    }
+                    Some(other) => items.push(other),
+                    None => {}
+                }
+            }
+            self.notify.send(AppEvent::Cached {
+                account: self.name.clone(),
+                room_id: room.room_id().to_owned(),
+                items,
+            });
         }
     }
 
@@ -806,12 +872,13 @@ impl Account {
                     items.push(item);
                 }
             }
-            if !items.is_empty() {
+            if !items.is_empty() || update.timeline.limited {
                 self.notify.send(AppEvent::Timeline {
                     account: self.name.clone(),
                     room_id: room_id.clone(),
                     items,
                     live,
+                    limited: update.timeline.limited,
                 });
             }
 
