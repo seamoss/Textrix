@@ -57,7 +57,7 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
 | Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
-| F1 / F2 / F3 | help / window list / member list |
+| F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Ctrl+L | redraw |
 
@@ -73,6 +73,7 @@ bindings.
 | Area | Commands |
 |---|---|
 | Rooms | `/create [-public] [-space] <name>`, `/join`, `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
+| Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [version] [confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all |
 | Directory | `/list [search]` (public rooms) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |
 | Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode |
@@ -140,7 +141,9 @@ original.
 - Presence: coloured dots in the member list and on DM windows in the
   window list (green online, yellow away, grey offline); a DM's topic bar
   says how the other person is doing ("away: lunch", "last seen 3h ago");
-  `/whois` includes it. `✎` in the window list means someone is typing there.
+  `/whois` includes it. `✎` in the window list means someone is typing there;
+  typing notices clear when that person's message arrives, and expire after
+  45 seconds without an update.
 - Highlights and DMs from other windows (or any window while the terminal is
   in the background) are copied into the status window, ring the bell, and
   pop a desktop notification in iTerm2, Ghostty, WezTerm and kitty. Inside

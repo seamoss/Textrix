@@ -13,8 +13,10 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
+    room::{AllowRule, JoinRule, Restricted},
     events::{
         relation::Thread,
+        room::history_visibility::HistoryVisibility,
         room::message::{
             AddMentions, ForwardThread, ReplacementMetadata, ReplyMetadata, ReplyWithinThread, RoomMessageEventContent,
         },
@@ -97,6 +99,8 @@ pub struct Window {
     pub at_top: bool,
     pub unseen_below: bool,
     pub typing: Vec<String>,
+    /// When the typing list last changed, to expire it if updates stop.
+    typing_at: Option<Instant>,
     pub members: Vec<Member>,
     members_requested: bool,
     /// Server-side unread counts from the last room update.
@@ -117,6 +121,7 @@ pub struct Window {
 }
 
 const ORPHANS_MAX: usize = 1000;
+const TYPING_EXPIRY: Duration = Duration::from_secs(45);
 
 impl Window {
     fn status() -> Self {
@@ -144,6 +149,7 @@ impl Window {
             at_top: false,
             unseen_below: false,
             typing: Vec::new(),
+            typing_at: None,
             members: Vec::new(),
             members_requested: false,
             unread: (0, 0),
@@ -542,6 +548,8 @@ pub struct App {
     compose: Option<(WinKey, Compose)>,
     /// Text for the clipboard, written after the next draw.
     pub clipboard: Option<String>,
+    /// The F1 help screen, while open.
+    pub help: Option<HelpView>,
     /// Terminal graphics support, probed at startup; `None` disables previews.
     pub picker: Option<Picker>,
     pub previews: HashMap<OwnedEventId, Preview>,
@@ -589,6 +597,23 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "name", args: "<new name>", help: "Rename this room" },
     Cmd { name: "topic", args: "[text]", help: "Show or set the room topic" },
     Cmd { name: "info", args: "", help: "Show this room's ID, aliases, encryption and settings" },
+    Cmd {
+        name: "joinrule",
+        args: "<invite|public|knock|restricted <space>>",
+        help: "Who can join: by invite, anyone, by request, or members of a space",
+    },
+    Cmd { name: "guests", args: "<on|off>", help: "Allow or forbid guest accounts" },
+    Cmd {
+        name: "history",
+        args: "<joined|invited|shared|world>",
+        help: "Who can read past messages: members since joining/invited, all members, or anyone",
+    },
+    Cmd { name: "publish", args: "<on|off>", help: "List the room in the server's room directory" },
+    Cmd {
+        name: "upgrade",
+        args: "[version] [confirm]",
+        help: "Show room versions, or move the room to a new version",
+    },
     Cmd { name: "rooms", args: "", help: "List every joined room, including closed windows" },
     Cmd { name: "invites", args: "", help: "List pending invitations" },
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
@@ -675,6 +700,90 @@ const ALIASES: &[(&str, &str)] = &[
     ("h", "help"),
 ];
 
+pub const KEYS: &[(&str, &str)] = &[
+    ("Alt+1…0, Alt+Q…P", "go to window 1–20"),
+    ("Ctrl+N / Ctrl+P, Alt+← / Alt+→", "next / previous window"),
+    ("Alt+A", "jump to the most important window with activity"),
+    ("PgUp / PgDn", "scroll; older history loads at the top"),
+    ("Tab", "complete commands, nicks (adds a mention), server names, file paths"),
+    ("Up / Down", "input history"),
+    ("Shift+Enter, Alt+Enter", "new line in the message"),
+    ("Alt+Up", "select a message (keys below)"),
+    ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
+    ("F1 / F2 / F3", "this help / window list / member list"),
+    ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
+    ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
+    ("Ctrl+C", "clear the input line"),
+    ("Ctrl+L", "redraw the screen"),
+];
+
+pub const SELECT_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓, PgUp / PgDn, g / G", "move between messages"),
+    ("r", "reply"),
+    ("e", "edit (your own messages)"),
+    ("d", "delete (asks first)"),
+    ("+", "react"),
+    ("t", "open the thread (or start one)"),
+    ("s", "save the attachment"),
+    ("o", "open the link"),
+    ("v", "show spoilers"),
+    ("c", "copy the text"),
+    ("i", "sender, time and event ID"),
+    ("Esc", "leave selection mode"),
+];
+
+pub const EDIT_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓", "pick one of your messages; it loads into the input line"),
+    ("Enter", "save the edit"),
+    ("clear the text, Enter", "delete the message (asks first)"),
+    ("Esc", "cancel and get back what you were typing"),
+];
+
+/// The full-screen help (F1): scroll position and a filter you type.
+#[derive(Default)]
+pub struct HelpView {
+    pub scroll: usize,
+    pub filter: String,
+}
+
+pub enum HelpRow {
+    Section(&'static str),
+    Entry(String, String),
+}
+
+/// Help contents, keeping only entries (and their sections) that match.
+pub fn help_rows(filter: &str) -> Vec<HelpRow> {
+    let filter = filter.to_lowercase();
+    let mut sections: Vec<(&'static str, Vec<(String, String)>)> = vec![
+        ("Keys", KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("Selecting messages (Alt+Up)", SELECT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("Editing (Shift+Up)", EDIT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+    ];
+    let commands = COMMANDS
+        .iter()
+        .map(|c| {
+            let aliases: Vec<String> =
+                ALIASES.iter().filter(|(_, real)| *real == c.name).map(|(a, _)| format!("/{a}")).collect();
+            let also = if aliases.is_empty() { String::new() } else { format!(" (also {})", aliases.join(", ")) };
+            (format!("/{} {}", c.name, c.args).trim_end().to_owned(), format!("{}{also}", c.help))
+        })
+        .collect();
+    sections.push(("Commands", commands));
+
+    let mut rows = Vec::new();
+    for (title, entries) in sections {
+        let matching: Vec<(String, String)> = entries
+            .into_iter()
+            .filter(|(k, d)| filter.is_empty() || k.to_lowercase().contains(&filter) || d.to_lowercase().contains(&filter))
+            .collect();
+        if !matching.is_empty() {
+            rows.push(HelpRow::Section(title));
+            rows.extend(matching.into_iter().map(|(k, d)| HelpRow::Entry(k, d)));
+        }
+    }
+    rows
+}
+
 /// Server-name arguments, for tab completion.
 const SERVER_COMMANDS: &[&str] = &["connect", "disconnect", "logout", "recover"];
 
@@ -729,6 +838,7 @@ impl App {
             editing: None,
             compose: None,
             clipboard: None,
+            help: None,
             picker: None,
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
@@ -1109,8 +1219,8 @@ impl App {
                 }
             }
             AppEvent::Typing { account, room_id, nicks } => {
-                if let Some(idx) = self.window_idx(&account, &room_id) {
-                    self.windows[idx].typing = nicks;
+                for idx in self.room_windows(&account, &room_id) {
+                    (self.windows[idx].typing, self.windows[idx].typing_at) = (nicks.clone(), Some(Instant::now()));
                 }
             }
             AppEvent::Members { account, room_id, members, show } => {
@@ -1313,6 +1423,8 @@ impl App {
                 w.scroll += ui::line_height(&line, width, &self.cfg);
                 w.unseen_below = true;
             }
+            // Someone who just sent a message has stopped typing.
+            w.typing.retain(|nick| *nick != line.nick);
             // Sending a message means you've read everything before it.
             if let (Some(sender), Some(event_id)) = (&line.sender, &line.event_id)
                 && line.is_message()
@@ -1494,6 +1606,13 @@ impl App {
     /// image previews, avatars.
     pub fn after_draw(&mut self) {
         self.request_avatars();
+        // Typing notices normally end with an update from the server; don't
+        // let a missed one leave someone "typing" forever.
+        for w in &mut self.windows {
+            if !w.typing.is_empty() && w.typing_at.is_some_and(|t| t.elapsed() > TYPING_EXPIRY) {
+                w.typing.clear();
+            }
+        }
         if !self.preview_requests.is_empty()
             && let (Some(picker), Ok((acct, _))) = (self.picker.clone(), self.room_ctx())
         {
@@ -1569,6 +1688,32 @@ impl App {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if let Some(help) = self.help.as_mut() {
+            match key.code {
+                Esc if !help.filter.is_empty() => {
+                    help.filter.clear();
+                    help.scroll = 0;
+                }
+                Esc | F(1) => self.help = None,
+                Char('c') if ctrl => self.help = None,
+                Up => help.scroll = help.scroll.saturating_sub(1),
+                Down => help.scroll += 1,
+                PageUp => help.scroll = help.scroll.saturating_sub(10),
+                PageDown => help.scroll += 10,
+                Home => help.scroll = 0,
+                End => help.scroll = usize::MAX,
+                Backspace => {
+                    help.filter.pop();
+                    help.scroll = 0;
+                }
+                Char(c) if !ctrl && !alt => {
+                    help.filter.push(c);
+                    help.scroll = 0;
+                }
+                _ => {}
+            }
+            return;
+        }
         if let Some(event) = self.confirm_delete.take() {
             let resume = self.resume_edit.take();
             if matches!(key.code, Char('y' | 'Y')) {
@@ -1691,7 +1836,7 @@ impl App {
             Down => self.input.history_next(),
             PageUp => self.scroll(true),
             PageDown => self.scroll(false),
-            F(1) => self.cmd_help(""),
+            F(1) => self.help = Some(HelpView::default()),
             F(2) => self.show_sidebar = !self.show_sidebar,
             F(3) => self.show_nicklist = !self.show_nicklist,
             _ => {}
@@ -2245,6 +2390,31 @@ impl App {
                 Ok(())
             }),
             "info" => self.room_ctx().map(|(acct, room_id)| acct.room_info(room_id)),
+            "joinrule" => self.cmd_joinrule(args),
+            "guests" => self.room_ctx().and_then(|(acct, room_id)| {
+                acct.set_guest_access(room_id, on_off(args, "usage: /guests <on|off>")?);
+                Ok(())
+            }),
+            "history" => self.room_ctx().and_then(|(acct, room_id)| {
+                let visibility = match args.trim() {
+                    "joined" => HistoryVisibility::Joined,
+                    "invited" => HistoryVisibility::Invited,
+                    "shared" => HistoryVisibility::Shared,
+                    "world" | "world_readable" => HistoryVisibility::WorldReadable,
+                    _ => return Err("usage: /history <joined|invited|shared|world>".into()),
+                };
+                acct.set_history_visibility(room_id, visibility);
+                Ok(())
+            }),
+            "publish" => self.room_ctx().and_then(|(acct, room_id)| {
+                acct.set_published(room_id, on_off(args, "usage: /publish <on|off>")?);
+                Ok(())
+            }),
+            "upgrade" => self.room_ctx().map(|(acct, room_id)| {
+                let (version, rest) = split_first(args);
+                let version = Some(version).filter(|v| !v.is_empty()).map(str::to_owned);
+                acct.upgrade(room_id, version, rest.trim() == "confirm");
+            }),
             "rooms" => self.pick_account(args).map(|(acct, _)| acct.list_rooms(self.here())),
             "invites" => self.pick_account(args).map(|(acct, _)| acct.list_invites(self.here())),
             "decline" => self.pick_account(args).and_then(|(acct, room)| {
@@ -2806,6 +2976,23 @@ impl App {
         }
     }
 
+    fn cmd_joinrule(&mut self, args: &str) -> Result<(), String> {
+        let (acct, room_id) = self.room_ctx()?;
+        let (rule, rest) = split_first(args);
+        let rule = match rule {
+            "invite" => JoinRule::Invite,
+            "public" => JoinRule::Public,
+            "knock" => JoinRule::Knock,
+            "restricted" => {
+                let (_, space) = self.find_space(rest.trim())?;
+                JoinRule::Restricted(Restricted::new(vec![AllowRule::room_membership(space.room_id)]))
+            }
+            _ => return Err("usage: /joinrule <invite|public|knock|restricted <space>>".into()),
+        };
+        acct.set_join_rule(room_id, rule);
+        Ok(())
+    }
+
     fn cmd_create(&mut self, args: &str) -> Result<(), String> {
         let (acct, mut rest) = self.pick_account(args)?;
         let (mut public, mut space) = (false, false);
@@ -3127,21 +3314,19 @@ impl App {
     fn cmd_help(&mut self, args: &str) {
         let wanted = args.trim().trim_start_matches('/').to_lowercase();
         if wanted.is_empty() {
-            self.info("Commands (Tab completes; /help <command> for details):");
+            self.info("Commands (Tab completes; /help <command> for details; F1 for a searchable list):");
             let rows: Vec<String> = COMMANDS.iter().map(|c| format!("  /{:<10} {}", c.name, c.help)).collect();
             for row in rows {
                 self.info(row);
             }
-            self.info("Keys: Alt+1..0/Alt+Q..P window 1-20, Ctrl+N/P next/prev, Alt+A next active,");
-            self.info("      PgUp/PgDn scroll, Tab complete, Up/Down history, Ctrl+A/E/U/K/W/Y edit,");
-            self.info("      Shift+Enter (or Alt+Enter) new line, F1 help, F2 window list, F3 member list,");
-            self.info("      Ctrl+L redraw");
-            self.info("Edit: Shift+Up (or Ctrl+E on an empty line), ↑/↓ pick your message, Enter saves,");
-            self.info("      clearing the text deletes, Esc restores what you were typing");
-            self.info("Select: Alt+Up, then ↑/↓ PgUp/PgDn g/G to move; r reply, e edit, d delete,");
-            self.info("      + react, t open thread, s save attachment, o open link, v show spoilers, c copy,");
-            self.info("      i details,");
-            self.info("      Esc to leave");
+            for (title, keys) in [("Keys", KEYS), ("Selecting messages (Alt+Up)", SELECT_KEYS), ("Editing (Shift+Up)", EDIT_KEYS)]
+            {
+                self.info(format!("{title}:"));
+                for (key, what) in keys {
+                    self.info(format!("  {key:<34} {what}"));
+                }
+            }
+            self.info("F1 shows all of this full-screen, with a filter");
             return;
         }
         let real = ALIASES.iter().find(|(a, _)| *a == wanted).map_or(wanted.as_str(), |(_, r)| *r);
@@ -3152,6 +3337,14 @@ impl App {
             }
             None => self.error(format!("no command /{wanted}")),
         }
+    }
+}
+
+fn on_off(args: &str, usage: &str) -> Result<bool, String> {
+    match args.trim() {
+        "on" | "yes" | "true" => Ok(true),
+        "off" | "no" | "false" => Ok(false),
+        _ => Err(usage.to_owned()),
     }
 }
 
@@ -3567,6 +3760,33 @@ mod tests {
         assert!(!app.show_sidebar, "a broken config keeps the current settings");
         assert!(!app.accounts.contains_key("new") && app.accounts.contains_key("other"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn help_filter_keeps_matching_entries_and_their_sections() {
+        let titles = |rows: &[HelpRow]| -> Vec<&str> {
+            rows.iter().filter_map(|r| if let HelpRow::Section(t) = r { Some(*t) } else { None }).collect()
+        };
+        let all = help_rows("");
+        assert_eq!(titles(&all), vec!["Keys", "Selecting messages (Alt+Up)", "Editing (Shift+Up)", "Commands"]);
+        let upgrade = help_rows("upgrade");
+        assert_eq!(titles(&upgrade), vec!["Commands"]);
+        assert!(upgrade.iter().any(|r| matches!(r, HelpRow::Entry(k, _) if k.starts_with("/upgrade"))));
+        let leave = help_rows("/leave");
+        assert!(leave.iter().any(|r| matches!(r, HelpRow::Entry(k, d) if k.starts_with("/part") && d.contains("/leave"))));
+        assert!(help_rows("zzzz-nothing").is_empty());
+    }
+
+    #[test]
+    fn typing_clears_when_that_person_speaks() {
+        let mut app = test_app();
+        let room_id: OwnedRoomId = "!r:x.org".try_into().unwrap();
+        app.windows.push(Window::new(Some(WinKey { account: "t".into(), room_id: room_id.clone(), thread: None }), "r".into()));
+        app.on_event(AppEvent::Typing { account: "t".into(), room_id: room_id.clone(), nicks: vec!["alice".into(), "bob".into()] });
+        assert_eq!(app.windows[1].typing, vec!["alice", "bob"]);
+        app.on_timeline("t", &room_id, vec![Item::Line(msg("$1", "done typing"))], true);
+        assert_eq!(app.windows[1].typing, vec!["bob"], "alice spoke, so she isn't typing");
+        assert!(on_off("on", "").unwrap() && !on_off("off", "").unwrap() && on_off("maybe", "usage").is_err());
     }
 
     #[test]

@@ -9,14 +9,14 @@ use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line as TLine, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use unicode_width::UnicodeWidthChar;
 
 use ratatui_image::Image;
 
 use crate::{
-    app::{App, ConnStatus, Preview},
+    app::{App, ConnStatus, HelpRow, Preview, help_rows},
     config::Config,
     input::display_width,
     links,
@@ -67,6 +67,63 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     draw_status(f, status, app);
     draw_input(f, input, app);
+    if app.help.is_some() {
+        draw_help(f, app);
+    }
+}
+
+/// The F1 help screen: keys and commands, filtered by what you type.
+fn draw_help(f: &mut Frame, app: &mut App) {
+    let screen = f.area();
+    let width = screen.width.saturating_sub(4).min(110);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        y: screen.y + 1,
+        width,
+        height: screen.height.saturating_sub(2),
+    };
+    let Some(help) = app.help.as_mut() else { return };
+    let rows = help_rows(&help.filter);
+    let key_w = rows
+        .iter()
+        .map(|r| match r {
+            HelpRow::Entry(k, _) => display_len(k),
+            HelpRow::Section(_) => 0,
+        })
+        .max()
+        .unwrap_or(0)
+        .min(36);
+    let mut lines: Vec<TLine> = Vec::new();
+    for row in rows {
+        match row {
+            HelpRow::Section(title) => {
+                if !lines.is_empty() {
+                    lines.push(TLine::default());
+                }
+                lines.push(TLine::from(Span::styled(title, MARKER)));
+            }
+            HelpRow::Entry(key, what) => {
+                let pad = " ".repeat(key_w.saturating_sub(display_len(&key)) + 2);
+                lines.push(TLine::from(vec![
+                    Span::styled(format!("  {key}"), Style::new().fg(Color::Yellow)),
+                    Span::raw(pad),
+                    Span::raw(what),
+                ]));
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines.push(TLine::from(Span::styled("  nothing matches", DIM)));
+    }
+    let inner_h = area.height.saturating_sub(2) as usize;
+    help.scroll = help.scroll.min(lines.len().saturating_sub(inner_h));
+    let filter = if help.filter.is_empty() { " type to filter ".to_owned() } else { format!(" filter: {} ", help.filter) };
+    let block = Block::bordered()
+        .border_style(Style::new().fg(Color::Cyan))
+        .title(Span::styled(" Textrix help ", MARKER))
+        .title_bottom(TLine::from(format!("{filter}· ↑↓ PgUp/PgDn scroll · Esc closes ")).right_aligned());
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block).scroll((help.scroll as u16, 0)), area);
 }
 
 fn activity_style(level: Activity) -> Style {

@@ -29,12 +29,15 @@ use matrix_sdk::{
         api::Direction,
         directory::Filter as DirectoryFilter,
         events::relation::RelationType,
-        room::RoomType,
+        RoomVersionId,
+        room::{JoinRule, RoomType},
         serde::Raw,
         presence::PresenceState,
         api::{
             client::{
                 directory::get_public_rooms_filtered,
+                discovery::get_capabilities,
+                room::{Visibility as DirectoryVisibility, upgrade_room},
                 filter::{FilterDefinition, LazyLoadOptions},
                 presence::{get_presence, set_presence},
                 room::create_room::{
@@ -59,7 +62,11 @@ use matrix_sdk::{
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
             relation::Annotation,
             room::{
-                MediaSource, encryption::RoomEncryptionEventContent, message::RoomMessageEventContent,
+                MediaSource,
+                encryption::RoomEncryptionEventContent,
+                guest_access::{GuestAccess, RoomGuestAccessEventContent},
+                history_visibility::HistoryVisibility,
+                message::RoomMessageEventContent,
                 power_levels::UserPowerLevel,
             },
         },
@@ -354,6 +361,16 @@ async fn avatar_of(room: &Room) -> Option<OwnedMxcUri> {
     let user = dm_user(room)?;
     let member = room.get_member_no_sync(&user).await.ok()??;
     member.avatar_url().map(ToOwned::to_owned)
+}
+
+pub fn describe_history(visibility: &HistoryVisibility) -> &'static str {
+    match visibility {
+        HistoryVisibility::Invited => "members since they were invited",
+        HistoryVisibility::Joined => "members since they joined",
+        HistoryVisibility::Shared => "all members",
+        HistoryVisibility::WorldReadable => "anyone",
+        _ => "an unknown set of people",
+    }
 }
 
 fn dm_user(room: &Room) -> Option<OwnedUserId> {
@@ -1325,6 +1342,97 @@ impl Account {
         });
     }
 
+    pub fn set_join_rule(&self, room_id: OwnedRoomId, rule: JoinRule) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            acct.room(&room_id)?.privacy_settings().update_join_rule(rule).await?;
+            acct.notify.line(Some(room_id), Line::info("join rule updated"));
+            Ok(())
+        });
+    }
+
+    pub fn set_guest_access(&self, room_id: OwnedRoomId, allow: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let access = if allow { GuestAccess::CanJoin } else { GuestAccess::Forbidden };
+            acct.room(&room_id)?.send_state_event(RoomGuestAccessEventContent::new(access)).await?;
+            acct.notify.line(Some(room_id), Line::info(if allow { "guests can join" } else { "guests can't join" }));
+            Ok(())
+        });
+    }
+
+    pub fn set_history_visibility(&self, room_id: OwnedRoomId, visibility: HistoryVisibility) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let text = format!("history is now visible to {}", describe_history(&visibility));
+            acct.room(&room_id)?.privacy_settings().update_room_history_visibility(visibility).await?;
+            acct.notify.line(Some(room_id), Line::info(text));
+            Ok(())
+        });
+    }
+
+    /// List the room in (or remove it from) the server's room directory.
+    pub fn set_published(&self, room_id: OwnedRoomId, publish: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let visibility = if publish { DirectoryVisibility::Public } else { DirectoryVisibility::Private };
+            acct.room(&room_id)?.privacy_settings().update_room_visibility(visibility).await?;
+            let text = if publish { "listed in the room directory" } else { "removed from the room directory" };
+            acct.notify.line(Some(room_id), Line::info(text));
+            Ok(())
+        });
+    }
+
+    /// `/upgrade`: show versions, or (confirmed) move the room to a new
+    /// version and switch to the replacement room.
+    pub fn upgrade(&self, room_id: OwnedRoomId, version: Option<String>, confirmed: bool) {
+        let acct = self.clone();
+        let out = Some(room_id.clone());
+        self.spawn_op(out.clone(), async move {
+            let room = acct.room(&room_id)?;
+            let caps = acct.client.send(get_capabilities::v3::Request::new()).await?.capabilities.room_versions;
+            let current = room.version().map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+            let Some(target) = version.filter(|_| confirmed) else {
+                let mut stable: Vec<String> = caps
+                    .available
+                    .iter()
+                    .filter(|(_, stability)| stability.as_str() == "stable")
+                    .map(|(v, _)| v.to_string())
+                    .collect();
+                stable.sort_by_key(|v| (v.parse::<u32>().unwrap_or(u32::MAX), v.clone()));
+                let newest = stable.iter().rev().find(|v| v.parse::<u32>().is_ok()).cloned();
+                let mut lines = vec![
+                    format!("this room is version {current}; the server's default is {}", caps.default),
+                    format!("stable versions: {}", stable.join(", ")),
+                ];
+                match newest.filter(|n| *n != current) {
+                    Some(newest) => {
+                        lines.push(
+                            "upgrading makes a new room and points this one at it; everyone has to follow to it"
+                                .to_owned(),
+                        );
+                        lines.push(format!("to go ahead: /upgrade {newest} confirm"));
+                    }
+                    None => lines.push("this room is already on the newest stable version".to_owned()),
+                }
+                for text in lines {
+                    acct.notify.line(out.clone(), Line::info(text));
+                }
+                return Ok(());
+            };
+            let new_version = RoomVersionId::try_from(target.as_str())?;
+            if !caps.available.contains_key(&new_version) {
+                bail!("the server doesn't support room version {new_version}");
+            }
+            let response = acct.client.send(upgrade_room::v3::Request::new(room_id.clone(), new_version.clone())).await?;
+            let replacement = response.replacement_room;
+            acct.notify.line(out, Line::info(format!("upgraded to version {new_version}: {replacement}")));
+            let room = acct.client.join_room_by_id(&replacement).await?;
+            acct.announce_and_focus(&room).await;
+            Ok(())
+        });
+    }
+
     pub fn rename(&self, room_id: OwnedRoomId, name: String) {
         let acct = self.clone();
         self.spawn_op(Some(room_id.clone()), async move {
@@ -1433,6 +1541,11 @@ impl Account {
             };
             let aliases: Vec<String> =
                 room.canonical_alias().into_iter().chain(room.alt_aliases()).map(|a| a.to_string()).collect();
+            let directory = match room.privacy_settings().get_room_visibility().await {
+                Ok(DirectoryVisibility::Public) => "listed",
+                Ok(_) => "not listed",
+                Err(_) => "unknown",
+            };
             let rows = [
                 format!("{} [{}]", meta.name, room_id),
                 format!(" aliases  : {}", if aliases.is_empty() { "none".into() } else { aliases.join(", ") }),
@@ -1444,6 +1557,12 @@ impl Account {
                     room.join_rule().map(|r| r.as_str().to_owned()).unwrap_or_else(|| "unknown".into())
                 ),
                 format!(" version  : {}", room.version().map(|v| v.to_string()).unwrap_or_else(|| "?".into())),
+                format!(
+                    " guests   : {}",
+                    if room.guest_access() == GuestAccess::CanJoin { "can join" } else { "can't join" }
+                ),
+                format!(" history  : visible to {}", describe_history(&room.history_visibility_or_default())),
+                format!(" directory: {directory}"),
                 format!(" your power level: {power}"),
             ];
             for row in rows {
