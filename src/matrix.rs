@@ -174,6 +174,12 @@ pub enum AppEvent {
         items: Vec<Item>,
     },
     /// `/threads`: the room's thread roots, newest first.
+    /// The room's pinned messages, for `/pins`.
+    Pins {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        lines: Vec<Line>,
+    },
     Threads {
         account: AccountName,
         room_id: OwnedRoomId,
@@ -453,6 +459,7 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         fully_read,
         unread: counts.notification_count,
         highlights: counts.highlight_count,
+        pinned: room.pinned_event_ids().unwrap_or_default(),
     }
 }
 
@@ -1039,6 +1046,7 @@ impl Account {
             fully_read: None,
             unread: counts.notification_count,
             highlights: counts.highlight_count,
+            pinned: room.pinned_event_ids().unwrap_or_default(),
         })
     }
 
@@ -1419,6 +1427,49 @@ impl Account {
                 }
             }
             acct.notify.send(AppEvent::Threads { account: acct.name.clone(), room_id, roots });
+            Ok(())
+        });
+    }
+
+    /// `/pins`: the room's pinned messages, fetched (and decrypted) one by
+    /// one, newest pin first.
+    pub fn pins(&self, room_id: OwnedRoomId) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let mut conv = Converter::new(&room, &acct.user_id);
+            let mut lines = Vec::new();
+            for event_id in room.pinned_event_ids().unwrap_or_default().into_iter().rev() {
+                let line = match room.event(&event_id, None).await {
+                    Ok(ev) => match conv.convert(&ev).await {
+                        Some(Item::Line(line)) => line,
+                        _ => continue,
+                    },
+                    Err(_) => {
+                        let mut line = Line::info("(this message isn't available to you)");
+                        line.event_id = Some(event_id);
+                        line
+                    }
+                };
+                lines.push(line);
+            }
+            acct.notify.send(AppEvent::Pins { account: acct.name.clone(), room_id, lines });
+            Ok(())
+        });
+    }
+
+    pub fn set_pinned(&self, room_id: OwnedRoomId, event_id: OwnedEventId, pin: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let changed = if pin { room.pin_event(&event_id).await? } else { room.unpin_event(&event_id).await? };
+            let text = match (pin, changed) {
+                (true, true) => "pinned; /pins lists the room's pinned messages",
+                (true, false) => "that message was already pinned",
+                (false, true) => "unpinned",
+                (false, false) => "that message wasn't pinned",
+            };
+            acct.notify.line(Some(room_id), Line::info(text));
             Ok(())
         });
     }
@@ -1907,6 +1958,7 @@ impl Account {
                     can_send: me.can_send_message(MessageLikeEventType::RoomMessage),
                     can_redact_own: me.can_redact_own(),
                     can_redact_other: me.can_redact_other(),
+                    can_pin: me.can_send_state(StateEventType::RoomPinnedEvents),
                 };
                 acct.notify.send(AppEvent::Permissions { account: acct.name.clone(), room_id: room_id.clone(), perms });
             }

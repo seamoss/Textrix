@@ -389,6 +389,13 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
     }
     let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     f.render_widget(Paragraph::new(text).style(BAR), area);
+    // The pin count stays visible at the right, over a long topic.
+    if !win.pinned.is_empty() && area.width > 40 {
+        let pins = format!(" 📌 {} pinned · /pins ", win.pinned.len());
+        let w = display_len(&pins) as u16;
+        let right = Rect { x: area.right() - w, width: w, ..area };
+        f.render_widget(Paragraph::new(pins).style(BAR.add_modifier(Modifier::BOLD)), right);
+    }
 }
 
 /// The message area: one window, or several split panes, each with a
@@ -507,7 +514,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             }
         }
         let below = rows.len();
-        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref());
+        let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
+        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned);
         if is_selected {
             for row in &mut rendered {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
@@ -625,17 +633,19 @@ fn day_changed(ts: DateTime<Local>) -> TLine<'static> {
 /// Format one scrollback line and wrap it to `width`, indenting
 /// continuation rows under the message text.
 pub fn render_line(line: &Line, width: usize, cfg: &Config) -> Vec<TLine<'static>> {
-    render_line_with(line, width, cfg, &[], None)
+    render_line_with(line, width, cfg, &[], None, false)
 }
 
-/// `render_line`, plus the nicks whose read receipt sits on this line, and
-/// the thread being shown when this is a thread window.
+/// `render_line`, plus the nicks whose read receipt sits on this line, the
+/// thread being shown when this is a thread window, and whether the message
+/// is pinned.
 fn render_line_with(
     line: &Line,
     width: usize,
     cfg: &Config,
     read_by: &[&str],
     thread_window: Option<&EventId>,
+    pinned: bool,
 ) -> Vec<TLine<'static>> {
     let mut cells: Vec<(char, Style)> = Vec::new();
     let push = |cells: &mut Vec<(char, Style)>, s: &str, style: Style| {
@@ -734,6 +744,9 @@ fn render_line_with(
     if let Some(count) = line.thread_count {
         let text = if count == 1 { " [1 reply]".to_owned() } else { format!(" [{count} replies]") };
         push(&mut cells, &text, Style::new().fg(Color::Cyan));
+    }
+    if pinned {
+        push(&mut cells, " [pinned]", Style::new().fg(Color::Yellow));
     }
     if let Some(percent) = line.progress {
         push(&mut cells, &format!(" ({percent}%)"), DIM);
@@ -932,7 +945,8 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  t thread  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys =
+            "r reply  e edit  d delete  + react  t thread  p pin  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, BAR.fg(Color::Yellow))]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";

@@ -224,6 +224,8 @@ pub struct RoomMeta {
     pub fully_read: Option<OwnedEventId>,
     pub unread: u64,
     pub highlights: u64,
+    /// `m.room.pinned_events`, oldest pin first.
+    pub pinned: Vec<OwnedEventId>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -243,6 +245,7 @@ pub struct Permissions {
     pub can_send: bool,
     pub can_redact_own: bool,
     pub can_redact_other: bool,
+    pub can_pin: bool,
 }
 
 #[derive(Clone, Debug)]

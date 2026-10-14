@@ -126,6 +126,8 @@ pub struct Window {
     seek: Option<OwnedEventId>,
     /// Columns it was last drawn at (0 until it's been on screen).
     pub width: u16,
+    /// Pinned messages (`m.room.pinned_events`).
+    pub pinned: Vec<OwnedEventId>,
 }
 
 const ORPHANS_MAX: usize = 1000;
@@ -170,6 +172,7 @@ impl Window {
             orphans: HashMap::new(),
             seek: None,
             width: 0,
+            pinned: Vec::new(),
         }
     }
 
@@ -182,6 +185,7 @@ impl Window {
         self.is_dm = meta.is_dm;
         self.dm_user = meta.dm_user.clone();
         self.avatar = meta.avatar.clone();
+        self.pinned = meta.pinned.clone();
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -645,6 +649,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
     Cmd { name: "part", args: "", help: "Leave the current room (alias /leave)" },
     Cmd { name: "threads", args: "", help: "List this room's threads" },
+    Cmd { name: "pins", args: "", help: "List this room's pinned messages (p in selection mode pins)" },
     Cmd {
         name: "thread",
         args: "[N]",
@@ -762,6 +767,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("d", "delete (asks first)"),
     ("+", "react"),
     ("t", "open the thread (or start one)"),
+    ("p", "pin or unpin it for everyone in the room (if allowed)"),
     ("s", "save the attachment"),
     ("o", "open the link"),
     ("v", "show spoilers"),
@@ -1215,6 +1221,31 @@ impl App {
                     let text = first.text();
                     w.name = thread_name(&text);
                     w.topic = Some(format!("Thread: <{}> {}", first.nick, text.lines().next().unwrap_or("")));
+                }
+            }
+            AppEvent::Pins { account, room_id, lines } => {
+                let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
+                // Numbered like search results, so /jump N goes there.
+                self.search_hits.clear();
+                let mut rows = vec![Line::info(match lines.len() {
+                    0 => "no pinned messages here; p on a message in selection mode pins it".to_owned(),
+                    n => format!("{n} pinned message(s), newest pin first; /jump N goes there"),
+                })];
+                for line in &lines {
+                    let Some(event) = line.event_id.clone() else { continue };
+                    self.search_hits.push((key.clone(), event));
+                    let when = line.ts.format("%Y-%m-%d %H:%M");
+                    let n = self.search_hits.len();
+                    let row = if line.nick.is_empty() {
+                        format!("{n:>2}: {}", line.text())
+                    } else {
+                        format!("{n:>2}: {when} <{}> {}", line.nick, snippet(&line.text()))
+                    };
+                    rows.push(Line::info(row));
+                }
+                let out = self.window_idx(&account, &room_id).unwrap_or(0);
+                for row in rows {
+                    self.windows[out].push(row, cap);
                 }
             }
             AppEvent::Threads { account, room_id, roots } => {
@@ -2229,6 +2260,16 @@ impl App {
                     self.error(e);
                 }
             }
+            Char('p') => {
+                let pin = !self.win().pinned.contains(&event);
+                match (self.win().perms, self.room_ctx()) {
+                    (Some(perms), _) if !perms.can_pin => {
+                        self.error("your power level doesn't allow pinning messages here")
+                    }
+                    (_, Ok((acct, room_id))) => acct.set_pinned(room_id, event, pin),
+                    (_, Err(e)) => self.error(e),
+                }
+            }
             Char('v') => {
                 if let Some(target) = self.win_mut().find_mut(&event) {
                     target.reveal = !target.reveal;
@@ -2630,6 +2671,7 @@ impl App {
                 Ok(())
             }),
             "info" => self.room_ctx().map(|(acct, room_id)| acct.room_info(room_id)),
+            "pins" | "pinned" => self.room_ctx().map(|(acct, room_id)| acct.pins(room_id)),
             "joinrule" => self.cmd_joinrule(args),
             "guests" => self.room_ctx().and_then(|(acct, room_id)| {
                 acct.set_guest_access(room_id, on_off(args, "usage: /guests <on|off>")?);
