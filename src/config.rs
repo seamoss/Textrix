@@ -120,6 +120,8 @@ pub struct Config {
     /// Wheel scrolling and clicking (hold Shift, or Option in iTerm2, to
     /// select text while it's on).
     pub mouse: bool,
+    /// Ask before sending a paste longer than this many lines (0: never).
+    pub paste_confirm_lines: usize,
 }
 
 impl Default for Config {
@@ -145,6 +147,7 @@ impl Default for Config {
             nicklist: true,
             sidebar_avatars: true,
             mouse: true,
+            paste_confirm_lines: 5,
         }
     }
 }

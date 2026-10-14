@@ -32,9 +32,20 @@ pub struct Input {
     completion: Option<Completion>,
     /// Nicks inserted by completion, used to build `m.mentions`.
     pub mentions: Vec<(String, OwnedUserId)>,
+    /// Multi-line text was pasted into this line.
+    pasted: bool,
 }
 
 const HISTORY_MAX: usize = 500;
+
+/// Unsent text set aside while you're in another window.
+#[derive(Debug)]
+pub struct Draft {
+    buf: Vec<char>,
+    cursor: usize,
+    mentions: Vec<(String, OwnedUserId)>,
+    pasted: bool,
+}
 
 impl Input {
     pub fn text(&self) -> String {
@@ -83,6 +94,45 @@ impl Input {
         self.history_pos = None;
         self.completion = None;
         self.mentions.clear();
+        self.pasted = false;
+    }
+
+    /// Set the line aside (`None` when it's empty), leaving the editor clear.
+    pub fn stash(&mut self) -> Option<Draft> {
+        let draft = (!self.buf.is_empty()).then(|| Draft {
+            buf: std::mem::take(&mut self.buf),
+            cursor: self.cursor,
+            mentions: std::mem::take(&mut self.mentions),
+            pasted: self.pasted,
+        });
+        self.clear();
+        draft
+    }
+
+    pub fn restore(&mut self, draft: Draft) {
+        self.clear();
+        self.cursor = draft.cursor.min(draft.buf.len());
+        self.buf = draft.buf;
+        self.mentions = draft.mentions;
+        self.pasted = draft.pasted;
+    }
+
+    /// A paste from the terminal (line endings normalised).
+    pub fn paste(&mut self, text: &str) {
+        self.completion = None;
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        self.pasted |= text.contains('\n');
+        self.insert_str(&text);
+    }
+
+    /// Lines in the message, if some of it was a multi-line paste.
+    pub fn pasted_lines(&self) -> Option<usize> {
+        self.pasted.then(|| self.buf.iter().filter(|c| **c == '\n').count() + 1)
+    }
+
+    /// The paste was looked at and accepted.
+    pub fn accept_paste(&mut self) {
+        self.pasted = false;
     }
 
     /// Any key other than Tab ends a completion cycle.

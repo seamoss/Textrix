@@ -289,6 +289,8 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let unread = match (active, w.typing.is_empty(), w.unread()) {
         (false, false, _) => "✎".to_owned(),
         (false, true, n) if n > 0 => n.to_string(),
+        // Something you started typing there and haven't sent.
+        (false, true, _) if w.has_draft() => "…".to_owned(),
         _ => String::new(),
     };
     let number = format!("{:>2} ", i + 1);
@@ -940,7 +942,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled("more", style)]);
     }
 
-    if app.confirm_delete.is_some() {
+    if let Some(lines) = app.confirm_paste {
+        let prompt = format!("send {lines} pasted lines to {}? y/n", win.name);
+        item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);
+    } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, BAR.fg(Color::Yellow).add_modifier(Modifier::BOLD))]);

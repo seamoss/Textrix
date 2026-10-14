@@ -41,7 +41,7 @@ use crate::{
     compose::{Say, compose},
     config::{Config, NotifyMode, Paths},
     convert::attachment,
-    input::{Candidate, Input},
+    input::{Candidate, Draft, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
     model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta, SpaceInfo},
@@ -128,6 +128,14 @@ pub struct Window {
     pub width: u16,
     /// Pinned messages (`m.room.pinned_events`).
     pub pinned: Vec<OwnedEventId>,
+    /// What you were typing here, kept while you're in another window.
+    unsent: Option<Unsent>,
+}
+
+#[derive(Debug)]
+struct Unsent {
+    text: Option<Draft>,
+    compose: Option<Compose>,
 }
 
 const ORPHANS_MAX: usize = 1000;
@@ -173,6 +181,7 @@ impl Window {
             seek: None,
             width: 0,
             pinned: Vec::new(),
+            unsent: None,
         }
     }
 
@@ -202,6 +211,10 @@ impl Window {
 
     pub fn account(&self) -> Option<&str> {
         self.room.as_ref().map(|k| k.account.as_str())
+    }
+
+    pub fn has_draft(&self) -> bool {
+        self.unsent.is_some()
     }
 
     /// The root event, if this is a thread window.
@@ -571,6 +584,8 @@ pub struct App {
     pub select: Option<OwnedEventId>,
     /// Waiting for y/n before deleting this message.
     pub confirm_delete: Option<OwnedEventId>,
+    /// A long paste waiting for y/n before it's sent: its line count.
+    pub confirm_paste: Option<usize>,
     /// The edit to go back to if a delete started from it is declined.
     resume_edit: Option<EditSession>,
     editing: Option<EditSession>,
@@ -885,6 +900,7 @@ impl App {
             notifications: Vec::new(),
             select: None,
             confirm_delete: None,
+            confirm_paste: None,
             resume_edit: None,
             editing: None,
             compose: None,
@@ -1798,8 +1814,7 @@ impl App {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
             Event::Paste(text) => {
-                self.input.end_completion();
-                self.input.insert_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+                self.input.paste(&text);
                 self.typed();
             }
             Event::FocusGained => self.focused = true,
@@ -1839,7 +1854,7 @@ impl App {
     /// message is selected (again to unselect); a link opens; a member's
     /// name is added to your message; the input line moves the cursor.
     fn on_click(&mut self, at: Position) {
-        if self.help.is_some() || self.confirm_delete.is_some() {
+        if self.help.is_some() || self.confirm_delete.is_some() || self.confirm_paste.is_some() {
             return;
         }
         if let Some(&(_, idx)) = self.hits.sidebar.iter().find(|(r, _)| r.contains(at)) {
@@ -1933,6 +1948,14 @@ impl App {
                     help.scroll = 0;
                 }
                 _ => {}
+            }
+            return;
+        }
+        if self.confirm_paste.take().is_some() {
+            // Declining leaves the text in the input line to edit.
+            if matches!(key.code, Char('y' | 'Y')) {
+                self.input.accept_paste();
+                self.submit();
             }
             return;
         }
@@ -2085,11 +2108,12 @@ impl App {
         self.confirm_delete = None;
         self.resume_edit = None;
         self.cancel_edit();
-        if self.compose.take().is_some() {
-            self.input.clear();
-        }
-        // Everything in the window you leave counts as seen.
+        // Unsent text (and a reply or reaction being written) stays with
+        // the window you leave, and comes back when you return.
+        let unsent = Unsent { text: self.input.stash(), compose: self.compose.take().map(|(_, c)| c) };
         let left = &mut self.windows[self.active];
+        left.unsent = (unsent.text.is_some() || unsent.compose.is_some()).then_some(unsent);
+        // Everything in the window you leave counts as seen.
         if let Some(latest) = left.latest_event() {
             left.marker = Some(latest);
         }
@@ -2107,6 +2131,14 @@ impl App {
         }
         self.active = idx;
         self.windows[idx].activity = Activity::None;
+        if let Some(unsent) = self.windows[idx].unsent.take() {
+            if let Some(text) = unsent.text {
+                self.input.restore(text);
+            }
+            if let (Some(compose), Some(key)) = (unsent.compose, self.windows[idx].room.clone()) {
+                self.compose = Some((key, compose));
+            }
+        }
     }
 
     /// Windows on screen, in pane order (just the active one unless split).
@@ -2553,6 +2585,14 @@ impl App {
     // ---- commands --------------------------------------------------------
 
     fn submit(&mut self) {
+        let limit = self.cfg.paste_confirm_lines;
+        if let Some(lines) = self.input.pasted_lines()
+            && limit > 0
+            && lines > limit
+        {
+            self.confirm_paste = Some(lines);
+            return;
+        }
         self.mentions = std::mem::take(&mut self.input.mentions);
         let text = self.input.take();
         self.stop_typing();
@@ -4097,6 +4137,55 @@ mod tests {
         app.on_timeline("t", &room, incoming("$4"), true);
         assert_eq!(app.windows[a].activity, Activity::Message);
         assert!(app.bell, "every message alerts in a room set to all");
+    }
+
+    #[test]
+    fn long_pastes_ask_before_sending() {
+        let mut app = test_app();
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        app.on_terminal(Event::Paste("1\r\n2\n3\n4\n5\n6\n7".into()));
+        app.on_key(enter);
+        assert_eq!(app.confirm_paste, Some(7));
+        app.on_key(key('n'));
+        assert_eq!((app.confirm_paste, app.input.text().lines().count()), (None, 7), "kept to edit");
+        app.on_key(enter);
+        app.on_key(key('y'));
+        assert!(app.confirm_paste.is_none() && app.input.is_empty(), "sent");
+
+        // Lines you type yourself, and short pastes, just go.
+        app.input.set_text("a\nb\nc\nd\ne\nf\ng");
+        app.on_key(enter);
+        assert!(app.confirm_paste.is_none() && app.input.is_empty());
+        app.on_terminal(Event::Paste("one\ntwo".into()));
+        app.on_key(enter);
+        assert!(app.confirm_paste.is_none() && app.input.is_empty());
+    }
+
+    #[test]
+    fn unsent_text_stays_with_its_window() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let b = room_window(&mut app, "!b:x.org", "beta");
+        app.switch_to(a);
+        app.input.set_text("half a thought");
+        let key = app.windows[a].room.clone().unwrap();
+        let event: OwnedEventId = "$1".try_into().unwrap();
+        app.compose = Some((key, Compose::React { event, nick: "bob".into() }));
+
+        app.switch_to(b);
+        assert!(app.input.is_empty() && app.compose.is_none(), "the other window starts clean");
+        assert!(app.windows[a].has_draft());
+        app.input.set_text("for beta");
+        app.switch_to(a);
+        assert_eq!(app.input.text(), "half a thought");
+        assert!(app.compose.is_some(), "the reaction being written comes back too");
+        assert!(!app.windows[a].has_draft());
+        app.switch_to(b);
+        assert_eq!(app.input.text(), "for beta");
+        app.input.clear();
+        app.switch_to(a);
+        assert!(!app.windows[b].has_draft(), "an empty line leaves nothing behind");
     }
 
     #[test]

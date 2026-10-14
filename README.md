@@ -78,6 +78,13 @@ drag to select text, or use `c` in selection mode to copy a message.
 
 While you type a command, its usage appears in dim text after the cursor.
 
+What you've typed stays with its window: switch away and it's waiting when
+you come back (`…` in the window list marks windows with unsent text). A
+paste of more than 5 lines asks `y/n` before it's sent, so a stray
+clipboard can't end up in a room; `n` leaves it in the input line to edit
+(`paste_confirm_lines`, 0 turns it off). Lines you type with Shift+Enter
+never ask.
+
 On macOS, set your terminal's Option key to act as Meta/Esc+ for the Alt
 bindings.
 
@@ -214,6 +221,7 @@ sidebar = true             # window list (F2)
 sidebar_avatars = true     # room avatars there (coloured initials without graphics)
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
+paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 scrollback = 5000
 history_page = 50
 completion_char = ":"
