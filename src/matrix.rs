@@ -31,7 +31,7 @@ use matrix_sdk::{
             client::{
                 directory::get_public_rooms_filtered,
                 filter::{FilterDefinition, LazyLoadOptions},
-                presence::set_presence,
+                presence::{get_presence, set_presence},
                 room::create_room::{self, v3::RoomPreset},
                 sync::sync_events::v3::Filter,
             },
@@ -69,7 +69,7 @@ use tokio::{
 use crate::{
     config::{Paths, ReceiptMode, create_private_dir},
     convert::Converter,
-    model::{AccountName, Item, Line, Media, Member, Permissions, RoomMeta},
+    model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta},
     servers::{EnvFile, Secret, ServerDef, write_private},
 };
 
@@ -89,6 +89,7 @@ pub enum AppEvent {
     /// Other members' read receipts: (user, nick, event they read up to).
     Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
     UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
+    Presence { account: AccountName, updates: Vec<(OwnedUserId, Presence)> },
     /// An inline image preview, encoded for the terminal (`None` on failure).
     ImagePreview { event_id: OwnedEventId, protocol: Option<Protocol> },
     Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
@@ -285,10 +286,25 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         topic: room.topic().filter(|t| !t.is_empty()),
         encrypted: room.encryption_state().is_encrypted(),
         is_dm: room.is_direct().await.unwrap_or(false),
+        dm_user: dm_user(room),
         fully_read,
         unread: counts.notification_count,
         highlights: counts.highlight_count,
     }
+}
+
+fn dm_user(room: &Room) -> Option<OwnedUserId> {
+    room.direct_targets().iter().find_map(|target| target.as_user_id().map(ToOwned::to_owned))
+}
+
+fn presence_from(state: &PresenceState, status: Option<String>, last_active_ago: Option<Duration>) -> Presence {
+    let kind = match state {
+        PresenceState::Online => PresenceKind::Online,
+        PresenceState::Unavailable => PresenceKind::Away,
+        _ => PresenceKind::Offline,
+    };
+    let last_active = last_active_ago.and_then(|ago| chrono::TimeDelta::from_std(ago).ok()).map(|ago| chrono::Local::now() - ago);
+    Presence { kind, status, last_active }
 }
 
 impl Account {
@@ -432,6 +448,19 @@ impl Account {
             }
         }
 
+        let updates: Vec<(OwnedUserId, Presence)> = response
+            .presence
+            .iter()
+            .filter_map(|raw| raw.deserialize().ok())
+            .map(|ev| {
+                let ago = ev.content.last_active_ago.map(|ms| Duration::from_millis(ms.into()));
+                (ev.sender, presence_from(&ev.content.presence, ev.content.status_msg, ago))
+            })
+            .collect();
+        if !updates.is_empty() {
+            self.notify.send(AppEvent::Presence { account: self.name.clone(), updates });
+        }
+
         for room_id in response.rooms.left.into_keys() {
             self.notify.send(AppEvent::RoomGone { account: self.name.clone(), room_id });
         }
@@ -542,6 +571,7 @@ impl Account {
             topic: room.topic().filter(|t| !t.is_empty()),
             encrypted: room.encryption_state().is_encrypted(),
             is_dm: room.direct_targets_length() > 0,
+            dm_user: dm_user(&room),
             fully_read: None,
             unread: counts.notification_count,
             highlights: counts.highlight_count,
@@ -1179,7 +1209,13 @@ impl Account {
                 Some(_) => "not verified",
                 None => "no cross-signing identity",
             };
-            let mut lines = vec![format!("{display} [{user}]"), format!(" identity : {trust}")];
+            let mut lines = vec![format!("{display} [{user}]")];
+            if let Ok(p) = acct.client.send(get_presence::v3::Request::new(user.clone())).await {
+                let presence = presence_from(&p.presence, p.status_msg.clone(), p.last_active_ago);
+                lines.push(format!(" presence : {}", presence.describe()));
+                acct.notify.send(AppEvent::Presence { account: acct.name.clone(), updates: vec![(user.clone(), presence)] });
+            }
+            lines.push(format!(" identity : {trust}"));
             for device in enc.get_user_devices(&user).await?.devices() {
                 lines.push(format!(
                     " device   : {} {} ({})",

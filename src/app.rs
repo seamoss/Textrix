@@ -27,7 +27,7 @@ use crate::{
     input::{Candidate, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
-    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, RoomMeta},
+    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta},
     notify,
     servers::{EnvFile, ServerDef, Servers},
     ui,
@@ -75,6 +75,7 @@ pub struct Window {
     pub topic: Option<String>,
     pub encrypted: bool,
     pub is_dm: bool,
+    pub dm_user: Option<OwnedUserId>,
     pub lines: VecDeque<Line>,
     pub activity: Activity,
     /// Rows scrolled up from the bottom.
@@ -120,6 +121,7 @@ impl Window {
             topic: None,
             encrypted: false,
             is_dm: false,
+            dm_user: None,
             lines: VecDeque::new(),
             activity: Activity::None,
             scroll: 0,
@@ -146,6 +148,7 @@ impl Window {
         self.topic = meta.topic.clone();
         self.encrypted = meta.encrypted;
         self.is_dm = meta.is_dm;
+        self.dm_user = meta.dm_user.clone();
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -162,6 +165,12 @@ impl Window {
 
     pub fn account(&self) -> Option<&str> {
         self.room.as_ref().map(|k| k.account.as_str())
+    }
+
+    /// The DM partner's presence, if known.
+    pub fn dm_presence<'a>(&self, app: &'a App) -> Option<&'a Presence> {
+        let user = self.dm_user.as_ref()?;
+        app.presence_of(self.account()?, user)
     }
 
     /// Unread messages according to the server.
@@ -494,6 +503,8 @@ pub struct App {
     preview_order: VecDeque<OwnedEventId>,
     /// Images the renderer wants, fetched after the draw.
     pub preview_requests: Vec<(OwnedEventId, Media)>,
+    /// Other people's presence, per server.
+    pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
 }
 
 struct Cmd {
@@ -635,6 +646,7 @@ impl App {
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_requests: Vec::new(),
+            presence: HashMap::new(),
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
         app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
@@ -701,6 +713,10 @@ impl App {
     }
 
     // ---- helpers ---------------------------------------------------------
+
+    pub fn presence_of(&self, account: &str, user: &UserId) -> Option<&Presence> {
+        self.presence.get(account)?.get(user)
+    }
 
     fn win(&self) -> &Window {
         &self.windows[self.active]
@@ -896,6 +912,9 @@ impl App {
                 {
                     line.progress = Some(percent);
                 }
+            }
+            AppEvent::Presence { account, updates } => {
+                self.presence.entry(account).or_default().extend(updates);
             }
             AppEvent::ImagePreview { event_id, protocol } => {
                 let preview = protocol.map_or(Preview::Failed, Preview::Ready);

@@ -112,6 +112,10 @@ original.
   your shared read marker (the same one Element uses) and moves when you leave
   a window or send a message.
 - `✓ nick` after a line shows how far other members have read.
+- Presence: coloured dots in the member list and on DM windows in the
+  window list (green online, yellow away, grey offline); a DM's topic bar
+  says how the other person is doing ("away: lunch", "last seen 3h ago");
+  `/whois` includes it. `✎` in the window list means someone is typing there.
 - Highlights and DMs from other windows (or any window while the terminal is
   in the background) are copied into the status window, ring the bell, and
   pop a desktop notification in iTerm2, Ghostty, WezTerm and kitty. Inside

@@ -20,7 +20,7 @@ use crate::{
     config::Config,
     input::display_width,
     links,
-    model::{Activity, Line, LineKind},
+    model::{Activity, Line, LineKind, PresenceKind},
     richtext::Marks,
 };
 
@@ -98,23 +98,32 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
             last_server = Some(server);
         }
         let active = i == app.active;
-        let unread = if !active && w.unread() > 0 { w.unread().to_string() } else { String::new() };
+        let unread = match (active, w.typing.is_empty(), w.unread()) {
+            (false, false, _) => "✎".to_owned(),
+            (false, true, n) if n > 0 => n.to_string(),
+            _ => String::new(),
+        };
         let number = format!("{:>2} ", i + 1);
-        let room_w = inner.saturating_sub(number.len() + unread.len() + 1);
+        let dot = w.dm_presence(app).map(|p| presence_dot(p.kind));
+        let dot_w = if dot.is_some() { 2 } else { 0 };
+        let room_w = inner.saturating_sub(number.len() + dot_w + display_len(&unread) + 1);
         let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
-        let pad = inner.saturating_sub(number.len() + display_len(&name) + unread.len());
+        let pad = inner.saturating_sub(number.len() + dot_w + display_len(&name) + display_len(&unread));
         let style = if active {
             Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             activity_style(w.activity)
         };
-        let row = TLine::from(vec![
-            Span::styled(number, if active { style } else { DIM }),
+        let mut parts = vec![Span::styled(number, if active { style } else { DIM })];
+        if let Some((symbol, color)) = dot {
+            parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
+        }
+        parts.extend([
             Span::styled(name, style),
             Span::styled(" ".repeat(pad), style),
             Span::styled(unread, if active { style } else { activity_style(w.activity) }),
         ]);
-        rows.push((row, active));
+        rows.push((TLine::from(parts), active));
     }
     // Keep the active window in view.
     let height = area.height as usize;
@@ -128,7 +137,15 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
 fn nicklist_width(app: &App) -> u16 {
     let win = &app.windows[app.active];
     let longest = win.members.iter().map(|m| m.name.chars().count()).max().unwrap_or(6);
-    (longest.clamp(6, 18) + 3) as u16
+    (longest.clamp(6, 18) + 5) as u16
+}
+
+fn presence_dot(kind: PresenceKind) -> (char, Color) {
+    match kind {
+        PresenceKind::Online => ('●', Color::Green),
+        PresenceKind::Away => ('●', Color::Yellow),
+        PresenceKind::Offline => ('○', Color::DarkGray),
+    }
 }
 
 fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) {
@@ -145,9 +162,14 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) {
             '+' => Style::new().fg(Color::Green),
             _ => Style::new(),
         };
-        let name: String = m.name.chars().filter(|c| !c.is_control()).take(inner.saturating_sub(1)).collect();
+        let name: String = m.name.chars().filter(|c| !c.is_control()).take(inner.saturating_sub(3)).collect();
+        let (symbol, color) = match win.account().and_then(|a| app.presence_of(a, &m.user_id)) {
+            Some(p) => presence_dot(p.kind),
+            None => (' ', Color::Reset),
+        };
         rows.push(TLine::from(vec![
             Span::styled(m.prefix.to_string(), prefix_style),
+            Span::styled(format!("{symbol} "), Style::new().fg(color)),
             Span::styled(name, Style::new().fg(nick_color(m.user_id.as_str()))),
         ]));
     }
@@ -164,11 +186,14 @@ fn display_len(s: &str) -> usize {
 
 fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
     let win = &app.windows[app.active];
-    let text = match (&win.room, &win.topic) {
+    let mut text = match (&win.room, &win.topic) {
         (None, _) => format!(" Textrix {} — {}", env!("CARGO_PKG_VERSION"), app.servers_summary()),
         (Some(_), Some(topic)) => format!(" {topic}"),
         (Some(_), None) => format!(" {}", win.name),
     };
+    if let Some(presence) = win.dm_presence(app) {
+        text.push_str(&format!(" · {} is {}", win.name, presence.describe()));
+    }
     let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     f.render_widget(Paragraph::new(text).style(BAR), area);
 }

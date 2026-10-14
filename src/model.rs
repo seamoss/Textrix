@@ -140,6 +140,49 @@ impl Item {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresenceKind {
+    Online,
+    Away,
+    Offline,
+}
+
+/// Someone's presence, as last reported by the server.
+#[derive(Clone, Debug)]
+pub struct Presence {
+    pub kind: PresenceKind,
+    pub status: Option<String>,
+    pub last_active: Option<DateTime<Local>>,
+}
+
+impl Presence {
+    /// `online`, `away: lunch`, `last seen 3h ago`…
+    pub fn describe(&self) -> String {
+        let base = match self.kind {
+            PresenceKind::Online => "online".to_owned(),
+            PresenceKind::Away => "away".to_owned(),
+            PresenceKind::Offline => match self.last_active {
+                Some(at) => format!("last seen {}", ago(Local::now() - at)),
+                None => "offline".to_owned(),
+            },
+        };
+        match self.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(status) => format!("{base}: {status}"),
+            None => base,
+        }
+    }
+}
+
+pub fn ago(elapsed: chrono::TimeDelta) -> String {
+    let mins = elapsed.num_minutes();
+    match mins {
+        ..1 => "just now".to_owned(),
+        1..60 => format!("{mins}m ago"),
+        60..1440 => format!("{}h ago", mins / 60),
+        _ => format!("{}d ago", mins / 1440),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RoomMeta {
     pub room_id: OwnedRoomId,
@@ -147,6 +190,8 @@ pub struct RoomMeta {
     pub topic: Option<String>,
     pub encrypted: bool,
     pub is_dm: bool,
+    /// The other person in a direct-message room.
+    pub dm_user: Option<OwnedUserId>,
     /// Where you stopped reading (`m.fully_read`), shared with other clients.
     pub fully_read: Option<OwnedEventId>,
     pub unread: u64,
@@ -178,4 +223,21 @@ pub struct Member {
     pub user_id: OwnedUserId,
     /// `@` for admins, `+` for moderators, ' ' otherwise.
     pub prefix: char,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presence_reads_naturally() {
+        let at = |mins| Some(Local::now() - chrono::TimeDelta::minutes(mins));
+        let p = |kind, status: Option<&str>, last_active| Presence { kind, status: status.map(Into::into), last_active };
+        assert_eq!(p(PresenceKind::Online, None, None).describe(), "online");
+        assert_eq!(p(PresenceKind::Away, Some("lunch"), None).describe(), "away: lunch");
+        assert_eq!(p(PresenceKind::Offline, None, at(5)).describe(), "last seen 5m ago");
+        assert_eq!(p(PresenceKind::Offline, None, at(180)).describe(), "last seen 3h ago");
+        assert_eq!(p(PresenceKind::Offline, None, at(3000)).describe(), "last seen 2d ago");
+        assert_eq!(p(PresenceKind::Offline, Some("  "), None).describe(), "offline");
+    }
 }
