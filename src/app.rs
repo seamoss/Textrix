@@ -13,7 +13,6 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyM
 use futures_util::StreamExt;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
-    room::{AllowRule, JoinRule, Restricted},
     events::{
         relation::Thread,
         room::history_visibility::HistoryVisibility,
@@ -21,6 +20,7 @@ use matrix_sdk::ruma::{
             AddMentions, ForwardThread, ReplacementMetadata, ReplyMetadata, ReplyWithinThread, RoomMessageEventContent,
         },
     },
+    room::{AllowRule, JoinRule, Restricted},
 };
 use ratatui::{DefaultTerminal, layout::Size};
 use ratatui_image::{
@@ -227,9 +227,11 @@ impl Window {
         // echo, whether or not the send acknowledgement got here first: the
         // server copy carries what the echo can't (e.g. the uploaded media).
         if let (Some(txn), Some(id)) = (&line.txn_id, &line.event_id)
-            && let Some(echo) = self.lines.iter_mut().rev().find(|l| {
-                l.own && l.txn_id.as_ref() == Some(txn) && l.event_id.as_ref().is_none_or(|e| e == id)
-            })
+            && let Some(echo) = self
+                .lines
+                .iter_mut()
+                .rev()
+                .find(|l| l.own && l.txn_id.as_ref() == Some(txn) && l.event_id.as_ref().is_none_or(|e| e == id))
         {
             line.reply_nick = echo.reply_nick.take();
             line.reply_snippet = echo.reply_snippet.take();
@@ -419,9 +421,10 @@ impl Window {
 
     /// The newest attachment, optionally from one nick.
     fn last_media(&self, nick: Option<&str>) -> Option<&Line> {
-        self.lines.iter().rev().find(|l| {
-            l.media.is_some() && !l.redacted && nick.is_none_or(|n| l.nick.eq_ignore_ascii_case(n))
-        })
+        self.lines
+            .iter()
+            .rev()
+            .find(|l| l.media.is_some() && !l.redacted && nick.is_none_or(|n| l.nick.eq_ignore_ascii_case(n)))
     }
 }
 
@@ -609,11 +612,7 @@ const COMMANDS: &[Cmd] = &[
         help: "Who can read past messages: members since joining/invited, all members, or anyone",
     },
     Cmd { name: "publish", args: "<on|off>", help: "List the room in the server's room directory" },
-    Cmd {
-        name: "upgrade",
-        args: "[version] [confirm]",
-        help: "Show room versions, or move the room to a new version",
-    },
+    Cmd { name: "upgrade", args: "[version] [confirm]", help: "Show room versions, or move the room to a new version" },
     Cmd { name: "rooms", args: "", help: "List every joined room, including closed windows" },
     Cmd { name: "invites", args: "", help: "List pending invitations" },
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
@@ -774,7 +773,9 @@ pub fn help_rows(filter: &str) -> Vec<HelpRow> {
     for (title, entries) in sections {
         let matching: Vec<(String, String)> = entries
             .into_iter()
-            .filter(|(k, d)| filter.is_empty() || k.to_lowercase().contains(&filter) || d.to_lowercase().contains(&filter))
+            .filter(|(k, d)| {
+                filter.is_empty() || k.to_lowercase().contains(&filter) || d.to_lowercase().contains(&filter)
+            })
             .collect();
         if !matching.is_empty() {
             rows.push(HelpRow::Section(title));
@@ -968,9 +969,9 @@ impl App {
 
     fn thread_idx(&self, account: &str, room_id: &OwnedRoomId, root: &EventId) -> Option<usize> {
         self.windows.iter().position(|w| {
-            w.room.as_ref().is_some_and(|k| {
-                k.account == account && k.room_id == *room_id && k.thread.as_deref() == Some(root)
-            })
+            w.room
+                .as_ref()
+                .is_some_and(|k| k.account == account && k.room_id == *room_id && k.thread.as_deref() == Some(root))
         })
     }
 
@@ -1026,9 +1027,7 @@ impl App {
             .iter()
             .find(|m| m.name.to_lowercase() == wanted)
             .map(|m| m.user_id.clone())
-            .or_else(|| {
-                win.lines.iter().rev().find(|l| l.nick.to_lowercase() == wanted).and_then(|l| l.sender.clone())
-            })
+            .or_else(|| win.lines.iter().rev().find(|l| l.nick.to_lowercase() == wanted).and_then(|l| l.sender.clone()))
             .ok_or_else(|| format!("no one called {arg} here; use the full @user:server ID"))
     }
 
@@ -1364,8 +1363,7 @@ impl App {
         let idx = match self.window_idx(account, room_id) {
             Some(idx) => idx,
             None => {
-                let wakes = live
-                    && items.iter().any(|i| matches!(i, Item::Line(l) if l.is_message() && !l.own));
+                let wakes = live && items.iter().any(|i| matches!(i, Item::Line(l) if l.is_message() && !l.own));
                 match wakes.then(|| self.reopen(account, room_id)).flatten() {
                     Some(idx) => idx,
                     None => return,
@@ -1398,7 +1396,9 @@ impl App {
         for (tidx, root) in &threads {
             for item in &items {
                 match item {
-                    Item::Line(line) if line.thread_root.as_ref() == Some(root) || line.event_id.as_ref() == Some(root) => {
+                    Item::Line(line)
+                        if line.thread_root.as_ref() == Some(root) || line.event_id.as_ref() == Some(root) =>
+                    {
                         let added = self.windows[*tidx].push(line.clone(), cap);
                         if added && live && !line.own && *tidx != self.active {
                             let level = if line.highlight { Activity::Highlight } else { Activity::Message };
@@ -1413,7 +1413,8 @@ impl App {
 
         for item in items {
             let Some(line) = self.windows[idx].apply(item, cap, live) else { continue };
-            if live && let Some(root) = &line.thread_root
+            if live
+                && let Some(root) = &line.thread_root
                 && let Some(root_line) = self.windows[idx].find_mut(root)
             {
                 root_line.thread_count = Some(root_line.thread_count.unwrap_or(0) + 1);
@@ -1885,9 +1886,7 @@ impl App {
             return;
         }
         let n = self.windows.len();
-        if let Some(idx) =
-            (1..=n).map(|step| (self.active + step) % n).find(|&i| self.windows[i].activity == best)
-        {
+        if let Some(idx) = (1..=n).map(|step| (self.active + step) % n).find(|&i| self.windows[i].activity == best) {
             self.switch_to(idx);
         }
     }
@@ -1926,12 +1925,7 @@ impl App {
     // ---- selection mode --------------------------------------------------
 
     fn selectable(&self) -> Vec<OwnedEventId> {
-        self.win()
-            .lines
-            .iter()
-            .filter(|l| l.is_message() && !l.pending)
-            .filter_map(|l| l.event_id.clone())
-            .collect()
+        self.win().lines.iter().filter(|l| l.is_message() && !l.pending).filter_map(|l| l.event_id.clone()).collect()
     }
 
     fn selected_line(&self) -> Option<&Line> {
@@ -3270,7 +3264,11 @@ impl App {
     fn cmd_connect(&mut self, args: &str) -> Result<(), String> {
         let name = args.trim().to_lowercase();
         let state = self.accounts.get(name.as_str()).ok_or_else(|| {
-            if name.is_empty() { "usage: /connect <server>".into() } else { format!("no server named {name} in the dotfile") }
+            if name.is_empty() {
+                "usage: /connect <server>".into()
+            } else {
+                format!("no server named {name} in the dotfile")
+            }
         })?;
         if state.account.is_some() || state.status == ConnStatus::Connecting {
             return Err(format!("{name} is already connected"));
@@ -3319,7 +3317,8 @@ impl App {
             for row in rows {
                 self.info(row);
             }
-            for (title, keys) in [("Keys", KEYS), ("Selecting messages (Alt+Up)", SELECT_KEYS), ("Editing (Shift+Up)", EDIT_KEYS)]
+            for (title, keys) in
+                [("Keys", KEYS), ("Selecting messages (Alt+Up)", SELECT_KEYS), ("Editing (Shift+Up)", EDIT_KEYS)]
             {
                 self.info(format!("{title}:"));
                 for (key, what) in keys {
@@ -3361,10 +3360,8 @@ fn split_first(s: &str) -> (&str, &str) {
 /// `~/…`, or a `file://` URL.
 fn parse_path(arg: &str) -> PathBuf {
     let arg = arg.trim();
-    let unquoted = ['"', '\'']
-        .iter()
-        .find_map(|q| arg.strip_prefix(*q).and_then(|a| a.strip_suffix(*q)))
-        .map(str::to_owned);
+    let unquoted =
+        ['"', '\''].iter().find_map(|q| arg.strip_prefix(*q).and_then(|a| a.strip_suffix(*q))).map(str::to_owned);
     let raw = unquoted.unwrap_or_else(|| {
         let mut out = String::new();
         let mut chars = arg.chars();
@@ -3693,7 +3690,10 @@ mod tests {
 
     #[test]
     fn window_list_groups_rooms_by_space_without_renumbering() {
-        use crate::ui::{SidebarEntry::{Header, Window as Win}, sidebar_entries};
+        use crate::ui::{
+            SidebarEntry::{Header, Window as Win},
+            sidebar_entries,
+        };
         let mut app = test_app();
         for (room, name) in [("!b:x.org", "loose room"), ("!a:x.org", "in space")] {
             let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
@@ -3745,7 +3745,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths { base: dir.clone(), env_file: dir.join(".env") };
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file.clone()), Servers::default(), tx);
+        let mut app =
+            App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file.clone()), Servers::default(), tx);
         assert!(app.show_sidebar);
 
         crate::servers::write_private(&paths.env_file, b"TEXTRIX_NEW_USER=@me:localhost\n").unwrap();
@@ -3773,7 +3774,9 @@ mod tests {
         assert_eq!(titles(&upgrade), vec!["Commands"]);
         assert!(upgrade.iter().any(|r| matches!(r, HelpRow::Entry(k, _) if k.starts_with("/upgrade"))));
         let leave = help_rows("/leave");
-        assert!(leave.iter().any(|r| matches!(r, HelpRow::Entry(k, d) if k.starts_with("/part") && d.contains("/leave"))));
+        assert!(
+            leave.iter().any(|r| matches!(r, HelpRow::Entry(k, d) if k.starts_with("/part") && d.contains("/leave")))
+        );
         assert!(help_rows("zzzz-nothing").is_empty());
     }
 
@@ -3781,8 +3784,15 @@ mod tests {
     fn typing_clears_when_that_person_speaks() {
         let mut app = test_app();
         let room_id: OwnedRoomId = "!r:x.org".try_into().unwrap();
-        app.windows.push(Window::new(Some(WinKey { account: "t".into(), room_id: room_id.clone(), thread: None }), "r".into()));
-        app.on_event(AppEvent::Typing { account: "t".into(), room_id: room_id.clone(), nicks: vec!["alice".into(), "bob".into()] });
+        app.windows.push(Window::new(
+            Some(WinKey { account: "t".into(), room_id: room_id.clone(), thread: None }),
+            "r".into(),
+        ));
+        app.on_event(AppEvent::Typing {
+            account: "t".into(),
+            room_id: room_id.clone(),
+            nicks: vec!["alice".into(), "bob".into()],
+        });
         assert_eq!(app.windows[1].typing, vec!["alice", "bob"]);
         app.on_timeline("t", &room_id, vec![Item::Line(msg("$1", "done typing"))], true);
         assert_eq!(app.windows[1].typing, vec!["bob"], "alice spoke, so she isn't typing");

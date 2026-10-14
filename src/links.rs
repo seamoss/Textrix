@@ -74,9 +74,10 @@ mod tests {
     #[test]
     fn finds_links_and_trims_sentence_punctuation() {
         assert_eq!(urls("see https://example.org/a, then http://x.io."), vec!["https://example.org/a", "http://x.io"]);
-        assert_eq!(urls("(https://en.wikipedia.org/wiki/Rust_(language))"), vec![
-            "https://en.wikipedia.org/wiki/Rust_(language)"
-        ]);
+        assert_eq!(
+            urls("(https://en.wikipedia.org/wiki/Rust_(language))"),
+            vec!["https://en.wikipedia.org/wiki/Rust_(language)"]
+        );
         assert_eq!(urls("<https://a.b/c>"), vec!["https://a.b/c"]);
         assert!(urls("nohttps://x.y and https:// alone").is_empty());
     }

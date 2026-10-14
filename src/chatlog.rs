@@ -103,7 +103,8 @@ fn now_time() -> String {
 
 /// `general-chat.KYsdfd`: readable, and unique per room.
 fn room_folder(name: &str, room_id: &RoomId) -> String {
-    let id: String = room_id.as_str().trim_start_matches('!').chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect();
+    let id: String =
+        room_id.as_str().trim_start_matches('!').chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect();
     let slug = safe_name(name);
     if slug.is_empty() { id } else { format!("{slug}.{id}") }
 }

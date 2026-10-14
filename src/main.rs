@@ -74,9 +74,7 @@ async fn run() -> Result<()> {
     let log = tracing_appender::rolling::never(&paths.base, "textrix.log");
     let (log, _log_guard) = tracing_appender::non_blocking(log);
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("TEXTRIX_LOG").unwrap_or_else(|_| EnvFilter::new("warn,textrix=info")),
-        )
+        .with_env_filter(EnvFilter::try_from_env("TEXTRIX_LOG").unwrap_or_else(|_| EnvFilter::new("warn,textrix=info")))
         .with_writer(log)
         .with_ansi(false)
         .init();

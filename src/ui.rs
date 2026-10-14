@@ -117,7 +117,8 @@ fn draw_help(f: &mut Frame, app: &mut App) {
     }
     let inner_h = area.height.saturating_sub(2) as usize;
     help.scroll = help.scroll.min(lines.len().saturating_sub(inner_h));
-    let filter = if help.filter.is_empty() { " type to filter ".to_owned() } else { format!(" filter: {} ", help.filter) };
+    let filter =
+        if help.filter.is_empty() { " type to filter ".to_owned() } else { format!(" filter: {} ", help.filter) };
     let block = Block::bordered()
         .border_style(Style::new().fg(Color::Cyan))
         .title(Span::styled(" Textrix help ", MARKER))
@@ -167,7 +168,8 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
         if app.accounts.len() > 1 {
             out.push(SidebarEntry::Header(server.to_owned()));
         }
-        let windows: Vec<usize> = (1..app.windows.len()).filter(|&i| app.windows[i].account() == Some(server)).collect();
+        let windows: Vec<usize> =
+            (1..app.windows.len()).filter(|&i| app.windows[i].account() == Some(server)).collect();
         let spaces = app.spaces.get(server).map(Vec::as_slice).unwrap_or_default();
         let mut placed: HashSet<usize> = HashSet::new();
         for space in spaces {
@@ -579,7 +581,11 @@ fn render_line_with(
             let mut at = 0;
             for range in links::url_ranges(&line.body) {
                 push(&mut cells, &line.body[at..range.start], body_style);
-                push(&mut cells, &line.body[range.clone()], body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED));
+                push(
+                    &mut cells,
+                    &line.body[range.clone()],
+                    body_style.fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
+                );
                 at = range.end;
             }
             push(&mut cells, &line.body[at..], body_style);
@@ -648,9 +654,7 @@ fn sanitize(c: char) -> Option<char> {
     match c {
         '\n' => Some('\n'),
         '\t' => Some(' '),
-        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{fe0f}' => {
-            None
-        }
+        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{fe0f}' => None,
         c if c.is_control() => None,
         c => Some(c),
     }

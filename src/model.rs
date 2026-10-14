@@ -131,9 +131,19 @@ pub struct Media {
 pub enum Item {
     Line(Line),
     /// `m.replace`: `fallback` is shown if the original is not loaded.
-    Edit { target: OwnedEventId, body: String, fallback: Line },
-    Redact { target: OwnedEventId },
-    React { target: OwnedEventId, key: String, nick: String },
+    Edit {
+        target: OwnedEventId,
+        body: String,
+        fallback: Line,
+    },
+    Redact {
+        target: OwnedEventId,
+    },
+    React {
+        target: OwnedEventId,
+        key: String,
+        nick: String,
+    },
 }
 
 impl Item {
@@ -250,7 +260,8 @@ mod tests {
     #[test]
     fn presence_reads_naturally() {
         let at = |mins| Some(Local::now() - chrono::TimeDelta::minutes(mins));
-        let p = |kind, status: Option<&str>, last_active| Presence { kind, status: status.map(Into::into), last_active };
+        let p =
+            |kind, status: Option<&str>, last_active| Presence { kind, status: status.map(Into::into), last_active };
         assert_eq!(p(PresenceKind::Online, None, None).describe(), "online");
         assert_eq!(p(PresenceKind::Away, Some("lunch"), None).describe(), "away: lunch");
         assert_eq!(p(PresenceKind::Offline, None, at(5)).describe(), "last seen 5m ago");

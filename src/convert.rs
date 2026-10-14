@@ -9,8 +9,7 @@ use matrix_sdk::{
     ruma::{
         MilliSecondsSinceUnixEpoch, OwnedTransactionId, OwnedUserId, UserId,
         events::{
-            AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
-            SyncStateEvent,
+            AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent, SyncMessageLikeEvent, SyncStateEvent,
             room::{
                 member::MembershipChange,
                 message::{MessageFormat, MessageType, Relation},

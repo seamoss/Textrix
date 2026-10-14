@@ -13,51 +13,50 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use eyeball::SharedObservable;
 use futures_util::StreamExt;
 use matrix_sdk::{
-    Client, Room, RoomMemberships, RoomState,
+    Client, Room, RoomMemberships, RoomState, TransmissionProgress,
+    attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
     authentication::matrix::MatrixSession,
     config::SyncSettings,
+    deserialized_responses::RawSyncOrStrippedState,
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
     },
+    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::{IncludeRelations, MessagesOptions, Receipts, RelationsOptions},
     ruma::{
         OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedServerName, OwnedTransactionId, OwnedUserId, RoomOrAliasId,
-        UInt,
+        RoomVersionId, UInt,
         api::Direction,
-        directory::Filter as DirectoryFilter,
-        events::relation::RelationType,
-        RoomVersionId,
-        room::{JoinRule, RoomType},
-        serde::Raw,
-        presence::PresenceState,
         api::{
             client::{
                 directory::get_public_rooms_filtered,
                 discovery::get_capabilities,
-                room::{Visibility as DirectoryVisibility, upgrade_room},
                 filter::{FilterDefinition, LazyLoadOptions},
                 presence::{get_presence, set_presence},
                 room::create_room::{
                     self,
                     v3::{CreationContent, RoomPreset},
                 },
+                room::{Visibility as DirectoryVisibility, upgrade_room},
                 space::get_hierarchy,
-                threads::get_threads,
                 sync::sync_events::v3::Filter,
+                threads::get_threads,
             },
             error::ErrorKind,
         },
+        directory::Filter as DirectoryFilter,
+        events::relation::RelationType,
         events::{
             AnyStateEvent, AnySyncEphemeralRoomEvent, InitialStateEvent, MessageLikeEventType, StateEvent,
             StateEventType, SyncStateEvent,
-            presence::PresenceEvent,
             fully_read::FullyReadEventContent,
-            space::child::SpaceChildEventContent,
             ignored_user_list::IgnoredUserListEventContent,
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
+            presence::PresenceEvent,
             reaction::ReactionEventContent,
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
             relation::Annotation,
@@ -69,18 +68,17 @@ use matrix_sdk::{
                 message::RoomMessageEventContent,
                 power_levels::UserPowerLevel,
             },
+            space::child::SpaceChildEventContent,
         },
+        presence::PresenceState,
+        room::{JoinRule, RoomType},
+        serde::Raw,
     },
-    deserialized_responses::RawSyncOrStrippedState,
     sliding_sync::{SlidingSyncList, SlidingSyncListLoadingState, SlidingSyncMode, Version as SlidingVersion},
     sync::RoomUpdates,
-    TransmissionProgress,
-    attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
-    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
 };
 use ratatui::layout::Size;
 use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
-use eyeball::SharedObservable;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -99,47 +97,164 @@ pub type Tx = UnboundedSender<AppEvent>;
 
 pub enum AppEvent {
     Connected(Account),
-    ConnectFailed { account: AccountName, error: String },
+    ConnectFailed {
+        account: AccountName,
+        error: String,
+    },
     /// A sync succeeded (`first` on the initial one after connecting).
-    Synced { account: AccountName, first: bool },
-    SyncError { account: AccountName, error: String },
-    Rooms { account: AccountName, rooms: Vec<RoomMeta> },
-    RoomGone { account: AccountName, room_id: OwnedRoomId },
-    Timeline { account: AccountName, room_id: OwnedRoomId, items: Vec<Item>, live: bool },
-    History { account: AccountName, room_id: OwnedRoomId, items: Vec<Item>, end: Option<String>, failed: bool },
-    Typing { account: AccountName, room_id: OwnedRoomId, nicks: Vec<String> },
+    Synced {
+        account: AccountName,
+        first: bool,
+    },
+    SyncError {
+        account: AccountName,
+        error: String,
+    },
+    Rooms {
+        account: AccountName,
+        rooms: Vec<RoomMeta>,
+    },
+    RoomGone {
+        account: AccountName,
+        room_id: OwnedRoomId,
+    },
+    Timeline {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        items: Vec<Item>,
+        live: bool,
+    },
+    History {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        items: Vec<Item>,
+        end: Option<String>,
+        failed: bool,
+    },
+    Typing {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        nicks: Vec<String>,
+    },
     /// Other members' read receipts: (user, nick, event they read up to).
-    Receipts { account: AccountName, room_id: OwnedRoomId, receipts: Vec<(OwnedUserId, String, OwnedEventId)>, live: bool },
-    UploadProgress { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, percent: u8 },
-    Presence { account: AccountName, updates: Vec<(OwnedUserId, Presence)> },
-    Spaces { account: AccountName, spaces: Vec<SpaceInfo> },
+    Receipts {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        receipts: Vec<(OwnedUserId, String, OwnedEventId)>,
+        live: bool,
+    },
+    UploadProgress {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        txn_id: OwnedTransactionId,
+        percent: u8,
+    },
+    Presence {
+        account: AccountName,
+        updates: Vec<(OwnedUserId, Presence)>,
+    },
+    Spaces {
+        account: AccountName,
+        spaces: Vec<SpaceInfo>,
+    },
     /// A thread's root and replies (chronological) for its window.
-    Thread { account: AccountName, room_id: OwnedRoomId, root: OwnedEventId, items: Vec<Item> },
+    Thread {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        root: OwnedEventId,
+        items: Vec<Item>,
+    },
     /// `/threads`: the room's thread roots, newest first.
-    Threads { account: AccountName, room_id: OwnedRoomId, roots: Vec<Line> },
+    Threads {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        roots: Vec<Line>,
+    },
     /// Matches from `/search -deep` in one room, newest first.
-    SearchResults { account: AccountName, room_id: OwnedRoomId, hits: Vec<Line> },
+    SearchResults {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        hits: Vec<Line>,
+    },
     /// A window-list avatar, encoded for the terminal (`None` on failure).
-    Avatar { account: AccountName, room_id: OwnedRoomId, url: OwnedMxcUri, protocol: Option<Protocol> },
+    Avatar {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        url: OwnedMxcUri,
+        protocol: Option<Protocol>,
+    },
     /// An inline image preview, encoded for the terminal (`None` on failure).
-    ImagePreview { event_id: OwnedEventId, protocol: Option<Protocol> },
-    Members { account: AccountName, room_id: OwnedRoomId, members: Vec<Member>, show: bool },
-    Permissions { account: AccountName, room_id: OwnedRoomId, perms: Permissions },
-    Focus { account: AccountName, room_id: OwnedRoomId },
-    Sent { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, event_id: OwnedEventId },
-    SendFailed { account: AccountName, room_id: OwnedRoomId, txn_id: OwnedTransactionId, error: String },
-    KeysReceived { account: AccountName, room_id: OwnedRoomId, sessions: Vec<String> },
-    Recovered { account: AccountName },
-    Redecrypted { account: AccountName, room_id: OwnedRoomId, item: Item },
-    Profile { account: AccountName, nick: String },
+    ImagePreview {
+        event_id: OwnedEventId,
+        protocol: Option<Protocol>,
+    },
+    Members {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        members: Vec<Member>,
+        show: bool,
+    },
+    Permissions {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        perms: Permissions,
+    },
+    Focus {
+        account: AccountName,
+        room_id: OwnedRoomId,
+    },
+    Sent {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        txn_id: OwnedTransactionId,
+        event_id: OwnedEventId,
+    },
+    SendFailed {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        txn_id: OwnedTransactionId,
+        error: String,
+    },
+    KeysReceived {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        sessions: Vec<String>,
+    },
+    Recovered {
+        account: AccountName,
+    },
+    Redecrypted {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        item: Item,
+    },
+    Profile {
+        account: AccountName,
+        nick: String,
+    },
     /// Whether this device is cross-signed (trusted by your other sessions).
-    Trust { account: AccountName, verified: bool },
-    LoggedOut { account: AccountName },
-    Away { account: AccountName, message: Option<String> },
+    Trust {
+        account: AccountName,
+        verified: bool,
+    },
+    LoggedOut {
+        account: AccountName,
+    },
+    Away {
+        account: AccountName,
+        message: Option<String>,
+    },
     /// Drop an ignored user's lines from the account's windows.
-    Ignored { account: AccountName, user_id: OwnedUserId },
+    Ignored {
+        account: AccountName,
+        user_id: OwnedUserId,
+    },
     /// A line for a room window (or the status window when `room_id` is None).
-    Notice { account: Option<AccountName>, room_id: Option<OwnedRoomId>, line: Line },
+    Notice {
+        account: Option<AccountName>,
+        room_id: Option<OwnedRoomId>,
+        line: Line,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -383,7 +498,8 @@ fn presence_from(state: &PresenceState, status: Option<String>, last_active_ago:
         PresenceState::Unavailable => PresenceKind::Away,
         _ => PresenceKind::Offline,
     };
-    let last_active = last_active_ago.and_then(|ago| chrono::TimeDelta::from_std(ago).ok()).map(|ago| chrono::Local::now() - ago);
+    let last_active =
+        last_active_ago.and_then(|ago| chrono::TimeDelta::from_std(ago).ok()).map(|ago| chrono::Local::now() - ago);
     Presence { kind, status, last_active }
 }
 
@@ -399,7 +515,8 @@ impl Account {
                 rooms.push(room_meta(&room).await);
             }
             acct.notify.send(AppEvent::Rooms { account: acct.name.clone(), rooms });
-            acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
+            acct.notify
+                .send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
             acct.watch_room_keys().await;
         }));
 
@@ -463,7 +580,8 @@ impl Account {
         let mut failing = false;
         let mut backoff = Duration::from_secs(1);
         loop {
-            let presence = if self.away.load(Ordering::Relaxed) { PresenceState::Unavailable } else { PresenceState::Online };
+            let presence =
+                if self.away.load(Ordering::Relaxed) { PresenceState::Unavailable } else { PresenceState::Online };
             match self.client.sync_once(settings.clone().set_presence(presence)).await {
                 Ok(response) => {
                     self.process_presence(&response.presence);
@@ -587,7 +705,10 @@ impl Account {
                         if let Some(ErrorKind::UnknownToken(_)) = e.client_api_error_kind() {
                             self.notify.send(AppEvent::ConnectFailed {
                                 account: self.name.clone(),
-                                error: format!("session is no longer valid ({e}); run /logout {} and reconnect", self.name),
+                                error: format!(
+                                    "session is no longer valid ({e}); run /logout {} and reconnect",
+                                    self.name
+                                ),
                             });
                             return Ok(());
                         }
@@ -628,7 +749,8 @@ impl Account {
             self.notify.send(AppEvent::Rooms { account: self.name.clone(), rooms: metas });
         }
         if spaces_changed {
-            self.notify.send(AppEvent::Spaces { account: self.name.clone(), spaces: joined_spaces(&self.client).await });
+            self.notify
+                .send(AppEvent::Spaces { account: self.name.clone(), spaces: joined_spaces(&self.client).await });
         }
 
         for (room_id, update) in rooms.joined {
@@ -656,7 +778,11 @@ impl Account {
                         for user in typing.content.user_ids.iter().filter(|u| **u != self.user_id) {
                             nicks.push(conv.nick(user).await);
                         }
-                        self.notify.send(AppEvent::Typing { account: self.name.clone(), room_id: room_id.clone(), nicks });
+                        self.notify.send(AppEvent::Typing {
+                            account: self.name.clone(),
+                            room_id: room_id.clone(),
+                            nicks,
+                        });
                     }
                     Ok(AnySyncEphemeralRoomEvent::Receipt(receipt)) => {
                         let mut receipts = Vec::new();
@@ -841,7 +967,8 @@ impl Account {
                     Some(room) => room,
                     None => {
                         let room = acct.client.create_dm(&user).await?;
-                        acct.notify.send(AppEvent::Rooms { account: acct.name.clone(), rooms: vec![room_meta(&room).await] });
+                        acct.notify
+                            .send(AppEvent::Rooms { account: acct.name.clone(), rooms: vec![room_meta(&room).await] });
                         room
                     }
                 }
@@ -873,13 +1000,23 @@ impl Account {
         });
     }
 
-    async fn upload_file(&self, room_id: &OwnedRoomId, path: &Path, txn_id: &OwnedTransactionId) -> Result<OwnedEventId> {
+    async fn upload_file(
+        &self,
+        room_id: &OwnedRoomId,
+        path: &Path,
+        txn_id: &OwnedTransactionId,
+    ) -> Result<OwnedEventId> {
         let room = self.room(room_id)?;
         let data = tokio::fs::read(path).await.with_context(|| format!("reading {}", path.display()))?;
         if let Ok(max) = self.client.load_or_fetch_max_upload_size().await
             && data.len() as u64 > u64::from(max)
         {
-            bail!("{} is {}, over the server's {} upload limit", path.display(), human_size(data.len() as u64), human_size(max.into()));
+            bail!(
+                "{} is {}, over the server's {} upload limit",
+                path.display(),
+                human_size(data.len() as u64),
+                human_size(max.into())
+            );
         }
         let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("not a file path")?;
         let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -962,7 +1099,8 @@ impl Account {
             (Some(thumbnail), _) => media_api.get_media_content(&file(thumbnail), true).await?,
             (None, MediaSource::Plain(_)) => {
                 let settings = MediaThumbnailSettings::new(UInt::from(width.max(96)), UInt::from(height.max(96)));
-                let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::Thumbnail(settings) };
+                let request =
+                    MediaRequestParameters { source: media.source.clone(), format: MediaFormat::Thumbnail(settings) };
                 match media_api.get_media_content(&request, true).await {
                     Ok(bytes) => bytes,
                     Err(_) => full.await?,
@@ -978,8 +1116,10 @@ impl Account {
         let acct = self.clone();
         tokio::spawn(async move {
             let settings = MediaThumbnailSettings::new(UInt::from(64u32), UInt::from(64u32));
-            let request =
-                MediaRequestParameters { source: MediaSource::Plain(url.clone()), format: MediaFormat::Thumbnail(settings) };
+            let request = MediaRequestParameters {
+                source: MediaSource::Plain(url.clone()),
+                format: MediaFormat::Thumbnail(settings),
+            };
             let protocol = match acct.client.media().get_media_content(&request, true).await {
                 Ok(bytes) => encode_image(bytes, picker, cells).await.ok(),
                 Err(e) => {
@@ -1003,7 +1143,12 @@ impl Account {
             file.write_all(&data).with_context(|| format!("writing {}", path.display()))?;
             acct.notify.line(
                 Some(room_id),
-                Line::info(format!("saved {} ({}) to {}", media.filename, human_size(data.len() as u64), path.display())),
+                Line::info(format!(
+                    "saved {} ({}) to {}",
+                    media.filename,
+                    human_size(data.len() as u64),
+                    path.display()
+                )),
             );
             Ok(())
         });
@@ -1054,9 +1199,7 @@ impl Account {
             .await;
             let account = acct.name.clone();
             match result {
-                Ok((items, end)) => {
-                    acct.notify.send(AppEvent::History { account, room_id, items, end, failed: false })
-                }
+                Ok((items, end)) => acct.notify.send(AppEvent::History { account, room_id, items, end, failed: false }),
                 Err(e) => {
                     acct.notify.line(Some(room_id.clone()), Line::error(format!("loading history: {e:#}")));
                     acct.notify.send(AppEvent::History { account, room_id, items: vec![], end: from, failed: true });
@@ -1175,7 +1318,11 @@ impl Account {
             for event_id in event_ids {
                 let Ok(ev) = room.event(&event_id, None).await else { continue };
                 if let Some(item) = conv.convert(&ev).await {
-                    acct.notify.send(AppEvent::Redecrypted { account: acct.name.clone(), room_id: room_id.clone(), item });
+                    acct.notify.send(AppEvent::Redecrypted {
+                        account: acct.name.clone(),
+                        room_id: room_id.clone(),
+                        item,
+                    });
                 }
             }
         });
@@ -1281,7 +1428,8 @@ impl Account {
                 request.preset = Some(if public { RoomPreset::PublicChat } else { RoomPreset::PrivateChat });
                 let room = acct.client.create_room(request).await?;
                 acct.notify.info(format!("created space {}; add rooms with /space <name> add", room.room_id()));
-                acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
+                acct.notify
+                    .send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
                 return Ok(());
             }
             if public {
@@ -1311,7 +1459,8 @@ impl Account {
             space.send_state_event_for_key(&child, SpaceChildEventContent::new(via)).await?;
             let what = if add { "added to" } else { "removed from" };
             acct.notify.line(out, Line::info(format!("{what} the space")));
-            acct.notify.send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
+            acct.notify
+                .send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
             Ok(())
         });
     }
@@ -1424,7 +1573,8 @@ impl Account {
             if !caps.available.contains_key(&new_version) {
                 bail!("the server doesn't support room version {new_version}");
             }
-            let response = acct.client.send(upgrade_room::v3::Request::new(room_id.clone(), new_version.clone())).await?;
+            let response =
+                acct.client.send(upgrade_room::v3::Request::new(room_id.clone(), new_version.clone())).await?;
             let replacement = response.replacement_room;
             acct.notify.line(out, Line::info(format!("upgraded to version {new_version}: {replacement}")));
             let room = acct.client.join_room_by_id(&replacement).await?;
@@ -1700,7 +1850,8 @@ impl Account {
             if let Ok(p) = acct.client.send(get_presence::v3::Request::new(user.clone())).await {
                 let presence = presence_from(&p.presence, p.status_msg.clone(), p.last_active_ago);
                 lines.push(format!(" presence : {}", presence.describe()));
-                acct.notify.send(AppEvent::Presence { account: acct.name.clone(), updates: vec![(user.clone(), presence)] });
+                acct.notify
+                    .send(AppEvent::Presence { account: acct.name.clone(), updates: vec![(user.clone(), presence)] });
             }
             lines.push(format!(" identity : {trust}"));
             for device in enc.get_user_devices(&user).await?.devices() {

@@ -66,9 +66,7 @@ impl ServerDef {
     /// The homeserver to contact: the explicit one, or the server part of
     /// the user ID (resolved via `.well-known`).
     pub fn homeserver_or_server_name(&self) -> Option<&str> {
-        self.homeserver
-            .as_deref()
-            .or_else(|| self.user.split_once(':').map(|(_, server)| server))
+        self.homeserver.as_deref().or_else(|| self.user.split_once(':').map(|(_, server)| server))
     }
 }
 
@@ -299,11 +297,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("textrix-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".env");
-        write_private(
-            &path,
-            b"TEXTRIX_A_USER=@me:a.org\nTEXTRIX_A_PASSWORD='hunter2'\nTEXTRIX_B_HOMESERVER=x\n",
-        )
-        .unwrap();
+        write_private(&path, b"TEXTRIX_A_USER=@me:a.org\nTEXTRIX_A_PASSWORD='hunter2'\nTEXTRIX_B_HOMESERVER=x\n")
+            .unwrap();
         let env = EnvFile::new(path.clone());
         let servers = env.servers().unwrap();
         assert_eq!(servers.defs.len(), 1);

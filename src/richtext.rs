@@ -168,23 +168,21 @@ impl Writer {
                     m.color = Some(color);
                 }
             }
-            MatrixElement::A(anchor) => {
-                match anchor.href {
-                    Some(AnchorUri::MatrixTo(_) | AnchorUri::Matrix(_)) => m.mention = true,
-                    Some(AnchorUri::Other(url)) => {
-                        m.link = true;
-                        let label = node_text(node);
-                        self.children(node, m);
-                        let shown = label.trim().trim_end_matches('/');
-                        let bare = url.split_once("://").map_or(url.as_ref(), |(_, rest)| rest).trim_end_matches('/');
-                        if !shown.is_empty() && shown != url.trim_end_matches('/') && shown != bare {
-                            self.text(&format!(" ({url})"), Marks { dim: true, ..marks });
-                        }
-                        return;
+            MatrixElement::A(anchor) => match anchor.href {
+                Some(AnchorUri::MatrixTo(_) | AnchorUri::Matrix(_)) => m.mention = true,
+                Some(AnchorUri::Other(url)) => {
+                    m.link = true;
+                    let label = node_text(node);
+                    self.children(node, m);
+                    let shown = label.trim().trim_end_matches('/');
+                    let bare = url.split_once("://").map_or(url.as_ref(), |(_, rest)| rest).trim_end_matches('/');
+                    if !shown.is_empty() && shown != url.trim_end_matches('/') && shown != bare {
+                        self.text(&format!(" ({url})"), Marks { dim: true, ..marks });
                     }
-                    _ => {}
+                    return;
                 }
-            }
+                _ => {}
+            },
             MatrixElement::H(_) => {
                 self.block_break();
                 self.children(node, Marks { bold: true, ..m });
