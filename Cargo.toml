@@ -1,0 +1,34 @@
+[package]
+name = "textrix"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "An irssi-style terminal client for Matrix"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+dirs = "7"
+eyeball = "0.8"
+futures-util = "0.3"
+imagesize = "0.15"
+matrix-sdk = { version = "0.19.1", features = ["bundled-sqlite", "markdown"] }
+mime = "0.3"
+mime_guess = "2"
+ratatui = "0.30"
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
+toml = "1"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-width = "0.2"
+zeroize = "1"
+
+[profile.release]
+lto = "thin"
+strip = true

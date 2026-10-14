@@ -1,0 +1,7 @@
+/target
+
+# Credentials never belong in the repo.
+.textrix
+.env
+*.env
+!.env.example
