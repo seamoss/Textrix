@@ -2227,6 +2227,30 @@ impl Account {
         });
     }
 
+    /// `/markread`: read up to `latest`, or to the room's newest event when
+    /// nothing of it is loaded.
+    pub fn mark_room_read(&self, room_id: OwnedRoomId, latest: Option<OwnedEventId>, mode: ReceiptMode) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let latest = match latest {
+                Some(id) => Some(id),
+                None => {
+                    let newest = async {
+                        let mut options = MessagesOptions::backward();
+                        options.limit = 1u32.into();
+                        let messages = acct.room(&room_id).ok()?.messages(options).await.ok()?;
+                        messages.chunk.first()?.event_id().map(ToOwned::to_owned)
+                    };
+                    newest.await
+                }
+            };
+            match latest {
+                Some(event_id) => acct.mark_read(room_id, event_id, mode),
+                None => tracing::debug!("nothing to mark read in {room_id}"),
+            }
+        });
+    }
+
     pub fn typing(&self, room_id: OwnedRoomId, typing: bool) {
         let Ok(room) = self.room(&room_id) else { return };
         tokio::spawn(async move {

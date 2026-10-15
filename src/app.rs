@@ -597,6 +597,8 @@ pub struct App {
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
     pub split: Option<Split>,
+    /// How many aliases deep the current command runs.
+    alias_depth: usize,
     pub switcher: Option<Switcher>,
     /// Windows you were in, most recent first (for the switcher).
     recent: Vec<Option<WinKey>>,
@@ -726,6 +728,13 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "split", args: "<window>", help: "Show another window in a pane below (F6 moves between panes)" },
     Cmd { name: "vsplit", args: "<window>", help: "Show another window in a pane beside this one" },
     Cmd { name: "unsplit", args: "[all]", help: "Close this pane (the window stays open), or all but this one" },
+    Cmd { name: "markread", args: "[all]", help: "Mark this room read (all: every room), for your other clients too" },
+    Cmd {
+        name: "alias",
+        args: "[name [command]]",
+        help: "Your own command: /alias tt /window goto Tetrix Tests ($0 $1 $1- $* take arguments, ; chains)",
+    },
+    Cmd { name: "unalias", args: "<name>", help: "Remove an alias" },
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
     Cmd {
@@ -918,6 +927,7 @@ impl App {
             clipboard: None,
             help: None,
             split: None,
+            alias_depth: 0,
             switcher: None,
             recent: Vec::new(),
             push_modes: HashMap::new(),
@@ -2638,6 +2648,7 @@ impl App {
             (Some(cmd), Some(rest)) if rest.trim().is_empty() => Some(format!("{} — {}", cmd.args, cmd.help)),
             (Some(_), Some(_)) => None,
             (Some(cmd), None) => Some(format!(" {} — {}", cmd.args, cmd.help)),
+            (None, _) if let Some(expansion) = self.cfg.aliases.get(&word) => Some(format!("  → {expansion}")),
             (None, None) => {
                 let names: Vec<&str> =
                     COMMANDS.iter().map(|c| c.name).filter(|n| n.starts_with(word.as_str())).collect();
@@ -2670,8 +2681,13 @@ impl App {
         let lower = word.to_lowercase();
 
         if at_start && let Some(prefix) = lower.strip_prefix('/') {
-            let mut names: Vec<&str> =
-                COMMANDS.iter().map(|c| c.name).chain(ALIASES.iter().map(|a| a.0)).chain(["wc", "wl"]).collect();
+            let mut names: Vec<&str> = COMMANDS
+                .iter()
+                .map(|c| c.name)
+                .chain(ALIASES.iter().map(|a| a.0))
+                .chain(["wc", "wl"])
+                .chain(self.cfg.aliases.keys().map(String::as_str))
+                .collect();
             names.sort_unstable();
             return names
                 .into_iter()
@@ -2816,6 +2832,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "markread" | "read" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
             "devices" | "sessions" => self.cmd_devices(args),
             "hilight" | "highlight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
@@ -2989,11 +3006,71 @@ impl App {
                 self.quit = true;
                 Ok(())
             }
-            other => Err(format!("unknown command /{other}; try /help")),
+            "alias" => self.cmd_alias(args),
+            "unalias" => self.cmd_unalias(args),
+            other => match self.cfg.aliases.get(other).cloned() {
+                Some(template) => self.run_alias(&template, args),
+                None => Err(format!("unknown command /{other}; try /help")),
+            },
         };
         if let Err(e) = result {
             self.error(e);
         }
+    }
+
+    /// Run an alias's commands; aliases may use other aliases, a few deep.
+    fn run_alias(&mut self, template: &str, args: &str) -> Result<(), String> {
+        if self.alias_depth >= 8 {
+            return Err("aliases call each other too deeply (a loop?)".into());
+        }
+        self.alias_depth += 1;
+        for cmd in expand_alias(template, args) {
+            self.command(&cmd);
+        }
+        self.alias_depth -= 1;
+        Ok(())
+    }
+
+    fn cmd_alias(&mut self, args: &str) -> Result<(), String> {
+        let (name, expansion) = split_first(args.trim());
+        let name = name.trim_start_matches('/').to_lowercase();
+        if name.is_empty() {
+            if self.cfg.aliases.is_empty() {
+                self.info("no aliases yet; e.g. /alias tt /window goto Tetrix Tests");
+            }
+            let rows: Vec<String> = self.cfg.aliases.iter().map(|(n, e)| format!("  /{n} → {e}")).collect();
+            rows.into_iter().for_each(|row| self.info(row));
+            return Ok(());
+        }
+        if expansion.trim().is_empty() {
+            let text = match self.cfg.aliases.get(&name) {
+                Some(e) => format!("/{name} → {e}"),
+                None => format!("no alias /{name}"),
+            };
+            self.info(text);
+            return Ok(());
+        }
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("alias names are letters, digits, - and _".into());
+        }
+        if COMMANDS.iter().any(|c| c.name == name) || ALIASES.iter().any(|(a, _)| *a == name) {
+            return Err(format!("/{name} is a built-in command"));
+        }
+        let expansion = expansion.trim().to_owned();
+        crate::config::save_alias(&self.paths.config_file(), &name, Some(&expansion)).map_err(|e| format!("{e:#}"))?;
+        self.info(format!("/{name} → {expansion} (saved in {})", self.paths.config_file().display()));
+        self.cfg.aliases.insert(name, expansion);
+        Ok(())
+    }
+
+    fn cmd_unalias(&mut self, args: &str) -> Result<(), String> {
+        let name = args.trim().trim_start_matches('/').to_lowercase();
+        if self.cfg.aliases.remove(&name).is_none() {
+            return Err(format!("no alias /{name}; /alias lists them"));
+        }
+        crate::config::save_alias(&self.paths.config_file(), &name, None).map_err(|e| format!("{e:#}"))?;
+        self.info(format!("removed /{name}"));
+        Ok(())
     }
 
     fn say(&mut self, text: &str, kind: Say) {
@@ -3673,6 +3750,40 @@ impl App {
         Ok(())
     }
 
+    /// Clear activity and unread counts, move the "new messages" divider to
+    /// the end, and tell the server (read marker, plus a receipt as set by
+    /// `read_receipts`).
+    fn cmd_markread(&mut self, args: &str) -> Result<(), String> {
+        let all = match args.trim() {
+            "" => false,
+            "all" => true,
+            _ => return Err("usage: /markread [all]".into()),
+        };
+        let targets: Vec<usize> = if all { (0..self.windows.len()).collect() } else { vec![self.active] };
+        let mode = self.cfg.read_receipts;
+        let mut rooms = 0;
+        for idx in targets {
+            let w = &mut self.windows[idx];
+            w.activity = Activity::None;
+            let latest = w.latest_event();
+            if let Some(latest) = &latest {
+                w.marker = Some(latest.clone());
+            }
+            // Thread windows share their room's read marker.
+            let Some(key) = w.room.clone().filter(|k| k.thread.is_none()) else { continue };
+            w.unread = (0, 0);
+            w.last_receipt = latest.clone();
+            if let Some(acct) = self.connected(&key.account) {
+                acct.mark_room_read(key.room_id, latest, mode);
+                rooms += 1;
+            }
+        }
+        if all {
+            self.info(format!("marked {rooms} room(s) read"));
+        }
+        Ok(())
+    }
+
     fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
         let name = match args.trim() {
             "" => {
@@ -3962,6 +4073,59 @@ fn on_off(args: &str, usage: &str) -> Result<bool, String> {
 }
 
 /// Split off the first whitespace-separated word.
+/// irssi-style alias expansion: `$0`, `$1`… are the arguments, `$1-` the
+/// first onwards, `$*` all of them, `$$` a dollar sign; with none of those,
+/// the arguments go on the end. `;` separates commands (`\;` is a literal
+/// one). Returns the commands without their leading `/`.
+fn expand_alias(template: &str, args: &str) -> Vec<String> {
+    let words: Vec<&str> = args.split_whitespace().collect();
+    let mut out = String::new();
+    let mut used_args = false;
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&';') {
+            out.push('\u{0}');
+            chars.next();
+            continue;
+        }
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('$') => {
+                chars.next();
+                out.push('$');
+            }
+            Some('*') => {
+                chars.next();
+                out.push_str(args.trim());
+                used_args = true;
+            }
+            Some(d) if d.is_ascii_digit() => {
+                chars.next();
+                let n = d.to_digit(10).unwrap_or(0) as usize;
+                if chars.peek() == Some(&'-') {
+                    chars.next();
+                    out.push_str(&words.get(n..).unwrap_or_default().join(" "));
+                } else {
+                    out.push_str(words.get(n).copied().unwrap_or_default());
+                }
+                used_args = true;
+            }
+            _ => out.push('$'),
+        }
+    }
+    if !used_args && !args.trim().is_empty() {
+        out.push(' ');
+        out.push_str(args.trim());
+    }
+    out.split(';')
+        .map(|cmd| cmd.replace('\u{0}', ";").trim().trim_start_matches('/').to_owned())
+        .filter(|cmd| !cmd.is_empty())
+        .collect()
+}
+
 fn split_first(s: &str) -> (&str, &str) {
     let s = s.trim_start();
     match s.find(char::is_whitespace) {
@@ -4306,6 +4470,61 @@ mod tests {
         app.on_timeline("t", &room, incoming("$4"), true);
         assert_eq!(app.windows[a].activity, Activity::Message);
         assert!(app.bell, "every message alerts in a room set to all");
+    }
+
+    #[test]
+    fn aliases_expand_like_irssi() {
+        assert_eq!(expand_alias("/window goto Tetrix Tests", ""), ["window goto Tetrix Tests"]);
+        assert_eq!(expand_alias("/msg @bob:x.org", "hi there"), ["msg @bob:x.org hi there"], "args appended");
+        assert_eq!(expand_alias("/msg $0 says $1-", "@a:x b c d"), ["msg @a:x says b c d"]);
+        assert_eq!(expand_alias("/me waves at $*, costs $$5", "bob"), ["me waves at bob, costs $5"]);
+        assert_eq!(expand_alias("/markread all; /window 1", ""), ["markread all", "window 1"]);
+        assert_eq!(expand_alias("/say a\\;b", ""), ["say a;b"]);
+        assert_eq!(expand_alias("/say $3", "a b"), ["say"], "missing arguments are empty");
+    }
+
+    #[test]
+    fn aliases_run_save_and_refuse_loops() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-alias-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        std::fs::write(app.paths.config_file(), "# my settings\nbell = false\n").unwrap();
+        app.cmd_alias("tt /theme mono").unwrap();
+        let saved = std::fs::read_to_string(app.paths.config_file()).unwrap();
+        assert!(saved.starts_with("# my settings\nbell = false\n"), "the rest of the file is kept: {saved}");
+        assert!(saved.contains("[aliases]") && saved.contains("tt = \"/theme mono\""), "{saved}");
+        assert!(app.cmd_alias("join /say no").is_err(), "built-ins can't be replaced");
+
+        app.command("tt");
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Mono, "the alias ran");
+        app.cfg.aliases.insert("loop".into(), "/loop".into());
+        app.command("loop");
+        assert!(app.windows[0].lines.iter().any(|l| l.body.contains("too deeply")));
+
+        app.cmd_unalias("tt").unwrap();
+        let saved = std::fs::read_to_string(app.paths.config_file()).unwrap();
+        assert_eq!(saved, "# my settings\nbell = false\n", "no empty [aliases] left behind");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn markread_clears_activity_and_moves_the_divider() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let b = room_window(&mut app, "!b:x.org", "beta");
+        for idx in [a, b] {
+            app.windows[idx].lines.push_back(msg(&format!("$x{idx}"), "hi"));
+            (app.windows[idx].activity, app.windows[idx].unread) = (Activity::Message, (3, 0));
+        }
+        app.switch_to(a);
+        app.cmd_markread("").unwrap();
+        assert_eq!((app.windows[a].activity, app.windows[a].unread()), (Activity::None, 0));
+        assert_eq!(app.windows[a].marker.as_ref().map(|e| e.as_str()), Some("$x1"));
+        assert_eq!(app.windows[b].activity, Activity::Message, "only this room");
+        app.cmd_markread("all").unwrap();
+        assert_eq!((app.windows[b].activity, app.windows[b].unread()), (Activity::None, 0));
+        assert!(app.cmd_markread("everything").is_err());
     }
 
     #[test]

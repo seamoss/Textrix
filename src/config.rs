@@ -133,6 +133,8 @@ pub struct Config {
     pub history_cache: bool,
     /// Built-in colours: "default" (dark backgrounds), "light", or "mono".
     pub theme: ThemeName,
+    /// Your own commands (`/alias`): name -> what it runs.
+    pub aliases: BTreeMap<String, String>,
     /// Colour overrides, e.g. `link = "lightcyan"`, `bar_bg = "#203050"`.
     pub colors: BTreeMap<String, String>,
     /// `theme` with `colors` applied (worked out when loading).
@@ -167,6 +169,7 @@ impl Default for Config {
             history_cache: true,
             theme: ThemeName::Default,
             colors: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             palette: Theme::default(),
         }
     }
@@ -196,6 +199,36 @@ pub enum NotifyMode {
     Osc777,
     Osc99,
     Off,
+}
+
+/// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping
+/// the rest of the file (comments and layout) as it is.
+pub fn save_alias(path: &Path, name: &str, expansion: Option<&str>) -> Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parsing {}", path.display()))?;
+    let aliases = doc
+        .entry("aliases")
+        .or_insert(toml_edit::table())
+        .as_table_like_mut()
+        .with_context(|| format!("aliases in {} isn't a table", path.display()))?;
+    match expansion {
+        Some(expansion) => {
+            aliases.insert(name, toml_edit::value(expansion));
+        }
+        None => {
+            aliases.remove(name);
+            if aliases.is_empty() {
+                doc.remove("aliases");
+            }
+        }
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string()).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 
 impl Config {
