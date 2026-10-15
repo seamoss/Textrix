@@ -27,9 +27,26 @@ file is refused while other users can read it. Real environment variables
 override the file, so `op run --env-file … -- textrix` works with
 `op://` references.
 
-State lives in `~/.textrix/` (`TEXTRIX_HOME` overrides it): per-server session
-and crypto store under `accounts/<name>/`, window order in `layout.json`,
+State lives in `~/.textrix/` (`TEXTRIX_HOME` overrides it): each server's
+encrypted store under `accounts/<name>/`, window order in `layout.json`,
 logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
+
+### The local store is encrypted
+
+Each server's store (encryption keys, room state, the history cache) is
+encrypted at rest with a random key that Textrix keeps, together with the
+login session, in the system keychain: the macOS Keychain, or the Secret
+Service via `secret-tool` on Linux. Nothing that could read your messages
+sits on disk in the clear, and `/logout` removes the keychain item too.
+
+A store from an older Textrix (`store/` and `session.json`) is converted
+once at startup: Textrix exports its room keys, signs in as a new session
+with the dotfile password, imports the keys, signs the old session out and
+deletes the old files; the recovery key verifies the new session as usual.
+If anything fails before the new session exists, it keeps using the old
+store and tries again next time. Without a keychain the store stays
+unencrypted (Textrix says so); `encrypt_store = false` keeps new stores
+unencrypted too.
 
 ## Encryption
 
@@ -172,9 +189,8 @@ cached lines are dropped and its history loads from the server as usual,
 so you never see old and new messages joined across a gap. Older history
 still loads from the server when you scroll up.
 
-The cache holds messages decrypted, in `accounts/<name>/` next to the
-encryption keys and session that could decrypt them anyway (mode 700);
-`/logout` deletes it. `history_cache = false` turns it off and clears it.
+The cache lives in the encrypted store; `/logout` deletes it, and
+`history_cache = false` turns it off and clears it.
 
 ### Images
 
@@ -285,6 +301,7 @@ mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 theme = "default"          # or "light", "mono"; [colors] overrides parts (see above)
 history_cache = true       # show recent messages instantly at startup
+encrypt_store = true       # encrypt the local store, key in the system keychain
 scrollback = 5000
 history_page = 50
 completion_char = ":"

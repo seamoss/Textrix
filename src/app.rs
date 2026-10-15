@@ -1007,12 +1007,16 @@ impl App {
         let Some(state) = self.accounts.get_mut(name) else { return };
         state.status = ConnStatus::Connecting;
         let (def, paths, env, tx) = (state.def.clone(), self.paths.clone(), self.env.clone(), self.tx.clone());
-        let (sync_mode, history_cache) = (self.cfg.sync, self.cfg.history_cache);
+        let opts = matrix::ConnectOptions {
+            sync_mode: self.cfg.sync,
+            history_cache: self.cfg.history_cache,
+            encrypt_store: self.cfg.encrypt_store,
+        };
         let homeserver = def.homeserver_or_server_name().unwrap_or("?").to_owned();
         self.status(Line::info(format!("{name}: connecting to {homeserver} as {}", def.user)));
         let name = AccountName::from(name);
         tokio::spawn(async move {
-            let event = match matrix::connect(def, paths, env, sync_mode, history_cache, tx.clone()).await {
+            let event = match matrix::connect(def, paths, env, opts, tx.clone()).await {
                 Ok(account) => AppEvent::Connected(account),
                 Err(e) => AppEvent::ConnectFailed { account: name, error: format!("{e:#}") },
             };

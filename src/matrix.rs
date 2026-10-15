@@ -98,6 +98,7 @@ use crate::{
     convert::Converter,
     model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo},
     servers::{EnvFile, Secret, ServerDef, write_private},
+    vault,
 };
 
 pub type Tx = UnboundedSender<AppEvent>;
@@ -341,71 +342,88 @@ pub struct Account {
     history_cache: bool,
 }
 
+/// Settings [`connect`] takes from the config.
+#[derive(Clone, Copy, Debug)]
+pub struct ConnectOptions {
+    pub sync_mode: SyncMode,
+    pub history_cache: bool,
+    pub encrypt_store: bool,
+}
+
+/// What the keychain holds for an account with an encrypted store.
+#[derive(Serialize, Deserialize)]
+struct Vaulted {
+    passphrase: String,
+    session: SavedSession,
+}
+
+/// The keychain item for an account (its directory keeps separate homes
+/// apart).
+fn vault_account(name: &str, dir: &Path) -> String {
+    format!("{name} {}", dir.display())
+}
+
 /// Log in (or restore the saved session) for one dotfile server.
-pub async fn connect(
-    def: ServerDef,
-    paths: Paths,
-    env: EnvFile,
-    sync_mode: SyncMode,
-    history_cache: bool,
-    tx: Tx,
-) -> Result<Account> {
+///
+/// Stores are encrypted at rest when a keychain is available: the store
+/// key and the session live in the keychain, the store in `store-enc/`. An
+/// older unencrypted `store/` + `session.json` is migrated once by signing
+/// in as a new session and carrying the room keys over.
+pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOptions, tx: Tx) -> Result<Account> {
     let name: AccountName = def.name.as_str().into();
     let notify = Notifier { name: name.clone(), tx };
     let dir = paths.account_dir(&def.name);
     create_private_dir(&dir)?;
-    let session_path = dir.join("session.json");
-    let store = dir.join("store");
+    let legacy_session = dir.join("session.json");
+    let legacy_store = dir.join("store");
+    let enc_store = dir.join("store-enc");
+    let vault_name = vault_account(&def.name, &dir);
+    let keychain = vault::available();
+    if !keychain && enc_store.exists() {
+        bail!("this account's local store is encrypted, but the system keychain can't be reached to unlock it");
+    }
+    let vaulted = match keychain.then(|| vault::get(&vault_name)).transpose()?.flatten() {
+        Some(json) => Some(serde_json::from_str::<Vaulted>(&json).context("reading the keychain item")?),
+        None => None,
+    };
 
-    let restored = session_path.exists();
-    let client = match load_session(&session_path)? {
-        Some(saved) => {
-            if !same_user(&def.user, &saved.session.meta.user_id) {
-                bail!(
-                    "saved session is for {} but the dotfile says {}; run /logout {} first",
-                    saved.session.meta.user_id,
-                    def.user,
-                    def.name
-                );
-            }
-            notify.info(format!("restoring session for {} on {}", saved.session.meta.user_id, saved.homeserver));
-            let client = client_builder(&store).homeserver_url(&saved.homeserver).build().await?;
-            client.restore_session(saved.session).await?;
-            client
+    let (client, restored) = match vaulted {
+        Some(v) if enc_store.exists() => {
+            (restore(&def, &enc_store, Some(&v.passphrase), v.session, &notify).await?, true)
         }
-        None => {
-            let homeserver = def.homeserver_or_server_name().with_context(|| {
-                format!("set TEXTRIX_{}_HOMESERVER or use a full @user:server ID", def.name.to_uppercase())
-            })?;
-            let password = env.secret(&def.name, Secret::Password)?.with_context(|| {
-                format!("no saved session and TEXTRIX_{}_PASSWORD is not set", def.name.to_uppercase())
-            })?;
-            set_aside_orphaned_store(&store)?;
-            notify.info(format!("logging in to {homeserver} as {}", def.user));
-            let login = async {
-                let client = client_builder(&store).server_name_or_homeserver_url(homeserver).build().await?;
-                client
-                    .matrix_auth()
-                    .login_username(&def.user, password.expose_secret())
-                    .initial_device_display_name("Textrix")
-                    .await?;
-                anyhow::Ok(client)
-            };
-            let result = login.await;
-            drop(password);
-            let client = match result {
-                Ok(client) => client,
-                Err(e) => {
-                    // The store was created for a device that never existed.
-                    let _ = std::fs::remove_dir_all(&store);
-                    return Err(e);
+        Some(_) => {
+            notify.info("the encrypted local store is missing; signing in as a new session");
+            vault::delete(&vault_name)?;
+            (login_encrypted(&def, &env, &enc_store, &vault_name, &notify).await?, false)
+        }
+        None => match load_session(&legacy_session)? {
+            Some(saved) => {
+                let old = restore(&def, &legacy_store, None, saved, &notify).await?;
+                if !(opts.encrypt_store && keychain) {
+                    (old, true)
+                } else {
+                    match migrate(old, &def, &env, &dir, &vault_name, &notify).await {
+                        Ok(new) => (new, false),
+                        Err((old, e)) => {
+                            notify
+                                .error(format!("couldn't encrypt the local store ({e:#}); using it as it is for now"));
+                            (old, true)
+                        }
+                    }
                 }
-            };
-            let session = client.matrix_auth().session().context("login returned no session")?;
-            let saved = SavedSession { homeserver: client.homeserver().to_string(), session };
-            write_private(&session_path, &serde_json::to_vec_pretty(&saved)?)?;
-            client
-        }
+            }
+            None if opts.encrypt_store && keychain => {
+                (login_encrypted(&def, &env, &enc_store, &vault_name, &notify).await?, false)
+            }
+            None => {
+                if opts.encrypt_store {
+                    notify.info("no system keychain found, so the local store isn't encrypted");
+                }
+                let client = login(&def, &env, &legacy_store, None, &notify).await?;
+                write_private(&legacy_session, &serde_json::to_vec_pretty(&saved_session(&client)?)?)?;
+                (client, false)
+            }
+        },
     };
 
     let user_id = client.user_id().context("client has no user id")?.to_owned();
@@ -420,14 +438,174 @@ pub async fn connect(
         verify: Default::default(),
         tasks: Default::default(),
         away: Default::default(),
-        sync_mode,
+        sync_mode: opts.sync_mode,
         fresh_login: !restored,
-        history_cache,
+        history_cache: opts.history_cache,
     })
 }
 
-fn client_builder(store: &std::path::Path) -> matrix_sdk::ClientBuilder {
-    Client::builder().sqlite_store(store, None).with_encryption_settings(EncryptionSettings {
+async fn restore(
+    def: &ServerDef,
+    store: &Path,
+    passphrase: Option<&str>,
+    saved: SavedSession,
+    notify: &Notifier,
+) -> Result<Client> {
+    if !same_user(&def.user, &saved.session.meta.user_id) {
+        bail!(
+            "saved session is for {} but the dotfile says {}; run /logout {} first",
+            saved.session.meta.user_id,
+            def.user,
+            def.name
+        );
+    }
+    notify.info(format!("restoring session for {} on {}", saved.session.meta.user_id, saved.homeserver));
+    let client = client_builder(store, passphrase).homeserver_url(&saved.homeserver).build().await?;
+    client.restore_session(saved.session).await?;
+    Ok(client)
+}
+
+/// Log in with the dotfile's password, into a new store.
+async fn login(
+    def: &ServerDef,
+    env: &EnvFile,
+    store: &Path,
+    passphrase: Option<&str>,
+    notify: &Notifier,
+) -> Result<Client> {
+    let homeserver = def
+        .homeserver_or_server_name()
+        .with_context(|| format!("set TEXTRIX_{}_HOMESERVER or use a full @user:server ID", def.name.to_uppercase()))?;
+    let password = env
+        .secret(&def.name, Secret::Password)?
+        .with_context(|| format!("no saved session and TEXTRIX_{}_PASSWORD is not set", def.name.to_uppercase()))?;
+    set_aside_orphaned_store(store)?;
+    notify.info(format!("logging in to {homeserver} as {}", def.user));
+    let login = async {
+        let client = client_builder(store, passphrase).server_name_or_homeserver_url(homeserver).build().await?;
+        client
+            .matrix_auth()
+            .login_username(&def.user, password.expose_secret())
+            .initial_device_display_name("Textrix")
+            .await?;
+        anyhow::Ok(client)
+    };
+    let result = login.await;
+    drop(password);
+    if result.is_err() {
+        // The store was created for a device that never existed.
+        let _ = std::fs::remove_dir_all(store);
+    }
+    result
+}
+
+/// Log in into a new encrypted store, keeping its key and the session in
+/// the keychain.
+async fn login_encrypted(
+    def: &ServerDef,
+    env: &EnvFile,
+    store: &Path,
+    vault_name: &str,
+    notify: &Notifier,
+) -> Result<Client> {
+    let passphrase = vault::random_key()?;
+    let client = login(def, env, store, Some(&passphrase), notify).await?;
+    let vaulted = Vaulted { passphrase: passphrase.to_string(), session: saved_session(&client)? };
+    let json = zeroize::Zeroizing::new(serde_json::to_string(&vaulted)?);
+    drop(vaulted);
+    if let Err(e) = vault::set(vault_name, &json) {
+        // Without the key the store could never be opened again.
+        let _ = client.matrix_auth().logout().await;
+        drop(client);
+        let _ = std::fs::remove_dir_all(store);
+        return Err(e.context("saving the store key in the keychain"));
+    }
+    Ok(client)
+}
+
+/// Move an unencrypted session to an encrypted store: export its room
+/// keys, sign in as a new session, import them, sign the old one out and
+/// delete its files. Until the new session exists nothing is changed, and
+/// the old client comes back on failure.
+async fn migrate(
+    old: Client,
+    def: &ServerDef,
+    env: &EnvFile,
+    dir: &Path,
+    vault_name: &str,
+    notify: &Notifier,
+) -> Result<Client, (Client, anyhow::Error)> {
+    notify.info("encrypting the local store (once): signing in as a new session and bringing the room keys along");
+    let keys_file = dir.join("migrating-keys.txt");
+    let enc_store = dir.join("store-enc");
+    let prepared = async {
+        let passphrase = vault::random_key()?;
+        let _ = std::fs::remove_file(&keys_file);
+        create_private_file(&keys_file)?;
+        old.encryption().export_room_keys(keys_file.clone(), &passphrase, |_| true).await?;
+        // Leftovers of an interrupted attempt.
+        if enc_store.exists() {
+            std::fs::remove_dir_all(&enc_store)?;
+        }
+        let new = login_encrypted(def, env, &enc_store, vault_name, notify).await?;
+        anyhow::Ok((new, passphrase))
+    };
+    let (new, passphrase) = match prepared.await {
+        Ok(ready) => ready,
+        Err(e) => {
+            let _ = std::fs::remove_file(&keys_file);
+            return Err((old, e));
+        }
+    };
+
+    // From here the new session is the one in use.
+    let old_device = old.device_id().map(|d| d.to_string()).unwrap_or_default();
+    let keys_moved = match new.encryption().import_room_keys(keys_file.clone(), &passphrase).await {
+        Ok(result) => {
+            notify.info(format!("carried over {} room keys", result.total_count));
+            true
+        }
+        Err(e) => {
+            notify
+                .error(format!("couldn't carry the room keys over ({e}); the old store is kept as store.unencrypted"));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(&keys_file);
+    if let Err(e) = old.matrix_auth().logout().await {
+        notify.error(format!("couldn't sign the old session out ({e}); /devices delete {old_device} removes it"));
+    }
+    drop(old);
+    let legacy_store = dir.join("store");
+    if keys_moved {
+        let _ = std::fs::remove_dir_all(&legacy_store);
+    } else {
+        let _ = std::fs::rename(&legacy_store, dir.join("store.unencrypted"));
+    }
+    let _ = std::fs::remove_file(dir.join("session.json"));
+    notify.info("the local store is now encrypted, with its key in the system keychain");
+    Ok(new)
+}
+
+fn saved_session(client: &Client) -> Result<SavedSession> {
+    let session = client.matrix_auth().session().context("login returned no session")?;
+    Ok(SavedSession { homeserver: client.homeserver().to_string(), session })
+}
+
+/// A new file only you can read (never an existing one).
+fn create_private_file(path: &Path) -> Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).with_context(|| format!("creating {}", path.display()))
+}
+
+fn client_builder(store: &Path, passphrase: Option<&str>) -> matrix_sdk::ClientBuilder {
+    Client::builder().sqlite_store(store, passphrase).with_encryption_settings(EncryptionSettings {
         auto_enable_cross_signing: true,
         backup_download_strategy: BackupDownloadStrategy::OneShot,
         auto_enable_backups: true,
@@ -1655,14 +1833,7 @@ impl Account {
         let acct = self.clone();
         self.spawn_op(out.clone(), async move {
             let passphrase = acct.keys_passphrase()?;
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            options.open(&path).with_context(|| format!("creating {}", path.display()))?;
+            create_private_file(&path)?;
             let mut count = 0;
             let exported = acct
                 .client
@@ -2526,6 +2697,10 @@ impl Account {
             }
             let _ = std::fs::remove_file(acct.dir.join("session.json"));
             let _ = std::fs::remove_dir_all(acct.dir.join("store"));
+            let _ = std::fs::remove_dir_all(acct.dir.join("store-enc"));
+            if let Err(e) = vault::delete(&vault_account(&acct.name, &acct.dir)) {
+                acct.notify.error(format!("{e:#}"));
+            }
             acct.notify.send(AppEvent::LoggedOut { account: acct.name.clone() });
             Ok(())
         });

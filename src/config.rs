@@ -129,6 +129,9 @@ pub struct Config {
     pub mouse: bool,
     /// Ask before sending a paste longer than this many lines (0: never).
     pub paste_confirm_lines: usize,
+    /// Encrypt each account's local store (keys, session, history cache)
+    /// with a key kept in the system keychain.
+    pub encrypt_store: bool,
     /// Keep recent messages in the local store so windows fill instantly at
     /// startup. They're stored decrypted, next to the keys and session
     /// that can decrypt them anyway; off clears what's stored.
@@ -170,6 +173,7 @@ impl Default for Config {
             mouse: true,
             paste_confirm_lines: 5,
             history_cache: true,
+            encrypt_store: true,
             theme: ThemeName::Default,
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
