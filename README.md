@@ -20,7 +20,7 @@ cargo run
 ```
 
 Each server is a `TEXTRIX_<NAME>_*` group (`HOMESERVER`, `USER`, `PASSWORD`,
-`RECOVERY_KEY`); see `.env.example`. Every server in the file connects on
+`RECOVERY_KEY`, `KEYS_PASSPHRASE`); see `.env.example`. Every server in the file connects on
 startup. Secrets are read only when the API call needs them and are wiped
 afterwards. They are never logged, shown, or typed into the client, and the
 file is refused while other users can read it. Real environment variables
@@ -43,6 +43,11 @@ logs in `textrix.log` (`TEXTRIX_LOG=debug` for more).
   `/verify mismatch` after comparing the emoji.
 - The status bar shows `<server>: unverified` until this device is trusted.
 - `/whois <user>` shows identity and per-device trust.
+- `/keys export [file]` saves every room key this device holds (to
+  Downloads by default) and `/keys import <file>` loads keys, in Element's
+  format, so files move both ways. The passphrase comes from
+  `TEXTRIX_<NAME>_KEYS_PASSPHRASE` in the dotfile, never typed; exports are
+  new files only you can read and never overwrite anything.
 - `/devices` lists your sessions (most recently active first, verified or
   not, where they were last seen). `/devices rename <id> <name>` renames
   one; `/devices delete <id>` shows which session it is, and
@@ -110,7 +115,7 @@ bindings.
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Tetrix Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/quit` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where

@@ -19,10 +19,12 @@ enum Field {
     User,
     Password,
     RecoveryKey,
+    KeysPassphrase,
 }
 
 impl Field {
-    const ALL: [Field; 4] = [Field::Homeserver, Field::User, Field::Password, Field::RecoveryKey];
+    const ALL: [Field; 5] =
+        [Field::Homeserver, Field::User, Field::Password, Field::RecoveryKey, Field::KeysPassphrase];
 
     fn suffix(self) -> &'static str {
         match self {
@@ -30,11 +32,12 @@ impl Field {
             Field::User => "_USER",
             Field::Password => "_PASSWORD",
             Field::RecoveryKey => "_RECOVERY_KEY",
+            Field::KeysPassphrase => "_KEYS_PASSPHRASE",
         }
     }
 
     fn is_secret(self) -> bool {
-        matches!(self, Field::Password | Field::RecoveryKey)
+        matches!(self, Field::Password | Field::RecoveryKey | Field::KeysPassphrase)
     }
 }
 
@@ -42,6 +45,8 @@ impl Field {
 pub enum Secret {
     Password,
     RecoveryKey,
+    /// Encrypts room key export files (`/keys`).
+    KeysPassphrase,
 }
 
 impl From<Secret> for Field {
@@ -49,6 +54,7 @@ impl From<Secret> for Field {
         match s {
             Secret::Password => Field::Password,
             Secret::RecoveryKey => Field::RecoveryKey,
+            Secret::KeysPassphrase => Field::KeysPassphrase,
         }
     }
 }
@@ -124,7 +130,7 @@ impl EnvFile {
             match field {
                 Field::Homeserver => defs[idx].homeserver = Some(value).filter(|v| !v.is_empty()),
                 Field::User => defs[idx].user = value,
-                Field::Password | Field::RecoveryKey => unreachable!(),
+                Field::Password | Field::RecoveryKey | Field::KeysPassphrase => unreachable!(),
             }
         }
 
@@ -279,6 +285,7 @@ mod tests {
     fn keys_split_into_server_and_field() {
         assert_eq!(parse_key("TEXTRIX_0X4F02_USER"), Some(("0x4f02".into(), Field::User)));
         assert_eq!(parse_key("TEXTRIX_MY_WORK_RECOVERY_KEY"), Some(("my_work".into(), Field::RecoveryKey)));
+        assert_eq!(parse_key("TEXTRIX_HOME_KEYS_PASSPHRASE"), Some(("home".into(), Field::KeysPassphrase)));
         assert_eq!(parse_key("TEXTRIX__USER"), None);
         assert_eq!(parse_key("OTHER_USER"), None);
     }

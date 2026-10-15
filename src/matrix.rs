@@ -1648,6 +1648,76 @@ impl Account {
         });
     }
 
+    /// `/keys export`: every room key this device holds, encrypted with the
+    /// dotfile's passphrase in Element's format, into a new file only you
+    /// can read (an existing file is never overwritten).
+    pub fn export_keys(&self, out: Option<OwnedRoomId>, path: PathBuf) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let passphrase = acct.keys_passphrase()?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(&path).with_context(|| format!("creating {}", path.display()))?;
+            let mut count = 0;
+            let exported = acct
+                .client
+                .encryption()
+                .export_room_keys(path.clone(), passphrase.expose_secret(), |_| {
+                    count += 1;
+                    true
+                })
+                .await;
+            if let Err(e) = exported {
+                let _ = std::fs::remove_file(&path);
+                return Err(e.into());
+            }
+            acct.notify.line(out, Line::info(format!("exported {count} room keys to {}", path.display())));
+            Ok(())
+        });
+    }
+
+    /// `/keys import`: room keys from a file made by `/keys export` or
+    /// Element; messages they unlock decrypt as they're shown.
+    pub fn import_keys(&self, out: Option<OwnedRoomId>, path: PathBuf) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let passphrase = acct.keys_passphrase()?;
+            let result = acct
+                .client
+                .encryption()
+                .import_room_keys(path.clone(), passphrase.expose_secret())
+                .await
+                .with_context(|| {
+                    format!("importing {} (is the passphrase the one it was made with?)", path.display())
+                })?;
+            acct.notify.line(
+                out,
+                Line::info(format!(
+                    "imported {} new room keys of {} in {}",
+                    result.imported_count,
+                    result.total_count,
+                    path.display()
+                )),
+            );
+            Ok(())
+        });
+    }
+
+    fn keys_passphrase(&self) -> Result<secrecy::SecretString> {
+        self.env.secret(&self.name, Secret::KeysPassphrase)?.with_context(|| {
+            format!(
+                "key files are encrypted with a passphrase: set TEXTRIX_{}_KEYS_PASSPHRASE in {}",
+                self.name.to_uppercase(),
+                self.env.path().display()
+            )
+        })
+    }
+
     /// `/pins`: the room's pinned messages, fetched (and decrypted) one by
     /// one, newest pin first.
     pub fn pins(&self, room_id: OwnedRoomId) {

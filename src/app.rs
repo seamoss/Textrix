@@ -790,6 +790,11 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "recover", args: "[server]", help: "Unlock history with the dotfile's RECOVERY_KEY" },
     Cmd {
+        name: "keys",
+        args: "export [file] | import <file>",
+        help: "Save or load room keys (Element's format, passphrase from the dotfile)",
+    },
+    Cmd {
         name: "devices",
         args: "[rename <id> <name> | delete <id>]",
         help: "List your sessions, rename one, or sign one out (asks to confirm)",
@@ -2838,7 +2843,8 @@ impl App {
                 .map(|n| Candidate { text: format!("{n} "), user: None, hint: None })
                 .collect();
         }
-        if first == "/upload" {
+        let second = text.split_whitespace().nth(1).unwrap_or("");
+        if first == "/upload" || (first == "/keys" && matches!(second, "export" | "import") && !at_start) {
             return path_candidates(&word);
         }
 
@@ -2964,6 +2970,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "keys" => self.cmd_keys(args),
             "forward" | "fwd" => self.cmd_forward(args),
             "markread" | "read" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
@@ -3979,6 +3986,23 @@ impl App {
                 return Err(format!("no room matching {} to forward to", args.trim()));
             }
             self.switcher_go(None);
+        }
+        Ok(())
+    }
+
+    fn cmd_keys(&mut self, args: &str) -> Result<(), String> {
+        let (acct, args) = self.pick_account(args)?;
+        let (sub, file) = split_first(args.trim());
+        match (sub, file.trim()) {
+            ("export", "") => {
+                let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or("no Downloads folder; give a file")?;
+                let name = format!("textrix-keys-{}-{}.txt", acct.name, Local::now().format("%Y-%m-%d"));
+                acct.export_keys(self.here(), dir.join(name));
+            }
+            ("export", file) => acct.export_keys(self.here(), parse_path(file)),
+            ("import", "") => return Err("usage: /keys import <file>".into()),
+            ("import", file) => acct.import_keys(self.here(), parse_path(file)),
+            _ => return Err("usage: /keys export [file] | /keys import <file>".into()),
         }
         Ok(())
     }
