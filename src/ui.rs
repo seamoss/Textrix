@@ -1,6 +1,9 @@
 //! irssi-style layout: topic bar, scrollback, status bar, input line.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use chrono::{DateTime, Local};
 use matrix_sdk::{
@@ -23,7 +26,7 @@ use crate::{
     config::Config,
     input::display_width,
     links,
-    model::{Activity, Line, LineKind, PresenceKind},
+    model::{Activity, Fold, Line, LineKind, PresenceKind},
     richtext::Marks,
     switcher,
     theme::Theme,
@@ -535,7 +538,10 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     // Images sit under their message, lined up with the message text.
     let image_x = display_len(&Local::now().format(&cfg.timestamp_format).to_string()) as u16 + 1;
     let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
-    let visible: Vec<&Line> = win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
+    let shown_lines: Vec<&Line> =
+        win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
+    let visible =
+        if cfg.fold_joins { fold_noise(shown_lines) } else { shown_lines.into_iter().map(Cow::Borrowed).collect() };
 
     // Who has read up to which event (not shown on their own messages).
     let mut readers: HashMap<&EventId, Vec<(&UserId, &str)>> = HashMap::new();
@@ -554,7 +560,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let mut i = visible.len();
     while i > 0 && (rows.len() < need || !found_selected) {
         i -= 1;
-        let line = visible[i];
+        let line: &Line = &visible[i];
         let read: Vec<&str> = line
             .event_id
             .as_ref()
@@ -691,6 +697,69 @@ fn underlined(row: &TLine, x: u16) -> Vec<(u16, u16, String)> {
         at += w;
     }
     out
+}
+
+/// Runs of two or more joins, leaves and renames on the same day, shown as
+/// one line ("alice, bob and carol joined · dave left · eve → erin").
+fn fold_noise(lines: Vec<&Line>) -> Vec<Cow<'_, Line>> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let start = i;
+        while i < lines.len()
+            && lines[i].fold.is_some()
+            && (i == start || lines[i - 1].ts.date_naive() == lines[i].ts.date_naive())
+        {
+            i += 1;
+        }
+        match i - start {
+            0 => {
+                out.push(Cow::Borrowed(lines[i]));
+                i += 1;
+            }
+            1 => out.push(Cow::Borrowed(lines[start])),
+            _ => out.push(Cow::Owned(fold_summary(&lines[start..i]))),
+        }
+    }
+    out
+}
+
+fn fold_summary(run: &[&Line]) -> Line {
+    let (mut joined, mut left, mut renamed): (Vec<&str>, Vec<&str>, Vec<String>) = Default::default();
+    for line in run {
+        match &line.fold {
+            Some(Fold::Joined(name)) if !joined.contains(&name.as_str()) => joined.push(name),
+            Some(Fold::Left(name)) if !left.contains(&name.as_str()) => left.push(name),
+            Some(Fold::Renamed { from, to }) => renamed.push(format!("{from} → {to}")),
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if !joined.is_empty() {
+        parts.push(format!("{} joined", name_list(&joined)));
+    }
+    if !left.is_empty() {
+        parts.push(format!("{} left", name_list(&left)));
+    }
+    if renamed.len() > 3 {
+        parts.push(format!("{}, and {} more renames", renamed[..3].join(", "), renamed.len() - 3));
+    } else if !renamed.is_empty() {
+        parts.push(renamed.join(", "));
+    }
+    let last = run[run.len() - 1];
+    let mut line = Line::new(LineKind::Membership, parts.join(" · "));
+    (line.ts, line.event_id) = (last.ts, last.event_id.clone());
+    line
+}
+
+/// "alice", "alice and bob", "alice, bob and carol", "alice, bob and 5 others".
+fn name_list(names: &[&str]) -> String {
+    match names {
+        [one] => (*one).to_owned(),
+        [init @ .., last] if names.len() <= 3 => format!("{} and {last}", init.join(", ")),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} others", rest.len()),
+        [] => String::new(),
+    }
 }
 
 fn new_messages(t: &Theme, width: usize) -> TLine<'static> {
@@ -1119,6 +1188,32 @@ mod tests {
             Span::styled("日本", u),
         ]);
         assert_eq!(underlined(&row, 2), vec![(8, 27, "https://a.example/x".to_owned()), (32, 36, "日本".to_owned())]);
+    }
+
+    #[test]
+    fn joins_and_leaves_fold_into_one_line() {
+        let noise = |fold: Fold, id: &str| {
+            let mut line = Line::new(LineKind::Membership, "x");
+            (line.fold, line.event_id) = (Some(fold), Some(id.try_into().unwrap()));
+            line
+        };
+        let lines = [
+            noise(Fold::Joined("alice".into()), "$1"),
+            noise(Fold::Joined("bob".into()), "$2"),
+            noise(Fold::Left("dave".into()), "$3"),
+            noise(Fold::Renamed { from: "eve".into(), to: "erin".into() }, "$4"),
+            noise(Fold::Joined("alice".into()), "$5"),
+            Line::new(LineKind::Message, "hello"),
+            noise(Fold::Left("bob".into()), "$6"),
+        ];
+        let folded = fold_noise(lines.iter().collect());
+        assert_eq!(folded.len(), 3, "the run, the message, and the lone leave");
+        assert_eq!(folded[0].body, "alice and bob joined · dave left · eve → erin");
+        assert_eq!(folded[0].event_id.as_ref().map(|e| e.as_str()), Some("$5"), "the run ends at its last event");
+        assert!(matches!(folded[2], Cow::Borrowed(_)), "a single change stays as it was");
+        let names = ["a", "b", "c", "d", "e"];
+        assert_eq!(name_list(&names[..3]), "a, b and c");
+        assert_eq!(name_list(&names), "a, b and 3 others");
     }
 
     #[test]

@@ -64,6 +64,16 @@ pub struct Line {
     pub reactions: Vec<(String, Vec<String>)>,
     /// Shown from the local cache at startup, before the server answered.
     pub cached: bool,
+    /// A join, leave or rename, which can fold into its neighbours.
+    pub fold: Option<Fold>,
+}
+
+/// Membership noise that runs of fold into one summary line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fold {
+    Joined(String),
+    Left(String),
+    Renamed { from: String, to: String },
 }
 
 impl Line {
@@ -94,6 +104,7 @@ impl Line {
             utd_session: None,
             reactions: Vec::new(),
             cached: false,
+            fold: None,
         }
     }
 

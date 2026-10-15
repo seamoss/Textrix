@@ -119,6 +119,14 @@ moderator rights; Textrix checks before asking you to confirm.
 When several servers are connected, prefix a command with `-<server>` while in
 the status window (e.g. `/join -work #ops:work.example`).
 
+### Joins and leaves
+
+Runs of two or more joins, leaves and name changes (on the same day) show
+as one line, like `alice, bob and 5 others joined · dave left · eve →
+erin`. Kicks, bans, invitations and requests to join always get their own
+line. `fold_joins = false` shows every change; `show_joins = false` hides
+them all.
+
 ### Formatting
 
 Formatted messages render as styled text: bold, italic, strikethrough,
@@ -248,6 +256,7 @@ also picks up servers added to or removed from the dotfile):
 ```toml
 timestamp_format = "%H:%M"
 show_joins = true
+fold_joins = true          # runs of joins/leaves/renames become one line
 markdown = true
 send_typing = true
 read_receipts = "public"   # "private" (only your clients see it) or "off"

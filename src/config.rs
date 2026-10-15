@@ -82,6 +82,8 @@ pub struct Config {
     pub timestamp_format: String,
     /// Show joins, parts, and nick changes.
     pub show_joins: bool,
+    /// Fold runs of joins, leaves and renames into one summary line.
+    pub fold_joins: bool,
     /// Render outgoing messages as Markdown.
     pub markdown: bool,
     /// Tell others when you are typing.
@@ -147,6 +149,7 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             show_joins: true,
+            fold_joins: true,
             markdown: true,
             send_typing: true,
             read_receipts: ReceiptMode::Public,

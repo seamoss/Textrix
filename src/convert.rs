@@ -21,7 +21,7 @@ use matrix_sdk::{
 use serde::Deserialize;
 
 use crate::{
-    model::{Item, Line, LineKind, Media},
+    model::{Fold, Item, Line, LineKind, Media},
     richtext,
 };
 
@@ -127,9 +127,13 @@ impl<'a> Converter<'a> {
                 line.kind = LineKind::Membership;
                 match ev.membership_change() {
                     MembershipChange::Joined | MembershipChange::InvitationAccepted => {
+                        line.fold = Some(Fold::Joined(name.to_owned()));
                         format!("{name} [{target}] has joined")
                     }
-                    MembershipChange::Left => format!("{name} [{target}] has left{reason}"),
+                    MembershipChange::Left => {
+                        line.fold = Some(Fold::Left(name.to_owned()));
+                        format!("{name} [{target}] has left{reason}")
+                    }
                     MembershipChange::Kicked => format!("{name} was kicked by {actor}{reason}"),
                     MembershipChange::Banned | MembershipChange::KickedAndBanned => {
                         format!("{name} was banned by {actor}{reason}")
@@ -145,6 +149,7 @@ impl<'a> Converter<'a> {
                     MembershipChange::ProfileChanged { displayname_change: Some(change), .. } => {
                         let old = change.old.unwrap_or(localpart);
                         let new = change.new.unwrap_or(localpart);
+                        line.fold = Some(Fold::Renamed { from: old.to_owned(), to: new.to_owned() });
                         format!("{old} is now known as {new}")
                     }
                     _ => return None,
