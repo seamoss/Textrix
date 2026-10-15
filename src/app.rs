@@ -90,9 +90,20 @@ enum History {
     Done,
 }
 
+/// Which window this is, independent of its position: stays valid while
+/// windows open, close and move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WinRef {
+    Status,
+    Mentions,
+    Room(WinKey),
+}
+
 pub struct Window {
-    /// `None` for the status window.
+    /// `None` for the status and mentions windows.
     pub room: Option<WinKey>,
+    /// The window collecting mentions from every room.
+    pub is_mentions: bool,
     pub name: String,
     pub topic: Option<String>,
     pub encrypted: bool,
@@ -157,6 +168,7 @@ impl Window {
     fn new(room: Option<WinKey>, name: String) -> Self {
         Self {
             room,
+            is_mentions: false,
             name,
             topic: None,
             encrypted: false,
@@ -213,6 +225,14 @@ impl Window {
 
     pub fn account(&self) -> Option<&str> {
         self.room.as_ref().map(|k| k.account.as_str())
+    }
+
+    pub fn id(&self) -> WinRef {
+        match (&self.room, self.is_mentions) {
+            (Some(key), _) => WinRef::Room(key.clone()),
+            (None, true) => WinRef::Mentions,
+            (None, false) => WinRef::Status,
+        }
     }
 
     pub fn has_draft(&self) -> bool {
@@ -549,11 +569,13 @@ struct Layout {
 /// windows opening, closing and moving. The active window is always one of
 /// them: the focused pane.
 pub struct Split {
-    pub panes: Vec<Option<WinKey>>,
+    pub panes: Vec<WinRef>,
     pub side_by_side: bool,
 }
 
 const PANES_MAX: usize = 4;
+/// Messages the mentions window keeps.
+const MENTIONS_MAX: usize = 500;
 /// Rows one notch of the mouse wheel scrolls.
 const WHEEL_ROWS: usize = 3;
 
@@ -597,11 +619,13 @@ pub struct App {
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
     pub split: Option<Split>,
+    /// Where each message in the mentions window came from.
+    mention_origins: HashMap<OwnedEventId, WinKey>,
     /// How many aliases deep the current command runs.
     alias_depth: usize,
     pub switcher: Option<Switcher>,
     /// Windows you were in, most recent first (for the switcher).
-    recent: Vec<Option<WinKey>>,
+    recent: Vec<WinRef>,
     /// Rooms with their own notification mode, per server.
     pub push_modes: HashMap<AccountName, HashMap<OwnedRoomId, RoomNotificationMode>>,
     /// Where the last frame drew things, for the mouse.
@@ -671,6 +695,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
     Cmd { name: "part", args: "", help: "Leave the current room (alias /leave)" },
     Cmd { name: "threads", args: "", help: "List this room's threads" },
+    Cmd { name: "mentions", args: "", help: "Open the window collecting messages that mention you" },
     Cmd { name: "pins", args: "", help: "List this room's pinned messages (p in selection mode pins)" },
     Cmd {
         name: "thread",
@@ -927,6 +952,7 @@ impl App {
             clipboard: None,
             help: None,
             split: None,
+            mention_origins: HashMap::new(),
             alias_depth: 0,
             switcher: None,
             recent: Vec::new(),
@@ -1203,7 +1229,8 @@ impl App {
             }
             AppEvent::Cached { account, room_id, items } => {
                 if let Some(idx) = self.window_idx(&account, &room_id) {
-                    self.windows[idx].merge_history(items);
+                    self.windows[idx].merge_history(items.clone());
+                    self.record_old_mentions(&account, &room_id, &items);
                 }
             }
             AppEvent::History { account, room_id, items, end, failed } => {
@@ -1213,9 +1240,10 @@ impl App {
                     w.history = end.map_or(History::Unloaded, History::More);
                     w.history_retry = Some(Instant::now() + Duration::from_secs(15));
                 } else {
-                    w.merge_history(items);
                     w.history = end.map_or(History::Done, History::More);
                     w.history_retry = None;
+                    w.merge_history(items.clone());
+                    self.record_old_mentions(&account, &room_id, &items);
                 }
             }
             AppEvent::Receipts { account, room_id, receipts, live } => {
@@ -1514,7 +1542,7 @@ impl App {
         // Mentions-only and muted rooms keep ordinary messages quiet.
         let quiet = muted || mode == Some(RoomNotificationMode::MentionsAndKeywordsOnly);
         let mut ring = false;
-        let mut mirrored = Vec::new();
+        let mut mentions = Vec::new();
 
         if live && let Some(log) = self.log.as_mut() {
             let name = self.windows[idx].name.clone();
@@ -1558,6 +1586,9 @@ impl App {
                 && let Some(root_line) = self.windows[idx].find_mut(root)
             {
                 root_line.thread_count = Some(root_line.thread_count.unwrap_or(0) + 1);
+            }
+            if is_mention(&line) {
+                mentions.push(line.clone());
             }
             let w = &mut self.windows[idx];
             if w.scroll > 0 {
@@ -1604,21 +1635,70 @@ impl App {
                 let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
                 self.notifications.push((title, body));
             }
-            if !viewing && level == Activity::Highlight {
-                // Like irssi's hilight window: copy it to the status window.
-                let mut copy = Line::new(line.kind, line.body.clone());
-                (copy.ts, copy.nick, copy.sender) = (line.ts, format!("{}/{}", w.name, line.nick), line.sender.clone());
-                copy.highlight = true;
-                mirrored.push(copy);
-            }
         }
-        for copy in mirrored {
-            self.windows[0].push(copy, cap);
-            if !self.on_screen(0) {
-                self.windows[0].activity = Activity::Highlight;
-            }
+        // Like irssi's hilight window, but every mention, newest last.
+        for line in mentions {
+            self.record_mention(idx, &line, live && !viewing);
         }
         self.bell |= ring && self.cfg.bell;
+    }
+
+    /// Copy a message that mentions you into the mentions window (made at
+    /// the end of the list the first time), in time order. `alert` lights
+    /// the window up.
+    fn record_mention(&mut self, from: usize, line: &Line, alert: bool) {
+        let (Some(key), Some(event)) = (self.windows[from].room.clone(), line.event_id.clone()) else { return };
+        let key = WinKey { thread: None, ..key };
+        if self.mention_origins.contains_key(&event) {
+            return;
+        }
+        let room =
+            self.window_idx(&key.account, &key.room_id).map_or(&self.windows[from].name, |i| &self.windows[i].name);
+        let mut copy = line.clone();
+        (copy.nick, copy.highlight, copy.cached) = (format!("{room}/{}", line.nick), true, false);
+        let idx = self.mentions_window();
+        let w = &mut self.windows[idx];
+        // In time order, after the window's own notes.
+        let at = w.lines.iter().rposition(|l| l.event_id.is_none() || l.ts <= copy.ts).map_or(0, |p| p + 1);
+        w.lines.insert(at, copy);
+        while w.lines.len() > MENTIONS_MAX {
+            if let Some(old) = w.lines.pop_front().and_then(|l| l.event_id) {
+                self.mention_origins.remove(&old);
+            }
+        }
+        self.mention_origins.insert(event, key);
+        if alert && !self.on_screen(idx) {
+            self.windows[idx].activity = Activity::Highlight;
+        }
+    }
+
+    /// Mentions found in loaded history (the cache, scrolling back) join the
+    /// window quietly.
+    fn record_old_mentions(&mut self, account: &str, room_id: &OwnedRoomId, items: &[Item]) {
+        let Some(idx) = self.window_idx(account, room_id) else { return };
+        for item in items {
+            if let Item::Line(line) = item
+                && is_mention(line)
+            {
+                self.record_mention(idx, line, false);
+            }
+        }
+    }
+
+    /// The mentions window, created at the end of the list if needed (so
+    /// window numbers don't shift).
+    fn mentions_window(&mut self) -> usize {
+        if let Some(idx) = self.windows.iter().position(|w| w.is_mentions) {
+            return idx;
+        }
+        let mut w = Window::new(None, "mentions".into());
+        w.is_mentions = true;
+        w.lines.push_back(Line::info(
+            "Messages mentioning you or your highlight words, from every room. Click one, or select it (Alt+Up) \
+             and press Enter, to go to it.",
+        ));
+        self.windows.push(w);
+        self.windows.len() - 1
     }
 
     fn upsert_room(&mut self, account: &str, meta: RoomMeta) {
@@ -1679,12 +1759,12 @@ impl App {
         if idx == 0 {
             return;
         }
-        let removed = self.windows.remove(idx).room;
+        let removed = self.windows.remove(idx).id();
         if self.active >= idx && self.active > 0 {
             self.active -= 1;
         }
         // Its pane goes too, unless focus has to land somewhere new.
-        let active = self.windows[self.active].room.clone();
+        let active = self.windows[self.active].id();
         if let Some(split) = &mut self.split
             && let Some(slot) = split.panes.iter().position(|k| *k == removed)
         {
@@ -1927,6 +2007,16 @@ impl App {
             self.switch_to(idx);
         }
         if self.is_editing() {
+            return;
+        }
+        if self.win().is_mentions
+            && let Some(event) = row.event.clone()
+            && let Some(key) = self.mention_origins.get(&event).cloned()
+        {
+            self.select = None;
+            if let Err(e) = self.jump_to(key, event) {
+                self.error(e);
+            }
             return;
         }
         if let Some(event) = &row.event
@@ -2172,7 +2262,7 @@ impl App {
         // Unsent text (and a reply or reaction being written) stays with
         // the window you leave, and comes back when you return.
         let unsent = Unsent { text: self.input.stash(), compose: self.compose.take().map(|(_, c)| c) };
-        let left_key = self.windows[self.active].room.clone();
+        let left_key = self.windows[self.active].id();
         self.recent.retain(|k| *k != left_key);
         self.recent.insert(0, left_key);
         self.recent.truncate(64);
@@ -2184,12 +2274,12 @@ impl App {
         }
         // A window already in a pane gets the focus; otherwise it replaces
         // the focused pane's window.
-        let to = self.windows[idx].room.clone();
+        let to = self.windows[idx].id();
         if let Some(split) = &mut self.split
             && !split.panes.contains(&to)
         {
-            let from = &self.windows[self.active].room;
-            match split.panes.iter().position(|k| k == from) {
+            let from = self.windows[self.active].id();
+            match split.panes.iter().position(|k| *k == from) {
                 Some(slot) => split.panes[slot] = to,
                 None => split.panes.push(to),
             }
@@ -2209,7 +2299,7 @@ impl App {
     /// Windows on screen, in pane order (just the active one unless split).
     pub fn screen_windows(&self) -> Vec<usize> {
         let Some(split) = &self.split else { return vec![self.active] };
-        split.panes.iter().filter_map(|key| self.windows.iter().position(|w| w.room == *key)).collect()
+        split.panes.iter().filter_map(|key| self.windows.iter().position(|w| w.id() == *key)).collect()
     }
 
     /// The window's room's own notification mode (`None`: the default).
@@ -2219,7 +2309,7 @@ impl App {
     }
 
     pub fn on_screen(&self, idx: usize) -> bool {
-        idx == self.active || self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[idx].room))
+        idx == self.active || self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[idx].id()))
     }
 
     /// Switcher entries for what's typed: every window, and closed rooms.
@@ -2228,7 +2318,7 @@ impl App {
     pub fn switcher_entries(&self) -> Vec<switcher::Entry> {
         let Some(sw) = &self.switcher else { return Vec::new() };
         let several = self.accounts.len() > 1;
-        let recency = |key: &Option<WinKey>| self.recent.iter().position(|k| k == key).unwrap_or(usize::MAX);
+        let recency = |key: &WinRef| self.recent.iter().position(|k| k == key).unwrap_or(usize::MAX);
         let mut candidates = Vec::new();
         for (i, w) in self.windows.iter().enumerate() {
             if i == self.active && sw.query.trim().is_empty() {
@@ -2248,7 +2338,7 @@ impl App {
                     matched: Vec::new(),
                 },
                 number: Some(i + 1),
-                recency: recency(&w.room),
+                recency: recency(&w.id()),
             });
         }
         for key in self.layout.closed.iter().filter(|k| k.thread.is_none()) {
@@ -2422,6 +2512,14 @@ impl App {
             PageDown => self.move_select(10),
             Home | Char('g') => self.select = self.selectable().first().cloned(),
             End | Char('G') => self.select = self.selectable().pop(),
+            Enter if self.win().is_mentions => {
+                self.select = None;
+                let key =
+                    self.mention_origins.get(&event).cloned().ok_or_else(|| "that message's room is gone".to_owned());
+                if let Err(e) = key.and_then(|key| self.jump_to(key, event)) {
+                    self.error(e);
+                }
+            }
             Esc | Char('q') | Enter => self.select = None,
             Char('r') => match (line.sender.clone(), key_here) {
                 (Some(sender), Some(here)) => {
@@ -2882,6 +2980,11 @@ impl App {
                 Ok(())
             }),
             "info" => self.room_ctx().map(|(acct, room_id)| acct.room_info(room_id)),
+            "mentions" => {
+                let idx = self.mentions_window();
+                self.switch_to(idx);
+                Ok(())
+            }
             "pins" | "pinned" => self.room_ctx().map(|(acct, room_id)| acct.pins(room_id)),
             "joinrule" => self.cmd_joinrule(args),
             "guests" => self.room_ctx().and_then(|(acct, room_id)| {
@@ -3447,6 +3550,12 @@ impl App {
     fn cmd_jump(&mut self, args: &str) -> Result<(), String> {
         let n: usize = args.trim().parse().map_err(|_| "usage: /jump <N> (numbers from /search)")?;
         let (key, event) = self.search_hits.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("no result {n}"))?;
+        self.jump_to(key, event)
+    }
+
+    /// Go to a message: its room's window (reopened if closed), selected, or
+    /// older history loads until it's there.
+    fn jump_to(&mut self, key: WinKey, event: OwnedEventId) -> Result<(), String> {
         let idx = match self.window_idx(&key.account, &key.room_id) {
             Some(idx) => idx,
             None => self.reopen(&key.account, &key.room_id).ok_or("that room isn't available")?,
@@ -3678,6 +3787,11 @@ impl App {
                 }
             }
             "close" => {
+                if self.win().is_mentions {
+                    self.mention_origins.clear();
+                    self.remove_window(self.active);
+                    return Ok(());
+                }
                 let Some(key) = self.win().room.clone() else {
                     return Err("the status window can't be closed".into());
                 };
@@ -3840,14 +3954,14 @@ impl App {
         if self.on_screen(idx) {
             return Err(format!("{} is already on screen", self.windows[idx].name));
         }
-        let current = self.windows[self.active].room.clone();
+        let current = self.windows[self.active].id();
         let split = self.split.get_or_insert_with(|| Split { panes: vec![current.clone()], side_by_side });
         if split.panes.len() >= PANES_MAX {
             return Err(format!("{PANES_MAX} panes at most; /unsplit closes this one"));
         }
         split.side_by_side = side_by_side;
         let slot = split.panes.iter().position(|k| *k == current).map_or(split.panes.len(), |i| i + 1);
-        split.panes.insert(slot, self.windows[idx].room.clone());
+        split.panes.insert(slot, self.windows[idx].id());
         self.windows[idx].activity = Activity::None;
         Ok(())
     }
@@ -3858,14 +3972,14 @@ impl App {
             self.split = None;
             return Ok(());
         }
-        let current = &self.windows[self.active].room;
-        let slot = split.panes.iter().position(|k| k == current).unwrap_or(0);
+        let current = self.windows[self.active].id();
+        let slot = split.panes.iter().position(|k| *k == current).unwrap_or(0);
         split.panes.remove(slot);
         let next = split.panes[slot.min(split.panes.len() - 1)].clone();
         if split.panes.len() < 2 {
             self.split = None;
         }
-        if let Some(idx) = self.windows.iter().position(|w| w.room == next) {
+        if let Some(idx) = self.windows.iter().position(|w| w.id() == next) {
             self.switch_to(idx);
         }
         Ok(())
@@ -4124,6 +4238,12 @@ fn expand_alias(template: &str, args: &str) -> Vec<String> {
         .map(|cmd| cmd.replace('\u{0}', ";").trim().trim_start_matches('/').to_owned())
         .filter(|cmd| !cmd.is_empty())
         .collect()
+}
+
+/// Someone else's message that highlights you (a mention or highlight
+/// word, per your push rules).
+fn is_mention(line: &Line) -> bool {
+    line.highlight && !line.own && line.is_message()
 }
 
 fn split_first(s: &str) -> (&str, &str) {
@@ -4506,6 +4626,46 @@ mod tests {
         let saved = std::fs::read_to_string(app.paths.config_file()).unwrap();
         assert_eq!(saved, "# my settings\nbell = false\n", "no empty [aliases] left behind");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn mentions_collect_in_their_own_window_and_jump_back() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let mention = |id: &str, mins: i64| {
+            let mut line = msg(id, "hey you");
+            line.highlight = true;
+            line.ts = Local::now() - chrono::Duration::minutes(mins);
+            Item::Line(line)
+        };
+        app.on_timeline("t", &room, vec![Item::Line(msg("$plain", "hi"))], true);
+        assert!(!app.windows.iter().any(|w| w.is_mentions), "no window until something mentions you");
+        app.on_timeline("t", &room, vec![mention("$new", 0)], true);
+        let m = app.windows.iter().position(|w| w.is_mentions).unwrap();
+        assert_eq!(m, app.windows.len() - 1, "added at the end, so numbers don't shift");
+        assert_eq!(app.windows[m].activity, Activity::Highlight);
+        assert_eq!(ui::sidebar_entries(&app)[1], ui::SidebarEntry::Window(m), "listed under status");
+
+        // Older mentions found in history slot in before it; repeats are ignored.
+        let history = vec![mention("$old", 60), mention("$new", 0)];
+        app.on_event(AppEvent::History {
+            account: "t".into(),
+            room_id: room.clone(),
+            items: history,
+            end: None,
+            failed: false,
+        });
+        let ids: Vec<&str> =
+            app.windows[m].lines.iter().filter_map(|l| l.event_id.as_ref().map(|e| e.as_str())).collect();
+        assert_eq!(ids, ["$old", "$new"]);
+        assert!(app.windows[m].lines.back().unwrap().nick.starts_with("alpha/"));
+
+        app.switch_to(m);
+        app.select = Some("$old".try_into().unwrap());
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.active, a, "Enter goes to the room");
+        assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
     }
 
     #[test]

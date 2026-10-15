@@ -251,7 +251,9 @@ pub enum SidebarEntry {
 /// grouped under their spaces when there are any. Window numbers never
 /// change, only the order they're listed in.
 pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
+    // The status window, then other windows that aren't a room (mentions).
     let mut out = vec![SidebarEntry::Window(0)];
+    out.extend((1..app.windows.len()).filter(|&i| app.windows[i].room.is_none()).map(SidebarEntry::Window));
     let mut servers: Vec<&str> = Vec::new();
     for w in &app.windows[1..] {
         if let Some(server) = w.account()
@@ -1085,6 +1087,8 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         let prompt = format!("delete {what}? y/n");
         item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+    } else if app.select.is_some() && win.is_mentions {
+        item(&mut spans, vec![Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert)]);
     } else if app.select.is_some() {
         let keys =
             "r reply  e edit  d delete  + react  t thread  p pin  s save  o open  v spoiler  c copy  i info  Esc";

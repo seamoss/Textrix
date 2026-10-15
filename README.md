@@ -197,18 +197,22 @@ original.
   `/whois` includes it. `✎` in the window list means someone is typing there;
   typing notices clear when that person's message arrives, and expire after
   45 seconds without an update.
+- Messages that mention you or a highlight word are collected, from every
+  room and in time order, in a **mentions** window (listed under status;
+  `/mentions` opens it). Click one, or select it and press Enter, to go to
+  the message in its room. Mentions found when history loads join it too.
 - Highlights and DMs from other windows (or any window while the terminal is
-  in the background) are copied into the status window, ring the bell, and
-  pop a desktop notification in iTerm2, Ghostty, WezTerm and kitty. Inside
-  tmux, notifications need `set -g allow-passthrough on`, and `c` (copy) in
-  selection mode needs `set -g set-clipboard on`.
+  in the background) ring the bell and pop a desktop notification in
+  iTerm2, Ghostty, WezTerm and kitty. Inside tmux, notifications need
+  `set -g allow-passthrough on`, and `c` (copy) in selection mode needs
+  `set -g set-clipboard on`.
 - Textrix moves your read marker as you read, and sends read receipts as set
   by `read_receipts`.
 
 ### Notifications
 
 By default, mentions of you, highlight words and direct messages alert you
-(bell, desktop notification, a copy in the status window); other messages
+(bell, desktop notification, and mentions go to the mentions window); other messages
 just light up the window list. `/notify` changes that per room, stored as
 Matrix push rules so Element and your phone follow the same setting:
 
