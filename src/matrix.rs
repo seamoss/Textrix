@@ -54,8 +54,9 @@ use matrix_sdk::{
         directory::Filter as DirectoryFilter,
         events::relation::RelationType,
         events::{
-            AnyStateEvent, AnySyncEphemeralRoomEvent, GlobalAccountDataEvent, InitialStateEvent, MessageLikeEventType,
-            StateEvent, StateEventType, SyncStateEvent,
+            AnyStateEvent, AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent,
+            GlobalAccountDataEvent, InitialStateEvent, MessageLikeEventType, StateEvent, StateEventType,
+            SyncMessageLikeEvent, SyncStateEvent,
             fully_read::FullyReadEventContent,
             ignored_user_list::IgnoredUserListEventContent,
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
@@ -84,6 +85,7 @@ use matrix_sdk::{
 };
 use ratatui::layout::Size;
 use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
+use ruma_html::{HtmlSanitizerMode, RemoveReplyFallback};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -1600,6 +1602,48 @@ impl Account {
                 }
             }
             acct.notify.line(out, Line::info(format!("signed out {device_id} “{name}”")));
+            Ok(())
+        });
+    }
+
+    /// Send a copy of a message to another room: its content as sent
+    /// (formatting, attachments), minus reply/thread links and mentions so
+    /// nobody is pinged again. An edited message goes as its edited text.
+    pub fn forward(
+        &self,
+        from: OwnedRoomId,
+        event_id: OwnedEventId,
+        edited: Option<String>,
+        to: OwnedRoomId,
+        label: String,
+    ) {
+        let acct = self.clone();
+        self.spawn_op(Some(from.clone()), async move {
+            let source = acct.room(&from)?;
+            let content = match edited {
+                Some(text) => RoomMessageEventContent::text_plain(text),
+                None => {
+                    let event = source.event(&event_id, None).await?;
+                    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
+                        SyncMessageLikeEvent::Original(message),
+                    )) = event.raw().deserialize()?
+                    else {
+                        bail!("only messages can be forwarded");
+                    };
+                    let mut content = message.content;
+                    content.sanitize(HtmlSanitizerMode::Compat, RemoveReplyFallback::Yes);
+                    (content.relates_to, content.mentions) = (None, None);
+                    content
+                }
+            };
+            let target = acct.room(&to)?;
+            let note = if source.encryption_state().is_encrypted() && !target.encryption_state().is_encrypted() {
+                " (that room isn't encrypted)"
+            } else {
+                ""
+            };
+            target.send(content).await?;
+            acct.notify.line(Some(from), Line::info(format!("forwarded to {label}{note}")));
             Ok(())
         });
     }

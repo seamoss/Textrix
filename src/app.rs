@@ -716,6 +716,11 @@ const COMMANDS: &[Cmd] = &[
         help: "Edit a message: no text opens the editor (also Shift+Up, or Ctrl+E on an empty line)",
     },
     Cmd { name: "redact", args: "", help: "Delete your last message (alias /del)" },
+    Cmd {
+        name: "forward",
+        args: "[room]",
+        help: "Send a copy of the latest message to another room (f in selection mode picks one)",
+    },
     Cmd { name: "upload", args: "<path>", help: "Send a file or image (Tab completes paths)" },
     Cmd { name: "download", args: "[nick]", help: "Save the last attachment (from nick) to Downloads" },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
@@ -833,6 +838,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("+", "react"),
     ("t", "open the thread (or start one)"),
     ("p", "pin or unpin it for everyone in the room (if allowed)"),
+    ("f", "forward a copy to another room (pick it like the switcher)"),
     ("s", "save the attachment"),
     ("o", "open the link"),
     ("v", "show spoilers"),
@@ -2317,11 +2323,21 @@ impl App {
     /// back to the previous one.
     pub fn switcher_entries(&self) -> Vec<switcher::Entry> {
         let Some(sw) = &self.switcher else { return Vec::new() };
+        // Forwarding lists the other rooms on the message's server.
+        let forward_from = match &sw.purpose {
+            switcher::Purpose::Forward { account, room_id, .. } => Some((account.as_str(), room_id)),
+            switcher::Purpose::Go => None,
+        };
+        let wanted = |key: Option<&WinKey>| match (forward_from, key) {
+            (None, _) => true,
+            (Some((account, from)), Some(k)) => k.account == account && k.room_id != *from && k.thread.is_none(),
+            (Some(_), None) => false,
+        };
         let several = self.accounts.len() > 1;
         let recency = |key: &WinRef| self.recent.iter().position(|k| k == key).unwrap_or(usize::MAX);
         let mut candidates = Vec::new();
         for (i, w) in self.windows.iter().enumerate() {
-            if i == self.active && sw.query.trim().is_empty() {
+            if (i == self.active && sw.query.trim().is_empty()) || !wanted(w.room.as_ref()) {
                 continue;
             }
             let detail = match w.account() {
@@ -2341,7 +2357,7 @@ impl App {
                 recency: recency(&w.id()),
             });
         }
-        for key in self.layout.closed.iter().filter(|k| k.thread.is_none()) {
+        for key in self.layout.closed.iter().filter(|k| k.thread.is_none() && wanted(Some(k))) {
             let Some(meta) = self.connected(&key.account).and_then(|a| a.quick_meta(&key.room_id)) else { continue };
             let detail = if several { format!("{} · closed", key.account) } else { "closed".to_owned() };
             candidates.push(switcher::Candidate {
@@ -2395,6 +2411,18 @@ impl App {
         let Some(entry) = entries.get(pick.unwrap_or(sw.selected).min(entries.len().saturating_sub(1))) else {
             return;
         };
+        if let switcher::Purpose::Forward { account, room_id, event, edited } = sw.purpose {
+            let to = match &entry.target {
+                switcher::Target::Window(idx) => self.windows[*idx].room.as_ref().map(|k| k.room_id.clone()),
+                switcher::Target::Closed { room_id, .. } => Some(room_id.clone()),
+            };
+            match (self.connected(&account), to) {
+                (Some(acct), Some(to)) => acct.forward(room_id, event, edited, to, entry.name.clone()),
+                (None, _) => self.error(format!("{account} is not connected")),
+                (_, None) => {}
+            }
+            return;
+        }
         match entry.target.clone() {
             switcher::Target::Window(idx) => self.switch_to(idx),
             switcher::Target::Closed { account, room_id } => match self.reopen(&account, &room_id) {
@@ -2549,6 +2577,12 @@ impl App {
                 self.select = None;
                 let root = line.thread_root.clone().unwrap_or(event);
                 if let Err(e) = self.open_thread(root) {
+                    self.error(e);
+                }
+            }
+            Char('f') => {
+                self.select = None;
+                if let Err(e) = self.start_forward(&line) {
                     self.error(e);
                 }
             }
@@ -2930,6 +2964,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "forward" | "fwd" => self.cmd_forward(args),
             "markread" | "read" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
             "devices" | "sessions" => self.cmd_devices(args),
@@ -3919,6 +3954,35 @@ impl App {
         Ok(())
     }
 
+    /// Open the switcher to choose where `line` goes.
+    fn start_forward(&mut self, line: &Line) -> Result<(), String> {
+        let event = line.event_id.clone().ok_or("that message isn't sent yet")?;
+        // From the mentions window, the message's own room.
+        let key = self.win().room.clone().or_else(|| self.mention_origins.get(&event).cloned());
+        let key = key.ok_or("open the message's room to forward it")?;
+        let edited = line.edited.then(|| line.body.clone());
+        let purpose = switcher::Purpose::Forward { account: key.account, room_id: key.room_id, event, edited };
+        self.switcher = Some(Switcher { purpose, ..Switcher::default() });
+        Ok(())
+    }
+
+    /// `/forward [room]`: the latest message here, to the named room or one
+    /// picked in the switcher.
+    fn cmd_forward(&mut self, args: &str) -> Result<(), String> {
+        let line = self.win().lines.iter().rev().find(|l| is_target(l)).cloned().ok_or("no message here to forward")?;
+        self.start_forward(&line)?;
+        if !args.trim().is_empty() {
+            let sw = self.switcher.as_mut().expect("just opened");
+            sw.query = args.trim().to_owned();
+            if self.switcher_entries().is_empty() {
+                self.switcher = None;
+                return Err(format!("no room matching {} to forward to", args.trim()));
+            }
+            self.switcher_go(None);
+        }
+        Ok(())
+    }
+
     fn cmd_notify(&mut self, args: &str) -> Result<(), String> {
         let (acct, room_id) = self.room_ctx()?;
         if self.win().thread_root().is_some() {
@@ -4666,6 +4730,22 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn forwarding_offers_the_other_rooms() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        room_window(&mut app, "!b:x.org", "beta");
+        app.switch_to(a);
+        assert!(app.cmd_forward("").is_err(), "nothing to forward yet");
+        app.windows[a].lines.push_back(msg("$1", "share me"));
+        app.cmd_forward("").unwrap();
+        let names: Vec<String> = app.switcher_entries().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["beta"], "not status, mentions or the room it came from");
+        app.switcher = None;
+        assert!(app.cmd_forward("zzz").is_err());
+        assert!(app.switcher.is_none(), "a failed /forward leaves nothing open");
     }
 
     #[test]

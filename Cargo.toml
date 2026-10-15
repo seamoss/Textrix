@@ -34,6 +34,7 @@ unicode-width = "0.2"
 zeroize = "1"
 emojis = "0.9.0"
 toml_edit = "0.25"
+ruma-events = { version = "0.35", features = ["html"] }
 
 [profile.release]
 lto = "thin"

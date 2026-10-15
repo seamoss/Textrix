@@ -1,15 +1,32 @@
 //! The quick switcher (Ctrl+K / Alt+K): fuzzy-find a window or a closed
 //! room and go there.
 
-use matrix_sdk::ruma::OwnedRoomId;
+use matrix_sdk::ruma::{OwnedEventId, OwnedRoomId};
 
 use crate::model::Activity;
 
-/// The open switcher: what's typed and which entry is chosen.
+/// The open switcher: what's typed, which entry is chosen, and what
+/// choosing does.
 #[derive(Debug, Default)]
 pub struct Switcher {
     pub query: String,
     pub selected: usize,
+    pub purpose: Purpose,
+}
+
+#[derive(Debug, Default)]
+pub enum Purpose {
+    /// Go to the window.
+    #[default]
+    Go,
+    /// Send a copy of a message to the room (same server only).
+    Forward {
+        account: String,
+        room_id: OwnedRoomId,
+        event: OwnedEventId,
+        /// The text as edited, when the message was edited since.
+        edited: Option<String>,
+    },
 }
 
 /// Where an entry leads.

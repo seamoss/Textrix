@@ -108,7 +108,10 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
     let block = Block::bordered()
         .border_style(t.frame)
-        .title(Span::styled(" Go to ", t.accent))
+        .title(Span::styled(
+            if matches!(sw.purpose, switcher::Purpose::Forward { .. }) { " Forward to " } else { " Go to " },
+            t.accent,
+        ))
         .title_bottom(TLine::from(" ↑↓ choose · Enter go · Esc close ").right_aligned());
     let inner = block.inner(area);
     f.render_widget(Clear, area);
@@ -1090,8 +1093,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     } else if app.select.is_some() && win.is_mentions {
         item(&mut spans, vec![Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert)]);
     } else if app.select.is_some() {
-        let keys =
-            "r reply  e edit  d delete  + react  t thread  p pin  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
