@@ -82,6 +82,9 @@ pub struct Config {
     pub timestamp_format: String,
     /// Show joins, parts, and nick changes.
     pub show_joins: bool,
+    /// Page titles under links, fetched by your homeserver: "unencrypted"
+    /// (rooms the server can read anyway), "all", or "off".
+    pub link_titles: LinkTitles,
     /// Fold runs of joins, leaves and renames into one summary line.
     pub fold_joins: bool,
     /// Render outgoing messages as Markdown.
@@ -163,6 +166,7 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             show_joins: true,
+            link_titles: LinkTitles::Unencrypted,
             fold_joins: true,
             markdown: true,
             send_typing: true,
@@ -224,6 +228,15 @@ impl<'de> Deserialize<'de> for BellMode {
             },
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkTitles {
+    Off,
+    /// Only where the server already sees the links.
+    Unencrypted,
+    All,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]

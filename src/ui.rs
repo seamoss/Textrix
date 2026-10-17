@@ -22,8 +22,8 @@ use unicode_width::UnicodeWidthChar;
 use ratatui_image::Image;
 
 use crate::{
-    app::{App, ConnStatus, HelpRow, Preview, help_rows},
-    config::Config,
+    app::{App, ConnStatus, HelpRow, LinkTitle, Preview, help_rows},
+    config::{Config, LinkTitles},
     input::display_width,
     links,
     model::{Activity, Fold, Line, LineKind, PresenceKind},
@@ -586,10 +586,17 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let account = app.windows[idx].room.as_ref().map(|k| k.account.clone());
     let images = app.picker.is_some();
     let (previews, requests) = (&mut app.previews, &mut app.preview_requests);
+    let (titles, title_requests) = (&mut app.link_titles, &mut app.link_title_requests);
     let cfg = &app.cfg;
     let win = &mut app.windows[idx];
     // Images sit under their message, lined up with the message text.
     let image_x = display_len(&Local::now().format(&cfg.timestamp_format).to_string()) as u16 + 1;
+    // A server preview of a link in an encrypted room would show it the link.
+    let titles_here = match cfg.link_titles {
+        LinkTitles::Off => false,
+        LinkTitles::Unencrypted => !win.encrypted && win.room.is_some(),
+        LinkTitles::All => win.room.is_some(),
+    };
     let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
     let shown_lines: Vec<&Line> =
         win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
@@ -644,6 +651,26 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                     if let Some(account) = &account {
                         previews.insert(id.clone(), Preview::Loading);
                         requests.push((account.clone(), id.clone(), media.clone()));
+                    }
+                }
+            }
+        }
+        // The page title of the message's first link, just under its text.
+        if titles_here
+            && line.is_message()
+            && !line.redacted
+            && let Some(url) = links::urls(&line.body).into_iter().find(|u| links::is_safe(u))
+        {
+            match titles.get(url) {
+                Some(LinkTitle::Ready(title)) => {
+                    rows.push(link_title_row(&cfg.palette, title, width, image_x as usize));
+                    row_events.push((line.event_id.clone(), false));
+                }
+                Some(_) => {}
+                None => {
+                    if let Some(account) = &account {
+                        titles.insert(url.to_owned(), LinkTitle::Loading);
+                        title_requests.push((account.to_string(), url.to_owned()));
                     }
                 }
             }
@@ -814,6 +841,26 @@ fn name_list(names: &[&str]) -> String {
         [a, b, rest @ ..] => format!("{a}, {b} and {} others", rest.len()),
         [] => String::new(),
     }
+}
+
+/// "↳ Page title — Site", dim, cut to fit.
+fn link_title_row(t: &Theme, title: &str, width: usize, indent: usize) -> TLine<'static> {
+    let avail = width.saturating_sub(indent + 3);
+    let mut shown = String::new();
+    let mut used = 0;
+    for c in title.chars().filter_map(sanitize) {
+        let w = c.width().unwrap_or(0);
+        if used + w > avail {
+            shown.push('…');
+            break;
+        }
+        used += w;
+        shown.push(c);
+    }
+    TLine::from(vec![
+        Span::raw(" ".repeat(indent)),
+        Span::styled(format!("↳ {shown}"), t.dim.add_modifier(Modifier::ITALIC)),
+    ])
 }
 
 fn new_messages(t: &Theme, width: usize) -> TLine<'static> {

@@ -555,6 +555,13 @@ fn annotate(line: &mut Line, item: &Item) {
 }
 
 /// An inline image preview's state.
+pub enum LinkTitle {
+    Loading,
+    Ready(String),
+    /// The page has no title, or it couldn't be fetched.
+    None,
+}
+
 pub enum Preview {
     Loading,
     Ready(Protocol),
@@ -606,6 +613,8 @@ pub struct Split {
 }
 
 const PANES_MAX: usize = 4;
+/// Link titles kept in memory.
+const LINK_TITLES_MAX: usize = 2000;
 /// The shortest time between two rings.
 const BELL_GAP: Duration = Duration::from_secs(2);
 /// How long the visual bell flashes.
@@ -688,6 +697,12 @@ pub struct App {
     preview_order: VecDeque<OwnedEventId>,
     /// Images the renderer wants, fetched after the draw.
     pub preview_requests: Vec<(String, OwnedEventId, Media)>,
+    /// Page titles under links, by URL.
+    pub link_titles: HashMap<String, LinkTitle>,
+    /// Links to ask for, by server: (account, URL).
+    pub link_title_requests: Vec<(String, String)>,
+    /// Servers that don't do link previews.
+    link_titles_off: HashSet<String>,
     /// Other people's presence, per server.
     pub presence: HashMap<AccountName, HashMap<OwnedUserId, Presence>>,
     /// Joined spaces per server, for grouping the window list.
@@ -1048,6 +1063,9 @@ impl App {
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
             preview_requests: Vec::new(),
+            link_titles: HashMap::new(),
+            link_title_requests: Vec::new(),
+            link_titles_off: HashSet::new(),
             presence: HashMap::new(),
             spaces: HashMap::new(),
             log: None,
@@ -1255,6 +1273,20 @@ impl App {
     pub fn on_event(&mut self, ev: AppEvent) {
         let cap = self.cfg.scrollback;
         match ev {
+            AppEvent::LinkTitle { url, title } => {
+                if self.link_titles.len() > LINK_TITLES_MAX {
+                    self.link_titles.clear();
+                }
+                self.link_titles.insert(url, title.map_or(LinkTitle::None, LinkTitle::Ready));
+            }
+            AppEvent::LinkTitlesOff { account } => {
+                if self.link_titles_off.insert(account.to_string()) {
+                    self.status(Line::info(format!(
+                        "{account}: the server doesn't offer link previews, so links won't show page titles \
+                         (Synapse: url_preview_enabled)"
+                    )));
+                }
+            }
             AppEvent::FullImage { event_id, image } => {
                 if let Some(v) = self.viewer.as_mut().filter(|v| v.event == event_id) {
                     v.image = match image {
@@ -2117,6 +2149,12 @@ impl App {
     /// image previews, avatars.
     pub fn after_draw(&mut self) {
         self.request_avatars();
+        for (account, url) in std::mem::take(&mut self.link_title_requests) {
+            match self.connected(&account) {
+                Some(acct) if !self.link_titles_off.contains(&account) => acct.fetch_link_title(url),
+                _ => drop(self.link_titles.remove(&url)),
+            }
+        }
         if let (Some(v), Some(picker)) = (self.viewer.as_mut(), self.picker.clone())
             && let Some((image, view)) = v.wanted()
         {
@@ -5237,6 +5275,33 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn link_titles_show_under_their_message() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        app.windows[a].lines.push_back(msg("$1", "docs at https://matrix.org/docs today"));
+        app.switch_to(a);
+        let draw = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..buffer.area.height)
+                .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_owned()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        draw(&mut app);
+        assert_eq!(app.link_title_requests, [("t".to_owned(), "https://matrix.org/docs".to_owned())], "asked once");
+        app.on_event(AppEvent::LinkTitle {
+            url: "https://matrix.org/docs".into(),
+            title: Some("Docs — Matrix".into()),
+        });
+        assert!(draw(&mut app).contains("↳ Docs — Matrix"));
+
+        app.windows[a].encrypted = true;
+        assert!(!draw(&mut app).contains("↳ Docs"), "not in encrypted rooms unless link_titles = \"all\"");
     }
 
     #[test]

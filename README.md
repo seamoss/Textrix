@@ -127,7 +127,7 @@ bindings.
 | Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [version] [confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all |
 | Directory | `/list [search]` (public rooms) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |
-| Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode |
+| Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode. The page title of a message's first link shows under it (`↳ Title — Site`), fetched by your homeserver's URL preview so the site never sees you. That's on in unencrypted rooms, which the server reads anyway; `link_titles = "all"` adds encrypted rooms (the server then sees those links), `"off"` stops it. Synapse needs `url_preview_enabled` for this; Textrix tells you once if it's off |
 | Forwarding | `f` in selection mode opens a "Forward to" list of that server's other rooms (closed ones too), filtered as you type like the switcher; Enter sends a copy and leaves you where you are. `/forward [room]` does the same for the latest message here. The copy keeps formatting and attachments but not reply or thread links or mentions, so nobody is pinged again; an edited message goes as its edited text. Forwarding out of an encrypted room into one that isn't says so |
 | Pins | `p` in selection mode pins a message for everyone in the room, or unpins it (needs the power level to change pins). Pinned messages show `[pinned]`, and the topic bar counts them. `/pins` lists them, newest pin first; `/jump N` goes to one |
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Thread roots show `[N replies]`; replies also appear in the room with their context |
@@ -310,6 +310,7 @@ also picks up servers added to or removed from the dotfile):
 ```toml
 timestamp_format = "%H:%M"
 show_joins = true
+link_titles = "unencrypted" # page titles under links: "all", "off"
 fold_joins = true          # runs of joins/leaves/renames become one line
 markdown = true
 send_typing = true

@@ -189,6 +189,15 @@ pub enum AppEvent {
         items: Vec<Item>,
     },
     /// `/threads`: the room's thread roots, newest first.
+    /// A link's title (`None`: it has none, or the preview failed).
+    LinkTitle {
+        url: String,
+        title: Option<String>,
+    },
+    /// The server doesn't offer link previews.
+    LinkTitlesOff {
+        account: AccountName,
+    },
     /// An image decoded for the viewer.
     FullImage {
         event_id: OwnedEventId,
@@ -687,6 +696,19 @@ pub fn describe_notify(mode: Option<RoomNotificationMode>, is_dm: bool) -> &'sta
         (None, true) => "every message (the default for direct messages)",
         (None, false) => "mentions and highlight words; other messages show as activity (the default)",
     }
+}
+
+/// "Title — Site" from a preview's OpenGraph data.
+fn link_title(json: &str) -> Option<String> {
+    let og: serde_json::Value = serde_json::from_str(json).ok()?;
+    let field = |name: &str| {
+        og.get(name)?.as_str().map(|s| s.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|s| !s.is_empty())
+    };
+    let title = field("og:title")?;
+    Some(match field("og:site_name").filter(|site| !title.contains(site.as_str())) {
+        Some(site) => format!("{title} — {site}"),
+        None => title,
+    })
 }
 
 /// Rooms with their own notification mode, for [`AppEvent::PushRules`].
@@ -1518,6 +1540,29 @@ impl Account {
             .await
             .map_err(|e| format!("{e:#}"));
             acct.notify.send(AppEvent::FullImage { event_id, image });
+        });
+    }
+
+    /// A link's page title (and site), from the homeserver's preview of it.
+    pub fn fetch_link_title(&self, url: String) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let data = match acct.client.media().get_media_preview(&url, None).await {
+                Ok(data) => data,
+                Err(e) => {
+                    // Synapse leaves previews off unless url_preview_enabled.
+                    let off = e.as_client_api_error().is_some_and(|e| {
+                        e.status_code.as_u16() == 404 || matches!(e.error_kind(), Some(ErrorKind::Unrecognized))
+                    });
+                    if off {
+                        acct.notify.send(AppEvent::LinkTitlesOff { account: acct.name.clone() });
+                    }
+                    tracing::debug!("no preview for {url}: {e}");
+                    None
+                }
+            };
+            let title = data.and_then(|raw| link_title(raw.get()));
+            acct.notify.send(AppEvent::LinkTitle { url, title });
         });
     }
 
@@ -2820,6 +2865,25 @@ pub enum VerifyAnswer {
     Confirm,
     Mismatch,
     Cancel,
+}
+
+#[cfg(test)]
+mod link_title_tests {
+    use super::link_title;
+
+    #[test]
+    fn titles_come_from_opengraph() {
+        assert_eq!(
+            link_title(r#"{"og:title": "Rust  (programming\nlanguage)", "og:site_name": "Wikipedia"}"#).as_deref(),
+            Some("Rust (programming language) — Wikipedia")
+        );
+        assert_eq!(
+            link_title(r#"{"og:title": "Matrix.org", "og:site_name": "Matrix"}"#).as_deref(),
+            Some("Matrix.org")
+        );
+        assert!(link_title(r#"{"og:description": "no title"}"#).is_none());
+        assert!(link_title("not json").is_none());
+    }
 }
 
 #[cfg(test)]
