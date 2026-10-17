@@ -158,7 +158,7 @@ pub enum AppEvent {
     Typing {
         account: AccountName,
         room_id: OwnedRoomId,
-        nicks: Vec<String>,
+        nicks: Vec<(OwnedUserId, String)>,
     },
     /// Other members' read receipts: (user, nick, event they read up to).
     Receipts {
@@ -1080,7 +1080,7 @@ impl Account {
                     Ok(AnySyncEphemeralRoomEvent::Typing(typing)) => {
                         let mut nicks = Vec::new();
                         for user in typing.content.user_ids.iter().filter(|u| **u != self.user_id) {
-                            nicks.push(conv.nick(user).await);
+                            nicks.push((user.clone(), conv.nick(user).await));
                         }
                         self.notify.send(AppEvent::Typing {
                             account: self.name.clone(),

@@ -2,13 +2,13 @@
 
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
 };
 
 use chrono::{DateTime, Local};
 use matrix_sdk::{
     notification_settings::RoomNotificationMode,
-    ruma::{EventId, OwnedEventId, UserId},
+    ruma::{EventId, OwnedEventId, OwnedUserId, UserId},
 };
 use ratatui::{
     Frame,
@@ -469,7 +469,12 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
             '+' => t.voice,
             _ => Style::new(),
         };
-        let name: String = m.name.chars().filter(|c| !c.is_control()).take(inner.saturating_sub(3)).collect();
+        let name: String = app
+            .display_name(Some(&m.user_id), &m.name)
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(inner.saturating_sub(3))
+            .collect();
         let (symbol, color) = match win.account().and_then(|a| app.presence_of(a, &m.user_id)) {
             Some(p) => presence_dot(t, p.kind),
             None => (' ', Color::Reset),
@@ -487,6 +492,11 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     f.render_widget(Paragraph::new(rows).block(block), area);
     // Names start on the row after the "Users" header.
     (0..take.min(win.members.len())).map(|n| (Rect { y: area.y + 1 + n as u16, height: 1, ..area }, n)).collect()
+}
+
+/// Who's typing, by your nicknames where you've given them.
+fn typing_names(app: &App, typing: &[(OwnedUserId, String)]) -> String {
+    typing.iter().map(|(user, nick)| app.display_name(Some(user), nick)).collect::<Vec<_>>().join(", ")
 }
 
 fn display_len(s: &str) -> usize {
@@ -556,7 +566,7 @@ fn draw_pane_bar(f: &mut Frame, area: Rect, app: &App, idx: usize) {
         text.push_str("(+E)");
     }
     if !w.typing.is_empty() {
-        text.push_str(&format!("  typing: {}", w.typing.join(", ")));
+        text.push_str(&format!("  typing: {}", typing_names(app, &w.typing)));
     }
     if w.scroll > 0 {
         text.push_str(if w.unseen_below { "  [more, new below]" } else { "  [more]" });
@@ -571,6 +581,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let height = area.height as usize;
     let selected = if idx == app.active { app.focus_event() } else { None };
     let thread_window = app.windows[idx].thread_root().map(ToOwned::to_owned);
+    // The mentions window's copies were named when they were made.
+    let nicknames = if app.windows[idx].is_mentions { BTreeMap::new() } else { app.nicknames().clone() };
     let account = app.windows[idx].room.as_ref().map(|k| k.account.clone());
     let images = app.picker.is_some();
     let (previews, requests) = (&mut app.previews, &mut app.preview_requests);
@@ -587,7 +599,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     // Who has read up to which event (not shown on their own messages).
     let mut readers: HashMap<&EventId, Vec<(&UserId, &str)>> = HashMap::new();
     for (user, (nick, event_id)) in &win.read_by {
-        readers.entry(&**event_id).or_default().push((&**user, nick.as_str()));
+        let name = nicknames.get(user).map_or(nick.as_str(), String::as_str);
+        readers.entry(&**event_id).or_default().push((&**user, name));
     }
 
     // The "new messages" divider only matters if someone else said something.
@@ -637,7 +650,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         let below = rows.len();
         let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
-        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned);
+        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
         if is_selected {
             for row in &mut rendered {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
@@ -817,7 +830,19 @@ fn day_changed(t: &Theme, ts: DateTime<Local>) -> TLine<'static> {
 /// Format one scrollback line and wrap it to `width`, indenting
 /// continuation rows under the message text.
 pub fn render_line(line: &Line, width: usize, cfg: &Config) -> Vec<TLine<'static>> {
-    render_line_with(line, width, cfg, &[], None, false)
+    render_line_with(line, width, cfg, &[], None, false, &BTreeMap::new())
+}
+
+/// A line as text, with your nicknames (for tests).
+#[cfg(test)]
+pub fn render_line_with_names(
+    line: &Line,
+    width: usize,
+    cfg: &Config,
+    names: &BTreeMap<OwnedUserId, String>,
+) -> String {
+    let rows = render_line_with(line, width, cfg, &[], None, false, names);
+    rows.iter().map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
 /// `render_line`, plus the nicks whose read receipt sits on this line, the
@@ -830,7 +855,12 @@ fn render_line_with(
     read_by: &[&str],
     thread_window: Option<&EventId>,
     pinned: bool,
+    nicknames: &BTreeMap<OwnedUserId, String>,
 ) -> Vec<TLine<'static>> {
+    let name_for = |user: Option<&OwnedUserId>, fallback: &str| -> String {
+        user.and_then(|u| nicknames.get(u)).map_or_else(|| fallback.to_owned(), Clone::clone)
+    };
+    let nick = name_for(line.sender.as_ref(), &line.nick);
     let t = &cfg.palette;
     let mut cells: Vec<(char, Style)> = Vec::new();
     let push = |cells: &mut Vec<(char, Style)>, s: &str, style: Style| {
@@ -860,17 +890,17 @@ fn render_line_with(
     match line.kind {
         LineKind::Message | LineKind::Utd => {
             push(&mut cells, "<", t.dim);
-            push(&mut cells, &line.nick, nick_style);
+            push(&mut cells, &nick, nick_style);
             push(&mut cells, "> ", t.dim);
         }
         LineKind::Emote => {
             push(&mut cells, " * ", t.accent);
-            push(&mut cells, &line.nick, nick_style);
+            push(&mut cells, &nick, nick_style);
             push(&mut cells, " ", Style::new());
         }
         LineKind::Notice => {
             push(&mut cells, "-", t.dim);
-            push(&mut cells, &line.nick, nick_style);
+            push(&mut cells, &nick, nick_style);
             push(&mut cells, "- ", t.dim);
         }
         LineKind::Error => push(&mut cells, "-!- ", t.error.add_modifier(Modifier::BOLD)),
@@ -886,7 +916,8 @@ fn render_line_with(
     };
     if context {
         let mark = if line.thread && !in_this_thread { '⤷' } else { '↪' };
-        let to = match (&line.reply_nick, &line.reply_snippet) {
+        let reply_nick = line.reply_nick.as_deref().map(|n| name_for(line.reply_sender.as_ref(), n));
+        let to = match (&reply_nick, &line.reply_snippet) {
             (Some(nick), Some(text)) => format!("{mark} {nick} “{text}” "),
             (Some(nick), None) => format!("{mark} {nick}: "),
             _ => format!("{mark} "),
@@ -1097,7 +1128,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     }
 
     if !win.typing.is_empty() {
-        item(&mut spans, vec![Span::styled(format!("typing: {}", win.typing.join(", ")), t.bar)]);
+        item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
     }
 
     for (name, state) in &app.accounts {

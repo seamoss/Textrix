@@ -49,6 +49,8 @@ pub struct Line {
     pub reply_to: Option<OwnedEventId>,
     /// Filled in by the window when the replied-to line is known.
     pub reply_nick: Option<String>,
+    /// Who wrote the message this replies to (for your nicknames).
+    pub reply_sender: Option<OwnedUserId>,
     pub reply_snippet: Option<String>,
     /// Attachment carried by an image/file/audio/video message.
     pub media: Option<Media>,
@@ -96,6 +98,7 @@ impl Line {
             thread_count: None,
             reply_to: None,
             reply_nick: None,
+            reply_sender: None,
             reply_snippet: None,
             media: None,
             progress: None,

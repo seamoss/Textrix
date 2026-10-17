@@ -119,7 +119,7 @@ pub struct Window {
     /// Set by the renderer when the oldest loaded line is on screen.
     pub at_top: bool,
     pub unseen_below: bool,
-    pub typing: Vec<String>,
+    pub typing: Vec<(OwnedUserId, String)>,
     /// When the typing list last changed, to expire it if updates stop.
     typing_at: Option<Instant>,
     pub members: Vec<Member>,
@@ -147,6 +147,8 @@ pub struct Window {
     unsent: Option<Unsent>,
     /// Your own name for it (`/window name`), shown instead of `name`.
     pub local_name: Option<String>,
+    /// Your nickname for the person in a direct-message window.
+    pub person: Option<String>,
 }
 
 #[derive(Debug)]
@@ -201,6 +203,7 @@ impl Window {
             pinned: Vec::new(),
             unsent: None,
             local_name: None,
+            person: None,
         }
     }
 
@@ -240,14 +243,15 @@ impl Window {
         }
     }
 
-    /// The name to show: yours if you gave it one, else the room's.
+    /// The name to show: yours for the window, or for the person in a
+    /// DM, else the room's.
     pub fn title(&self) -> &str {
-        self.local_name.as_deref().unwrap_or(&self.name)
+        self.local_name.as_deref().or(self.person.as_deref()).unwrap_or(&self.name)
     }
 
     /// Both names, for finding a window by either.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(self.name.as_str()).chain(self.local_name.as_deref())
+        std::iter::once(self.name.as_str()).chain(self.local_name.as_deref()).chain(self.person.as_deref())
     }
 
     pub fn has_draft(&self) -> bool {
@@ -297,6 +301,7 @@ impl Window {
                 .find(|l| l.own && l.txn_id.as_ref() == Some(txn) && l.event_id.as_ref().is_none_or(|e| e == id))
         {
             line.reply_nick = echo.reply_nick.take();
+            line.reply_sender = echo.reply_sender.take();
             line.reply_snippet = echo.reply_snippet.take();
             line.reactions = std::mem::take(&mut echo.reactions);
             if echo.edited || echo.redacted {
@@ -317,6 +322,7 @@ impl Window {
             && let Some(parent) = self.lines.iter().rev().find(|l| l.event_id.as_ref() == Some(target))
         {
             (line.reply_nick, line.reply_snippet) = (Some(parent.nick.clone()), Some(snippet(&parent.text())));
+            line.reply_sender = parent.sender.clone();
         }
         self.lines.push_back(line);
         while self.lines.len() > cap {
@@ -423,14 +429,16 @@ impl Window {
             }
         }
 
-        let parents: HashMap<OwnedEventId, (String, String)> = self
+        type Parent = (String, Option<OwnedUserId>, String);
+        let parents: HashMap<OwnedEventId, Parent> = self
             .lines
             .iter()
-            .filter_map(|l| Some((l.event_id.clone()?, (l.nick.clone(), snippet(&l.text())))))
+            .filter_map(|l| Some((l.event_id.clone()?, (l.nick.clone(), l.sender.clone(), snippet(&l.text())))))
             .collect();
         for line in self.lines.iter_mut().filter(|l| l.reply_nick.is_none()) {
-            if let Some((nick, text)) = line.reply_to.as_ref().and_then(|t| parents.get(t)) {
-                (line.reply_nick, line.reply_snippet) = (Some(nick.clone()), Some(text.clone()));
+            if let Some((nick, sender, text)) = line.reply_to.as_ref().and_then(|t| parents.get(t)) {
+                (line.reply_nick, line.reply_sender, line.reply_snippet) =
+                    (Some(nick.clone()), sender.clone(), Some(text.clone()));
             }
         }
     }
@@ -580,6 +588,9 @@ struct Layout {
     /// Your own window names (`/window name`).
     #[serde(default)]
     names: Vec<(WinKey, String)>,
+    /// Your own names for people (`/nickname`), seen only by you.
+    #[serde(default)]
+    nicknames: BTreeMap<OwnedUserId, String>,
 }
 
 /// Several windows on screen at once, like irssi's split windows. Panes
@@ -781,6 +792,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "names", args: "", help: "List room members" },
     Cmd { name: "whois", args: "<nick|@user>", help: "Show a user's profile and device trust" },
     Cmd { name: "nick", args: "<name>", help: "Set your display name on this server" },
+    Cmd {
+        name: "nickname",
+        args: "[nick|@user [name]]",
+        help: "Your own name for someone, shown only to you (no name takes it off)",
+    },
     Cmd { name: "invite", args: "<nick|@user>", help: "Invite a user to this room" },
     Cmd { name: "kick", args: "<nick|@user> [reason]", help: "Remove a user from this room" },
     Cmd { name: "ban", args: "<nick|@user> [reason]", help: "Ban a user from this room" },
@@ -1686,7 +1702,7 @@ impl App {
                 w.unseen_below = true;
             }
             // Someone who just sent a message has stopped typing.
-            w.typing.retain(|nick| *nick != line.nick);
+            w.typing.retain(|(user, _)| line.sender.as_ref() != Some(user));
             // Sending a message means you've read everything before it.
             if let (Some(sender), Some(event_id)) = (&line.sender, &line.event_id)
                 && line.is_message()
@@ -1721,7 +1737,8 @@ impl App {
             }
             ring = true;
             if self.notify_mode != NotifyMode::Off {
-                let title = if w.is_dm { line.nick.clone() } else { format!("{} in {}", line.nick, w.title()) };
+                let nick = line.sender.as_ref().and_then(|u| self.layout.nicknames.get(u)).unwrap_or(&line.nick);
+                let title = if w.is_dm { nick.clone() } else { format!("{nick} in {}", w.title()) };
                 let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
                 self.notifications.push((title, body));
             }
@@ -1882,7 +1899,8 @@ impl App {
         let room =
             self.window_idx(&key.account, &key.room_id).map_or(self.windows[from].title(), |i| self.windows[i].title());
         let mut copy = line.clone();
-        (copy.nick, copy.highlight, copy.cached) = (format!("{room}/{}", line.nick), true, false);
+        let nick = self.display_name(line.sender.as_deref(), &line.nick);
+        (copy.nick, copy.highlight, copy.cached) = (format!("{room}/{nick}"), true, false);
         let idx = self.mentions_window();
         let w = &mut self.windows[idx];
         // In time order, after the window's own notes.
@@ -1947,6 +1965,8 @@ impl App {
             }
         };
         let level = self.windows[idx].update(&meta);
+        let person = self.windows[idx].dm_user.as_ref().and_then(|u| self.layout.nicknames.get(u)).cloned();
+        self.windows[idx].person = person;
         if !self.on_screen(idx) {
             let w = &mut self.windows[idx];
             w.activity = w.activity.max(level);
@@ -1968,6 +1988,7 @@ impl App {
         if let Some(key) = &window.room {
             window.local_name = self.layout.names.iter().find(|(k, _)| k == key).map(|(_, n)| n.clone());
         }
+        window.person = window.dm_user.as_ref().and_then(|u| self.layout.nicknames.get(u)).cloned();
         let rank = |k: &WinKey| self.layout.windows.iter().position(|x| x == k);
         let key = window.room.as_ref().expect("room window");
         let pos = match rank(key) {
@@ -2019,7 +2040,12 @@ impl App {
                 windows.push(key.clone());
             }
         }
-        let layout = Layout { windows, closed: self.layout.closed.clone(), names: self.layout.names.clone() };
+        let layout = Layout {
+            windows,
+            closed: self.layout.closed.clone(),
+            names: self.layout.names.clone(),
+            nicknames: self.layout.nicknames.clone(),
+        };
         if let Ok(json) = serde_json::to_vec_pretty(&layout)
             && let Err(e) = std::fs::write(self.paths.layout_file(), json)
         {
@@ -2583,6 +2609,49 @@ impl App {
     pub fn screen_windows(&self) -> Vec<usize> {
         let Some(split) = &self.split else { return vec![self.active] };
         split.panes.iter().filter_map(|key| self.windows.iter().position(|w| w.id() == *key)).collect()
+    }
+
+    /// Your nicknames for people.
+    pub fn nicknames(&self) -> &BTreeMap<OwnedUserId, String> {
+        &self.layout.nicknames
+    }
+
+    /// What to call someone: your nickname for them, else `fallback`.
+    pub fn display_name<'a>(&'a self, user: Option<&UserId>, fallback: &'a str) -> &'a str {
+        user.and_then(|u| self.layout.nicknames.get(u)).map_or(fallback, String::as_str)
+    }
+
+    /// `/nickname [who [name]]`: your own name for someone, shown in place of
+    /// theirs everywhere in Textrix and never sent anywhere.
+    fn cmd_nickname(&mut self, args: &str) -> Result<(), String> {
+        let (who, name) = split_first(args.trim());
+        if who.is_empty() {
+            if self.layout.nicknames.is_empty() {
+                self.info("no nicknames yet; /nickname <nick|@user> <name> gives someone one");
+            }
+            let rows: Vec<String> = self.layout.nicknames.iter().map(|(u, n)| format!("  {n} → {u}")).collect();
+            rows.into_iter().for_each(|row| self.info(row));
+            return Ok(());
+        }
+        let user = self.resolve_user(who)?;
+        let name: String = name.trim().chars().filter(|c| !c.is_control()).take(48).collect();
+        let text = if name.is_empty() {
+            match self.layout.nicknames.remove(&user) {
+                Some(old) => format!("{user} is no longer “{old}” here"),
+                None => return Err(format!("you haven't given {user} a nickname")),
+            }
+        } else {
+            self.layout.nicknames.insert(user.clone(), name.clone());
+            format!("{user} shows as “{name}” here (only you see it; /nickname {who} takes it off)")
+        };
+        for w in &mut self.windows {
+            if w.dm_user.as_ref() == Some(&user) {
+                w.person = self.layout.nicknames.get(&user).cloned();
+            }
+        }
+        self.save_layout();
+        self.info(text);
+        Ok(())
     }
 
     /// The window's room's own notification mode (`None`: the default).
@@ -3157,10 +3226,13 @@ impl App {
             .filter_map(|l| Some((l.nick.as_str(), l.sender.as_ref()?)));
         let members = win.members.iter().map(|m| (m.name.as_str(), &m.user_id));
         for (nick, user) in speakers.chain(members) {
+            // Your nickname for someone finds them too, but what's inserted
+            // is their own name: nicknames never leave Textrix.
             let matches = if word.starts_with('@') {
                 user.as_str().starts_with(&word)
             } else {
                 nick.to_lowercase().starts_with(&lower)
+                    || self.layout.nicknames.get(user).is_some_and(|n| n.to_lowercase().starts_with(&lower))
             };
             if matches && seen.insert(user.clone()) {
                 let text = if word.starts_with('@') { user.to_string() } else { nick.to_owned() };
@@ -3257,6 +3329,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "nickname" => self.cmd_nickname(args),
             "bell" => self.cmd_bell(args),
             "keys" => self.cmd_keys(args),
             "forward" | "fwd" => self.cmd_forward(args),
@@ -5114,6 +5187,39 @@ mod tests {
     }
 
     #[test]
+    fn nicknames_show_only_here() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-nicknames-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        let mikey: OwnedUserId = "@mikey:x.org".try_into().unwrap();
+        let key = WinKey { account: "t".into(), room_id: "!dm:x.org".try_into().unwrap(), thread: None };
+        let mut dm = Window::new(Some(key), "mikey".into());
+        (dm.is_dm, dm.dm_user) = (true, Some(mikey.clone()));
+        let mut line = msg("$1", "hi");
+        (line.nick, line.sender) = ("mikey".into(), Some(mikey.clone()));
+        dm.lines.push_back(line);
+        app.windows.push(dm);
+        app.switch_to(1);
+
+        app.cmd_nickname("@mikey:x.org Mike").unwrap();
+        assert_eq!(app.windows[1].title(), "Mike", "the DM is named after them");
+        assert_eq!(app.display_name(Some(&mikey), "mikey"), "Mike");
+        let drawn = ui::render_line_with_names(&app.windows[1].lines[0], 80, &app.cfg, app.nicknames());
+        assert!(drawn.contains("<Mike>"), "{drawn}");
+
+        app.input.set_text("Mi");
+        let candidates = app.candidates();
+        assert_eq!(candidates[0].text, "mikey: ", "completion inserts their real name");
+        assert!(std::fs::read_to_string(app.paths.layout_file()).unwrap().contains("Mike"));
+
+        app.cmd_nickname("@mikey:x.org").unwrap();
+        assert_eq!(app.windows[1].title(), "mikey");
+        assert!(app.cmd_nickname("@mikey:x.org").is_err(), "nothing to take off");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn easter_eggs() {
         let mut app = test_app();
         for code in eggs::KONAMI {
@@ -5529,14 +5635,18 @@ mod tests {
             Some(WinKey { account: "t".into(), room_id: room_id.clone(), thread: None }),
             "r".into(),
         ));
+        let (alice, bob): (OwnedUserId, OwnedUserId) =
+            ("@alice:x.org".try_into().unwrap(), "@bob:x.org".try_into().unwrap());
         app.on_event(AppEvent::Typing {
             account: "t".into(),
             room_id: room_id.clone(),
-            nicks: vec!["alice".into(), "bob".into()],
+            nicks: vec![(alice.clone(), "alice".into()), (bob.clone(), "bob".into())],
         });
-        assert_eq!(app.windows[1].typing, vec!["alice", "bob"]);
-        app.on_timeline("t", &room_id, vec![Item::Line(msg("$1", "done typing"))], true);
-        assert_eq!(app.windows[1].typing, vec!["bob"], "alice spoke, so she isn't typing");
+        assert_eq!(app.windows[1].typing.len(), 2);
+        let mut spoke = msg("$1", "done typing");
+        spoke.sender = Some(alice);
+        app.on_timeline("t", &room_id, vec![Item::Line(spoke)], true);
+        assert_eq!(app.windows[1].typing, vec![(bob, "bob".to_owned())], "alice spoke, so they aren't typing");
         assert!(on_off("on", "").unwrap() && !on_off("off", "").unwrap() && on_off("maybe", "usage").is_err());
     }
 
