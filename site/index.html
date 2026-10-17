@@ -64,6 +64,49 @@
   }
   .sub { text-align: center; font-size: 1.15rem; color: #fff; margin: 0; }
 
+  /* The spinning skull. Mandatory. */
+  .masthead {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(6px, 2vw, 18px);
+    perspective: 500px;
+  }
+  .skull {
+    flex: none;
+    position: relative;
+    width: 1.15em;
+    height: 1.15em;
+    font-size: clamp(2rem, 8vw, 4rem);
+    transform-style: preserve-3d;
+    animation: spin 2.2s linear infinite;
+    filter: drop-shadow(0 0 10px #f00) drop-shadow(0 0 3px #ff0);
+  }
+  .skull.right { animation-direction: reverse; }
+  .skull i {
+    position: absolute;
+    inset: 0;
+    font-style: normal;
+    line-height: 1.15em;
+    text-align: center;
+    filter: grayscale(1) contrast(1.6);
+  }
+  /* Slices stacked in depth so it has some heft as it turns. */
+  .skull i:nth-child(1) { transform: translateZ(-7px); filter: grayscale(1) brightness(0.35); }
+  .skull i:nth-child(2) { transform: translateZ(-4px); filter: grayscale(1) brightness(0.55); }
+  .skull i:nth-child(3) { transform: translateZ(-1px); filter: grayscale(1) brightness(0.75); }
+  .skull i:nth-child(4) { transform: translateZ(2px); }
+  @keyframes spin { to { transform: rotateY(360deg); } }
+  .flames {
+    text-align: center;
+    font-size: 1.6rem;
+    letter-spacing: -0.15em;
+    overflow: hidden;
+    white-space: nowrap;
+    animation: flicker 0.35s steps(2) infinite;
+  }
+  @keyframes flicker { 50% { transform: scaleY(1.15) translateY(-2px); filter: hue-rotate(-12deg); } }
+
   .marquee {
     overflow: hidden;
     white-space: nowrap;
@@ -277,7 +320,12 @@
 </head>
 <body>
 <main>
-  <h1>WELCOME TO TEXTRIX!!!1</h1>
+  <div class="masthead">
+    <span class="skull" aria-hidden="true"><i>💀</i><i>💀</i><i>💀</i><i>💀</i></span>
+    <h1>WELCOME TO TEXTRIX!!!1</h1>
+    <span class="skull right" aria-hidden="true"><i>💀</i><i>💀</i><i>💀</i><i>💀</i></span>
+  </div>
+  <div class="flames" aria-hidden="true">🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</div>
   <p class="sub">The irssi-style terminal client for <b>Matrix</b>. Written in Rust. Encrypted end to end. Rad to the max.</p>
 
   <div class="marquee" aria-hidden="true"><span>
