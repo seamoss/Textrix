@@ -846,7 +846,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[default|light|mono]",
+        args: "[default|light|mono|green|blue|red]",
         help: "Switch colours for this session (theme = … in config.toml makes it stick)",
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
@@ -1838,13 +1838,13 @@ impl App {
         )
     }
 
-    /// ↑↑↓↓←→←→BA: the phosphor theme, or back again.
+    /// ↑↑↓↓←→←→BA: the green theme, or back again.
     fn konami_unlocked(&mut self) {
         if self.input.text() == "b" {
             self.input.clear();
         }
-        let back = self.cfg.theme == ThemeName::Phosphor;
-        let name = if back { ThemeName::Default } else { ThemeName::Phosphor };
+        let back = self.cfg.theme == ThemeName::Green;
+        let name = if back { ThemeName::Default } else { ThemeName::Green };
         if let Ok(palette) = Theme::build(name, &self.cfg.colors) {
             (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, name, true);
         }
@@ -4431,8 +4431,10 @@ impl App {
             "default" | "dark" => ThemeName::Default,
             "light" => ThemeName::Light,
             "mono" => ThemeName::Mono,
-            "phosphor" => ThemeName::Phosphor,
-            other => return Err(format!("no theme {other}; there's default, light and mono")),
+            "green" | "phosphor" => ThemeName::Green,
+            "blue" => ThemeName::Blue,
+            "red" | "virtualboy" => ThemeName::Red,
+            other => return Err(format!("no theme {other}; there's default, light, mono, green, blue and red")),
         };
         self.cfg.palette = Theme::build(name, &self.cfg.colors).map_err(|e| format!("{e:#}"))?;
         self.cfg.theme = name;
@@ -5375,7 +5377,7 @@ mod tests {
         for code in eggs::KONAMI {
             app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
-        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Phosphor);
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Green);
         assert!(app.input.is_empty(), "the b doesn't stay in the input line");
         for code in eggs::KONAMI {
             app.on_key(KeyEvent::new(code, KeyModifiers::NONE));

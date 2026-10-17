@@ -7,7 +7,7 @@ and end-to-end encryption.
 ## Install
 
 ```sh
-brew install seamoss/textrix/textrix      # macOS, Linux x86_64 (tap coming soon)
+brew install seamoss/textrix/textrix      # macOS, Linux x86_64
 cargo install --git https://github.com/seamoss/Textrix   # anywhere with Rust 1.96+
 ```
 
@@ -145,7 +145,7 @@ bindings.
 | Search | `/search <text>` across every room's loaded history, `/search -deep <text>` through each room's last 500 messages (decrypted locally — servers can't search encrypted rooms), `/jump N` to land on a result in selection mode |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/theme [default\|light\|mono]` |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/theme [default\|light\|mono\|green\|blue\|red]` |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
@@ -291,8 +291,10 @@ synced, so your other clients notify on it too); `/hilight` lists them and
 ### Colours
 
 `theme = "default"` suits dark terminal backgrounds, `"light"` light ones,
-and `"mono"` uses no colour at all (bold, underline and reverse video).
-`/theme light` tries one for the session. A `[colors]` table changes single
+`"mono"` uses no colour at all (bold, underline and reverse video). Three
+more are one colour on black, like old monochrome monitors: `"green"`
+(phosphor), `"blue"`, and `"red"` (Virtual Boy). `/theme red` tries one
+for the session. A `[colors]` table changes single
 parts, by colour name (`lightcyan`), `#rrggbb`, or a 256-colour number:
 
 ```toml
@@ -341,7 +343,7 @@ sidebar_avatars = true     # room avatars there (coloured initials without graph
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
-theme = "default"          # or "light", "mono"; [colors] overrides parts (see above)
+theme = "default"          # or "light", "mono", "green", "blue", "red"; [colors] overrides parts
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain

@@ -17,8 +17,14 @@ pub enum ThemeName {
     Light,
     /// No colours: bold, underline and reverse video only.
     Mono,
-    /// A green CRT, for those who know the code.
-    Phosphor,
+    /// Green on black, like a classic terminal ("phosphor" works too).
+    #[serde(alias = "phosphor")]
+    Green,
+    /// Blue on black.
+    Blue,
+    /// Red on black, like a Virtual Boy ("virtualboy" works too).
+    #[serde(alias = "virtualboy")]
+    Red,
 }
 
 /// The style of every part of the screen.
@@ -141,7 +147,9 @@ impl Theme {
             ThemeName::Default => Self::default(),
             ThemeName::Light => Self::light(),
             ThemeName::Mono => Self::mono(),
-            ThemeName::Phosphor => Self::phosphor(),
+            ThemeName::Green => Self::green(),
+            ThemeName::Blue => Self::blue(),
+            ThemeName::Red => Self::red(),
         };
         for (key, value) in overrides {
             theme.set(key, value)?;
@@ -219,13 +227,15 @@ impl Theme {
         }
     }
 
-    /// Green on black, like a 1980s terminal.
-    fn phosphor() -> Self {
-        let (bright, green, dim, dark) =
-            (Color::Indexed(46), Color::Indexed(34), Color::Indexed(28), Color::Indexed(22));
+    /// One colour on black, like a monochrome monitor: 256-colour shades
+    /// from brightest to darkest, a hot one for mentions, another for code,
+    /// and the nick palette.
+    fn monochrome(shades: [u8; 4], hot: u8, code: u8, nicks: [u8; 7]) -> Self {
+        let [bright, mid, dim, dark] = shades.map(Color::Indexed);
+        let hot = Color::Indexed(hot);
         let g = Style::new().fg(bright);
         let bold = Modifier::BOLD;
-        let bar = Style::new().fg(Color::Black).bg(green);
+        let bar = Style::new().fg(Color::Black).bg(mid);
         Self {
             base: Style::new().fg(bright).bg(Color::Black),
             bar,
@@ -236,30 +246,45 @@ impl Theme {
             accent: g.add_modifier(bold),
             frame: g,
             own: g.add_modifier(bold),
-            highlight: Style::new().fg(Color::Indexed(118)).add_modifier(bold | Modifier::UNDERLINED),
-            highlight_text: Style::new().fg(Color::Indexed(118)),
+            highlight: Style::new().fg(hot).add_modifier(bold | Modifier::UNDERLINED),
+            highlight_text: Style::new().fg(hot),
             error: g.add_modifier(bold | Modifier::REVERSED),
             divider: g,
             link: g.add_modifier(Modifier::UNDERLINED),
-            mention: Style::new().fg(Color::Indexed(118)).add_modifier(bold),
-            code: Style::new().fg(Color::Indexed(40)),
+            mention: Style::new().fg(hot).add_modifier(bold),
+            code: Style::new().fg(Color::Indexed(code)),
             badge: Style::new().fg(dim),
             pinned: g,
             receipts: Style::new().fg(dim),
-            matched: Style::new().fg(Color::Indexed(118)).add_modifier(bold),
+            matched: Style::new().fg(hot).add_modifier(bold),
             current: Style::new().fg(Color::Black).bg(bright).add_modifier(bold),
             shown: g.add_modifier(bold),
-            inactive: Style::new().fg(green),
-            activity_event: Style::new().fg(green),
+            inactive: Style::new().fg(mid),
+            activity_event: Style::new().fg(mid),
             activity: g.add_modifier(bold),
             op: g.add_modifier(bold),
             voice: g,
             online: bright,
-            away: green,
+            away: mid,
             offline: dark,
-            nicks: [46, 40, 34, 82, 118, 77, 41].map(Color::Indexed).to_vec(),
+            nicks: nicks.map(Color::Indexed).to_vec(),
             message_colors: false,
         }
+    }
+
+    /// Green phosphor, like a 1980s terminal.
+    fn green() -> Self {
+        Self::monochrome([46, 34, 28, 22], 118, 40, [46, 40, 34, 82, 118, 77, 41])
+    }
+
+    /// An electric-blue monochrome monitor.
+    fn blue() -> Self {
+        Self::monochrome([39, 32, 25, 17], 123, 45, [39, 45, 33, 75, 81, 117, 27])
+    }
+
+    /// Red LEDs on black, like a Virtual Boy.
+    fn red() -> Self {
+        Self::monochrome([196, 160, 124, 52], 210, 203, [196, 160, 203, 124, 167, 197, 161])
     }
 
     /// One `[colors]` entry: a colour name ("lightblue"), "#rrggbb", or a
@@ -397,6 +422,27 @@ mod tests {
                 assert!(matches!(style.fg, Some(Color::Indexed(16..)) | None), "{style:?}");
                 assert!(matches!(style.bg, Some(Color::Indexed(16..))), "{style:?}");
             }
+        }
+    }
+
+    #[test]
+    fn monochrome_themes_stay_one_colour_on_black() {
+        for (text, name, bright) in [
+            ("green", ThemeName::Green, 46),
+            ("phosphor", ThemeName::Green, 46),
+            ("blue", ThemeName::Blue, 39),
+            ("red", ThemeName::Red, 196),
+            ("virtualboy", ThemeName::Red, 196),
+        ] {
+            let parsed: ThemeName =
+                toml::from_str::<std::collections::HashMap<String, ThemeName>>(&format!("t = \"{text}\""))
+                    .unwrap()
+                    .remove("t")
+                    .unwrap();
+            assert_eq!(parsed, name, "{text}");
+            let theme = Theme::build(name, &BTreeMap::new()).unwrap();
+            assert_eq!(theme.base, Style::new().fg(Color::Indexed(bright)).bg(Color::Black));
+            assert!(!theme.message_colors, "senders' colours would break the look");
         }
     }
 

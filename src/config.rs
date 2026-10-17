@@ -150,7 +150,8 @@ pub struct Config {
     /// (" [3]" when other windows have new messages). Empty leaves the
     /// title alone.
     pub title: String,
-    /// Built-in colours: "default" (dark backgrounds), "light", or "mono".
+    /// Built-in colours: "default" (dark backgrounds), "light", "mono", or
+    /// one colour on black like an old monitor: "green", "blue", "red".
     pub theme: ThemeName,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,

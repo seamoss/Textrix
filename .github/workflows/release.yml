@@ -2,9 +2,11 @@ name: Release
 
 # Releases come from master. A push that changes the version in Cargo.toml,
 # or running this workflow by hand, builds every target, tags vX.Y.Z and
-# publishes a GitHub release with the archives and the Homebrew formula.
-# Pushes that leave the version alone, or whose tag already exists, stop
-# after the first check.
+# publishes a GitHub release with the archives and the Homebrew formula,
+# using the version's CHANGELOG.md section as its notes (a version without
+# one fails here). Pushes that leave the version alone, or whose tag already
+# exists, stop after the first check. The tap (seamoss/homebrew-textrix)
+# picks up the new formula by itself.
 on:
   push:
     branches: [master]
@@ -52,6 +54,10 @@ jobs:
             release=true
           fi
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ] && ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
 
   build:
     name: ${{ matrix.target }}
@@ -106,10 +112,15 @@ jobs:
           path: dist
       - name: Homebrew formula
         run: packaging/homebrew/formula.sh "$VERSION" dist > dist/textrix.rb
+      - name: Release notes
+        run: |
+          awk -v v="$VERSION" '/^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } } found' \
+            CHANGELOG.md > notes.md
+          test -s notes.md
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.check.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: Textrix ${{ needs.check.outputs.version }}
+          body_path: notes.md
           files: dist/*
-          generate_release_notes: true
