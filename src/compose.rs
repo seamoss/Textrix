@@ -31,13 +31,19 @@ impl Say {
     }
 }
 
+/// ¯\_(ツ)_/¯. Markdown reads its `\_` as an escaped underscore and drops
+/// the backslash (Element's composer does the same), leaving `SHRUG_BROKEN`.
+pub const SHRUG: &str = "¯\\_(ツ)_/¯";
+pub const SHRUG_BROKEN: &str = "¯_(ツ)_/¯";
+
 pub fn compose(text: &str, kind: Say, mentions: &[(String, OwnedUserId)], markdown: bool) -> RoomMessageEventContent {
     let text = &*crate::emoji::expand(text);
     let mentioned: Vec<&(String, OwnedUserId)> =
         mentions.iter().filter(|(nick, _)| !nick.is_empty() && text.contains(nick.as_str())).collect();
 
     let html = if markdown || !mentioned.is_empty() {
-        let mut source = if markdown { text.to_owned() } else { escape_markdown(text) };
+        // A typed shrug keeps its arm in the formatted version too.
+        let mut source = if markdown { text.replace(SHRUG, &escape_markdown(SHRUG)) } else { escape_markdown(text) };
         for (nick, user) in &mentioned {
             let needle = if markdown { nick.clone() } else { escape_markdown(nick) };
             let link = format!("[{}](https://matrix.to/#/{user})", escape_markdown(nick));
@@ -109,6 +115,16 @@ mod tests {
     fn shortcodes_become_emoji() {
         let content = compose("ship it :rocket: `:keep:`", Say::Text, &[], true);
         assert_eq!(content.body(), "ship it 🚀 `:keep:`");
+    }
+
+    #[test]
+    fn shrugs_keep_their_arm() {
+        let alone = compose(&format!("well {SHRUG}"), Say::Text, &[], true);
+        assert_eq!(alone.body(), format!("well {SHRUG}"));
+        assert!(html_of(&alone).is_none_or(|html| html.contains(SHRUG)), "{:?}", html_of(&alone));
+        let formatted = compose(&format!("**sure** {SHRUG}"), Say::Text, &[], true);
+        let html = html_of(&formatted).unwrap();
+        assert!(html.contains(&format!("<strong>sure</strong> {SHRUG}")), "{html}");
     }
 
     #[test]

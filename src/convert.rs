@@ -239,7 +239,15 @@ pub fn rich_of(msgtype: &MessageType) -> Option<Vec<richtext::Span>> {
         MessageType::Notice(c) => c.formatted.as_ref(),
         _ => None,
     }?;
-    (formatted.format == MessageFormat::Html).then(|| richtext::render(&formatted.body)).flatten()
+    let mut spans = (formatted.format == MessageFormat::Html).then(|| richtext::render(&formatted.body)).flatten()?;
+    // Element's Markdown eats the shrug's arm in the formatted version, but
+    // the plain one still has it: put it back.
+    if msgtype.body().contains(crate::compose::SHRUG) {
+        for span in &mut spans {
+            span.text = span.text.replace(crate::compose::SHRUG_BROKEN, crate::compose::SHRUG);
+        }
+    }
+    Some(spans)
 }
 
 fn render_msgtype(msgtype: &MessageType) -> (LineKind, String) {
@@ -314,6 +322,21 @@ pub fn to_local(ts: MilliSecondsSinceUnixEpoch) -> DateTime<Local> {
 #[cfg(test)]
 mod tests {
     use super::strip_reply_fallback;
+
+    #[test]
+    fn shrugs_from_element_get_their_arm_back() {
+        use crate::compose::{SHRUG, SHRUG_BROKEN};
+        use matrix_sdk::ruma::events::room::message::{MessageType, TextMessageEventContent};
+        let body = format!("**sure** {SHRUG}");
+        let html = format!("<strong>sure</strong> {SHRUG_BROKEN}");
+        let spans = super::rich_of(&MessageType::Text(TextMessageEventContent::html(body, html))).unwrap();
+        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(text.contains(SHRUG), "{text}");
+        // A message that really says it without the arm is left alone.
+        let html = format!("<em>meh</em> {SHRUG_BROKEN}");
+        let spans = super::rich_of(&MessageType::Text(TextMessageEventContent::html("meh", html))).unwrap();
+        assert!(spans.iter().any(|s| s.text.contains(SHRUG_BROKEN)));
+    }
 
     #[test]
     fn reply_fallback_is_removed() {
