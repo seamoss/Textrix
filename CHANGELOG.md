@@ -10,9 +10,15 @@ release notes.
 ## [0.1.1] - 2026-10-16
 
 ### Added
-- Monochrome-monitor themes, one colour on black: `green` (phosphor),
-  `blue`, and `red` (Virtual Boy). `theme = "red"` in config.toml, or
-  `/theme red` for the session.
+- Monochrome-monitor themes in green (phosphor), blue and red (Virtual
+  Boy), each three ways:
+  - `green`, `blue`, `red`: the colour on black.
+  - `green-deep`, `blue-deep`, `red-deep`: on deep blue, with every panel
+    framed in double lines, like an 80s airport terminal.
+  - `green-tron`, `blue-tron`, `red-tron`: on black with thin neon outlines.
+  Set `theme = "red-tron"` in config.toml, or try one with `/theme`.
+- Themes can frame the window list, panes and member list; a framed pane
+  carries its name, and the focused one lights up.
 
 ### Changed
 - Install with Homebrew: `brew install seamoss/textrix/textrix`.

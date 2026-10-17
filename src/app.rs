@@ -846,8 +846,8 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[default|light|mono|green|blue|red]",
-        help: "Switch colours for this session (theme = … in config.toml makes it stick)",
+        args: "[name]",
+        help: "Colours for this session: default, light, mono, or green, blue, red (each also -deep, -tron)",
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
@@ -4419,22 +4419,14 @@ impl App {
     }
 
     fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
+        let all = || ThemeName::ALL.map(|(n, _)| n).join(", ");
         let name = match args.trim() {
             "" => {
                 let custom = if self.cfg.colors.is_empty() { "" } else { ", with your [colors] changes" };
-                self.info(format!(
-                    "theme: {}{custom}; /theme default|light|mono switches",
-                    format!("{:?}", self.cfg.theme).to_lowercase()
-                ));
+                self.info(format!("theme: {}{custom}. There's {}", self.cfg.theme.name(), all()));
                 return Ok(());
             }
-            "default" | "dark" => ThemeName::Default,
-            "light" => ThemeName::Light,
-            "mono" => ThemeName::Mono,
-            "green" | "phosphor" => ThemeName::Green,
-            "blue" => ThemeName::Blue,
-            "red" | "virtualboy" => ThemeName::Red,
-            other => return Err(format!("no theme {other}; there's default, light, mono, green, blue and red")),
+            other => ThemeName::parse(other).ok_or_else(|| format!("no theme {other}; there's {}", all()))?,
         };
         self.cfg.palette = Theme::build(name, &self.cfg.colors).map_err(|e| format!("{e:#}"))?;
         self.cfg.theme = name;

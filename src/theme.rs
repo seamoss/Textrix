@@ -4,7 +4,10 @@
 use std::{collections::BTreeMap, str::FromStr};
 
 use anyhow::{Result, bail};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    widgets::BorderType,
+};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -25,6 +28,52 @@ pub enum ThemeName {
     /// Red on black, like a Virtual Boy ("virtualboy" works too).
     #[serde(alias = "virtualboy")]
     Red,
+    /// The colour on deep blue, every panel framed in double lines: an
+    /// 80s airport terminal.
+    #[serde(rename = "green-deep")]
+    GreenDeep,
+    #[serde(rename = "blue-deep")]
+    BlueDeep,
+    #[serde(rename = "red-deep")]
+    RedDeep,
+    /// Black, with thin neon outlines round everything.
+    #[serde(rename = "green-tron")]
+    GreenTron,
+    #[serde(rename = "blue-tron")]
+    BlueTron,
+    #[serde(rename = "red-tron")]
+    RedTron,
+}
+
+impl ThemeName {
+    pub const ALL: [(&str, ThemeName); 12] = [
+        ("default", ThemeName::Default),
+        ("light", ThemeName::Light),
+        ("mono", ThemeName::Mono),
+        ("green", ThemeName::Green),
+        ("green-deep", ThemeName::GreenDeep),
+        ("green-tron", ThemeName::GreenTron),
+        ("blue", ThemeName::Blue),
+        ("blue-deep", ThemeName::BlueDeep),
+        ("blue-tron", ThemeName::BlueTron),
+        ("red", ThemeName::Red),
+        ("red-deep", ThemeName::RedDeep),
+        ("red-tron", ThemeName::RedTron),
+    ];
+
+    /// A theme by name (also "dark", "phosphor", "virtualboy").
+    pub fn parse(name: &str) -> Option<ThemeName> {
+        match name {
+            "dark" => Some(ThemeName::Default),
+            "phosphor" => Some(ThemeName::Green),
+            "virtualboy" => Some(ThemeName::Red),
+            name => ThemeName::ALL.iter().find(|(n, _)| *n == name).map(|(_, t)| *t),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        ThemeName::ALL.iter().find(|(_, t)| *t == self).map_or("default", |(n, _)| n)
+    }
 }
 
 /// The style of every part of the screen.
@@ -83,10 +132,41 @@ pub struct Theme {
     pub nicks: Vec<Color>,
     /// Use the colours senders put in formatted messages.
     pub message_colors: bool,
+    /// Frame the window list, panes and member list in these lines.
+    pub outlines: Option<BorderType>,
+    /// The frames' lines, and the focused pane's.
+    pub border: Style,
+    pub border_focus: Style,
 }
 
 /// A dark blue (#005f87) that white text reads well on.
 const BAR_BG: Color = Color::Indexed(24);
+
+/// The deep blue behind the airport-terminal themes (#00005f).
+const DEEP_BLUE: Color = Color::Indexed(17);
+
+/// A monochrome palette, as 256-colour numbers: shades from brightest to
+/// darkest, a hot one for mentions, one for code, and nick colours.
+struct Hue {
+    shades: [u8; 4],
+    hot: u8,
+    code: u8,
+    nicks: [u8; 7],
+}
+
+const GREEN: Hue = Hue { shades: [46, 34, 28, 22], hot: 118, code: 40, nicks: [46, 40, 34, 82, 118, 77, 41] };
+const BLUE: Hue = Hue { shades: [39, 32, 25, 17], hot: 123, code: 45, nicks: [39, 45, 33, 75, 81, 117, 27] };
+/// Lighter blues, to read on the deep blue.
+const BLUE_ON_DEEP: Hue =
+    Hue { shades: [123, 81, 74, 25], hot: 231, code: 159, nicks: [123, 159, 117, 87, 81, 195, 153] };
+const RED: Hue = Hue { shades: [196, 160, 124, 52], hot: 210, code: 203, nicks: [196, 160, 203, 124, 167, 197, 161] };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backdrop {
+    Black,
+    Deep,
+    Tron,
+}
 
 impl Default for Theme {
     fn default() -> Self {
@@ -137,6 +217,9 @@ impl Default for Theme {
                 Color::LightYellow,
             ],
             message_colors: true,
+            outlines: None,
+            border: Style::new().fg(Color::DarkGray),
+            border_focus: Style::new().fg(Color::Cyan),
         }
     }
 }
@@ -147,9 +230,15 @@ impl Theme {
             ThemeName::Default => Self::default(),
             ThemeName::Light => Self::light(),
             ThemeName::Mono => Self::mono(),
-            ThemeName::Green => Self::green(),
-            ThemeName::Blue => Self::blue(),
-            ThemeName::Red => Self::red(),
+            ThemeName::Green => Self::monochrome(GREEN, Backdrop::Black),
+            ThemeName::Blue => Self::monochrome(BLUE, Backdrop::Black),
+            ThemeName::Red => Self::monochrome(RED, Backdrop::Black),
+            ThemeName::GreenDeep => Self::monochrome(GREEN, Backdrop::Deep),
+            ThemeName::BlueDeep => Self::monochrome(BLUE_ON_DEEP, Backdrop::Deep),
+            ThemeName::RedDeep => Self::monochrome(RED, Backdrop::Deep),
+            ThemeName::GreenTron => Self::monochrome(GREEN, Backdrop::Tron),
+            ThemeName::BlueTron => Self::monochrome(BLUE, Backdrop::Tron),
+            ThemeName::RedTron => Self::monochrome(RED, Backdrop::Tron),
         };
         for (key, value) in overrides {
             theme.set(key, value)?;
@@ -224,20 +313,28 @@ impl Theme {
             offline: Color::Reset,
             nicks: vec![Color::Reset],
             message_colors: false,
+            outlines: None,
+            border: plain.add_modifier(Modifier::DIM),
+            border_focus: bold,
         }
     }
 
-    /// One colour on black, like a monochrome monitor: 256-colour shades
-    /// from brightest to darkest, a hot one for mentions, another for code,
-    /// and the nick palette.
-    fn monochrome(shades: [u8; 4], hot: u8, code: u8, nicks: [u8; 7]) -> Self {
-        let [bright, mid, dim, dark] = shades.map(Color::Indexed);
-        let hot = Color::Indexed(hot);
+    /// One colour, like a monochrome monitor, on black, on deep blue with
+    /// double-line frames (80s airport terminal), or on black with thin
+    /// neon outlines (Tron).
+    fn monochrome(hue: Hue, backdrop: Backdrop) -> Self {
+        let [bright, mid, dim, dark] = hue.shades.map(Color::Indexed);
+        let hot = Color::Indexed(hue.hot);
+        let (paper, outlines) = match backdrop {
+            Backdrop::Black => (Color::Black, None),
+            Backdrop::Deep => (DEEP_BLUE, Some(BorderType::Double)),
+            Backdrop::Tron => (Color::Black, Some(BorderType::Rounded)),
+        };
         let g = Style::new().fg(bright);
         let bold = Modifier::BOLD;
-        let bar = Style::new().fg(Color::Black).bg(mid);
+        let bar = Style::new().fg(paper).bg(mid);
         Self {
-            base: Style::new().fg(bright).bg(Color::Black),
+            base: Style::new().fg(bright).bg(paper),
             bar,
             bar_accent: bar.fg(dark),
             bar_alert: bar.add_modifier(bold),
@@ -252,12 +349,12 @@ impl Theme {
             divider: g,
             link: g.add_modifier(Modifier::UNDERLINED),
             mention: Style::new().fg(hot).add_modifier(bold),
-            code: Style::new().fg(Color::Indexed(code)),
+            code: Style::new().fg(Color::Indexed(hue.code)),
             badge: Style::new().fg(dim),
             pinned: g,
             receipts: Style::new().fg(dim),
             matched: Style::new().fg(hot).add_modifier(bold),
-            current: Style::new().fg(Color::Black).bg(bright).add_modifier(bold),
+            current: Style::new().fg(paper).bg(bright).add_modifier(bold),
             shown: g.add_modifier(bold),
             inactive: Style::new().fg(mid),
             activity_event: Style::new().fg(mid),
@@ -267,24 +364,13 @@ impl Theme {
             online: bright,
             away: mid,
             offline: dark,
-            nicks: nicks.map(Color::Indexed).to_vec(),
+            nicks: hue.nicks.map(Color::Indexed).to_vec(),
             message_colors: false,
+            outlines,
+            // Tron's lines glow brightest; the airport's are quieter.
+            border: Style::new().fg(if backdrop == Backdrop::Tron { mid } else { dim }),
+            border_focus: Style::new().fg(if backdrop == Backdrop::Tron { hot } else { bright }).add_modifier(bold),
         }
-    }
-
-    /// Green phosphor, like a 1980s terminal.
-    fn green() -> Self {
-        Self::monochrome([46, 34, 28, 22], 118, 40, [46, 40, 34, 82, 118, 77, 41])
-    }
-
-    /// An electric-blue monochrome monitor.
-    fn blue() -> Self {
-        Self::monochrome([39, 32, 25, 17], 123, 45, [39, 45, 33, 75, 81, 117, 27])
-    }
-
-    /// Red LEDs on black, like a Virtual Boy.
-    fn red() -> Self {
-        Self::monochrome([196, 160, 124, 52], 210, 203, [196, 160, 203, 124, 167, 197, 161])
     }
 
     /// One `[colors]` entry: a colour name ("lightblue"), "#rrggbb", or a
@@ -444,6 +530,27 @@ mod tests {
             assert_eq!(theme.base, Style::new().fg(Color::Indexed(bright)).bg(Color::Black));
             assert!(!theme.message_colors, "senders' colours would break the look");
         }
+    }
+
+    #[test]
+    fn deep_and_tron_variants_frame_everything() {
+        for name in ThemeName::ALL.map(|(n, _)| n) {
+            let theme = Theme::build(ThemeName::parse(name).unwrap(), &BTreeMap::new()).unwrap();
+            assert_eq!(ThemeName::parse(name).unwrap().name(), name);
+            match name.rsplit_once('-').map(|(_, kind)| kind) {
+                Some("deep") => {
+                    assert_eq!(theme.outlines, Some(BorderType::Double));
+                    assert_eq!(theme.base.bg, Some(DEEP_BLUE));
+                }
+                Some("tron") => {
+                    assert_eq!(theme.outlines, Some(BorderType::Rounded));
+                    assert_eq!(theme.base.bg, Some(Color::Black));
+                }
+                _ => assert_eq!(theme.outlines, None, "{name}"),
+            }
+        }
+        assert_eq!(ThemeName::parse("virtualboy"), Some(ThemeName::Red));
+        assert!(ThemeName::parse("purple").is_none());
     }
 
     #[test]

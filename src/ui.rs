@@ -262,6 +262,14 @@ fn draw_help(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(lines).block(block).scroll((help.scroll as u16, 0)), area);
 }
 
+/// A titled frame, when the theme draws outlines.
+fn outline(t: &Theme, title: &str, focused: bool) -> Option<Block<'static>> {
+    let lines = t.outlines?;
+    let style = if focused { t.border_focus } else { t.border };
+    let title: String = title.chars().filter(|c| !c.is_control()).collect();
+    Some(Block::bordered().border_type(lines).border_style(style).title(Span::styled(format!(" {title} "), style)))
+}
+
 fn activity_style(t: &Theme, level: Activity) -> Style {
     match level {
         Activity::Highlight => t.highlight,
@@ -274,7 +282,8 @@ fn activity_style(t: &Theme, level: Activity) -> Style {
 fn sidebar_width(app: &App) -> u16 {
     let longest = app.windows.iter().map(|w| w.title().chars().count()).max().unwrap_or(6);
     let avatar = if app.cfg.sidebar_avatars { 3 } else { 0 };
-    (longest.clamp(8, 22) + 9 + avatar) as u16
+    let frame = if app.cfg.palette.outlines.is_some() { 1 } else { 0 };
+    (longest.clamp(8, 22) + 9 + avatar + frame) as u16
 }
 
 /// irssi adv_windowlist-style: window number, name and unread count,
@@ -335,7 +344,12 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
 /// coloured by activity, grouped by server and space.
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let t = &app.cfg.palette;
-    let inner = area.width.saturating_sub(1) as usize;
+    let framed = outline(t, "windows", false);
+    let body = match &framed {
+        Some(block) => block.inner(area),
+        None => Rect { width: area.width.saturating_sub(1), ..area },
+    };
+    let inner = body.width as usize;
     let entries = sidebar_entries(app);
     let rows: Vec<(TLine<'static>, bool)> = entries
         .iter()
@@ -348,20 +362,28 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
         })
         .collect();
     // Keep the active window in view.
-    let height = area.height as usize;
+    let height = body.height as usize;
     let active_row = rows.iter().position(|(_, a)| *a).unwrap_or(0);
     let start = (active_row + 1).saturating_sub(height);
     let shown: Vec<TLine> = rows.into_iter().skip(start).take(height).map(|(r, _)| r).collect();
-    let block = Block::new().borders(Borders::RIGHT).border_style(t.dim);
-    f.render_widget(Paragraph::new(shown).block(block), area);
+    match framed {
+        Some(block) => {
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new(shown), body);
+        }
+        None => {
+            let block = Block::new().borders(Borders::RIGHT).border_style(t.dim);
+            f.render_widget(Paragraph::new(shown).block(block), area);
+        }
+    }
 
     // Avatar images go into the gap left for them after the window number.
     let mut hits = Vec::new();
     for (row, entry) in entries.iter().skip(start).take(height).enumerate() {
         let SidebarEntry::Window(i) = entry else { continue };
-        hits.push((Rect { y: area.y + row as u16, height: 1, ..area }, *i));
+        hits.push((Rect { y: body.y + row as u16, height: 1, ..body }, *i));
         if let Some(Preview::Ready(protocol)) = avatar_of(app, *i) {
-            let rect = Rect { x: area.x + 3, y: area.y + row as u16, width: 2, height: 1 };
+            let rect = Rect { x: body.x + 3, y: body.y + row as u16, width: 2, height: 1 };
             f.render_widget(Image::new(protocol), rect);
         }
     }
@@ -443,7 +465,8 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
 fn nicklist_width(app: &App) -> u16 {
     let win = &app.windows[app.active];
     let longest = win.members.iter().map(|m| m.name.chars().count()).max().unwrap_or(6);
-    (longest.clamp(6, 18) + 5) as u16
+    let frame = if app.cfg.palette.outlines.is_some() { 1 } else { 0 };
+    (longest.clamp(6, 18) + 5 + frame) as u16
 }
 
 fn presence_dot(t: &Theme, kind: PresenceKind) -> (char, Color) {
@@ -457,10 +480,20 @@ fn presence_dot(t: &Theme, kind: PresenceKind) -> (char, Color) {
 fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let t = &app.cfg.palette;
     let win = &app.windows[app.active];
-    let inner = area.width.saturating_sub(1) as usize;
-    let height = area.height as usize;
-    let mut rows = vec![TLine::from(Span::styled(format!("Users ({})", win.members.len()), t.dim))];
-    let room = height.saturating_sub(1);
+    // Framed, the count goes in the title instead of a header row.
+    let framed = outline(t, &format!("users ({})", win.members.len()), false);
+    let body = match &framed {
+        Some(block) => block.inner(area),
+        None => Rect { x: area.x + 1, width: area.width.saturating_sub(1), ..area },
+    };
+    let header = usize::from(framed.is_none());
+    let inner = body.width as usize;
+    let height = body.height as usize;
+    let mut rows = Vec::new();
+    if header == 1 {
+        rows.push(TLine::from(Span::styled(format!("Users ({})", win.members.len()), t.dim)));
+    }
+    let room = height.saturating_sub(header);
     let overflow = win.members.len() > room;
     let take = if overflow { room.saturating_sub(1) } else { room };
     for m in win.members.iter().take(take) {
@@ -488,10 +521,17 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     if overflow {
         rows.push(TLine::from(Span::styled(format!("… {} more", win.members.len() - take), t.dim)));
     }
-    let block = Block::new().borders(Borders::LEFT).border_style(t.dim);
-    f.render_widget(Paragraph::new(rows).block(block), area);
-    // Names start on the row after the "Users" header.
-    (0..take.min(win.members.len())).map(|n| (Rect { y: area.y + 1 + n as u16, height: 1, ..area }, n)).collect()
+    match framed {
+        Some(block) => {
+            f.render_widget(block, area);
+            f.render_widget(Paragraph::new(rows), body);
+        }
+        None => {
+            let block = Block::new().borders(Borders::LEFT).border_style(t.dim);
+            f.render_widget(Paragraph::new(rows).block(block), area);
+        }
+    }
+    (0..take.min(win.members.len())).map(|n| (Rect { y: body.y + (header + n) as u16, height: 1, ..body }, n)).collect()
 }
 
 /// Who's typing, by your nicknames where you've given them.
@@ -530,23 +570,44 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
 fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
     let t = app.cfg.palette.clone();
     let panes = app.screen_windows();
+    // With outlines, each pane is framed with its name in the frame.
+    let frame_of = |app: &App, idx: usize| {
+        let w = &app.windows[idx];
+        let lock = if w.encrypted { " (+E)" } else { "" };
+        outline(&t, &format!("{}:{}{lock}", idx + 1, w.title()), idx == app.active)
+    };
     if panes.len() < 2 {
         let idx = app.active;
-        (app.view_width, app.view_height, app.windows[idx].width) = (area.width, area.height, area.width);
-        return draw_messages(f, area, app, idx);
+        let body = match frame_of(app, idx) {
+            Some(block) => {
+                let body = block.inner(area);
+                f.render_widget(block, area);
+                body
+            }
+            None => area,
+        };
+        (app.view_width, app.view_height, app.windows[idx].width) = (body.width, body.height, body.width);
+        return draw_messages(f, body, app, idx);
     }
     let side_by_side = app.split.as_ref().is_some_and(|s| s.side_by_side);
     let fill = vec![Constraint::Fill(1); panes.len()];
     let areas = if side_by_side { Layout::horizontal(fill).split(area) } else { Layout::vertical(fill).split(area) };
     for (n, (&idx, &pane)) in panes.iter().zip(areas.iter()).enumerate() {
-        let mut pane = pane;
-        if side_by_side && n > 0 {
-            let divider = Block::new().borders(Borders::LEFT).border_style(t.dim);
-            f.render_widget(&divider, pane);
-            pane = divider.inner(pane);
-        }
-        let [body, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(pane);
-        draw_pane_bar(f, bar, app, idx);
+        let body = if let Some(block) = frame_of(app, idx) {
+            let body = block.inner(pane);
+            f.render_widget(block, pane);
+            body
+        } else {
+            let mut pane = pane;
+            if side_by_side && n > 0 {
+                let divider = Block::new().borders(Borders::LEFT).border_style(t.dim);
+                f.render_widget(&divider, pane);
+                pane = divider.inner(pane);
+            }
+            let [body, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(pane);
+            draw_pane_bar(f, bar, app, idx);
+            body
+        };
         if idx == app.active {
             (app.view_width, app.view_height) = (body.width, body.height);
         }
