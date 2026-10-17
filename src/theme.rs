@@ -75,14 +75,19 @@ pub struct Theme {
     pub message_colors: bool,
 }
 
+/// A dark blue (#005f87) that white text reads well on.
+const BAR_BG: Color = Color::Indexed(24);
+
 impl Default for Theme {
     fn default() -> Self {
         let bold = Modifier::BOLD;
         Self {
-            bar: Style::new().fg(Color::White).bg(Color::Blue),
-            bar_accent: Style::new().fg(Color::Cyan).bg(Color::Blue),
-            bar_alert: Style::new().fg(Color::Yellow).bg(Color::Blue),
-            pane: Style::new().fg(Color::Gray).bg(Color::DarkGray),
+            // Fixed 256-colour shades, not the terminal's own "blue" (which
+            // many colour schemes make too light for white text).
+            bar: Style::new().fg(Color::Indexed(255)).bg(BAR_BG),
+            bar_accent: Style::new().fg(Color::Indexed(117)).bg(BAR_BG),
+            bar_alert: Style::new().fg(Color::Indexed(221)).bg(BAR_BG),
+            pane: Style::new().fg(Color::Indexed(252)).bg(Color::Indexed(238)),
             dim: Style::new().fg(Color::DarkGray),
             accent: Style::new().fg(Color::Cyan).add_modifier(bold),
             frame: Style::new().fg(Color::Cyan),
@@ -158,7 +163,7 @@ impl Theme {
             frame: Style::new().fg(Color::Indexed(30)),
             op: Style::new().fg(Color::Indexed(130)).add_modifier(bold),
             voice: Style::new().fg(Color::Indexed(28)),
-            pane: Style::new().fg(Color::Black).bg(Color::Indexed(250)),
+            pane: Style::new().fg(Color::Indexed(235)).bg(Color::Indexed(250)),
             away: Color::Indexed(130),
             offline: Color::Indexed(248),
             online: Color::Indexed(28),
@@ -331,6 +336,18 @@ mod tests {
         assert!(Theme::build(ThemeName::Default, &typo).unwrap_err().to_string().contains("link"));
         let bad = BTreeMap::from([("link".to_owned(), "reddish".to_owned())]);
         assert!(Theme::build(ThemeName::Default, &bad).is_err());
+    }
+
+    #[test]
+    fn bars_use_fixed_colours_with_contrast() {
+        // Terminal colour schemes redefine the 16 basic colours; the bars
+        // must not depend on them.
+        for theme in [Theme::default(), Theme::build(ThemeName::Light, &BTreeMap::new()).unwrap()] {
+            for style in [theme.bar, theme.bar_accent, theme.bar_alert, theme.pane] {
+                assert!(matches!(style.fg, Some(Color::Indexed(16..)) | None), "{style:?}");
+                assert!(matches!(style.bg, Some(Color::Indexed(16..))), "{style:?}");
+            }
+        }
     }
 
     #[test]
