@@ -1126,14 +1126,23 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     } else if app.select.is_some() && win.is_mentions {
         item(&mut spans, vec![Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert)]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
         item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     }
 
-    f.render_widget(Paragraph::new(TLine::from(spans)).style(t.bar), area);
+    let flashing = app.flash_until.is_some_and(|until| std::time::Instant::now() < until);
+    let line = if flashing {
+        TLine::from(spans).patch_style(Style::new().add_modifier(Modifier::REVERSED))
+    } else {
+        TLine::from(spans)
+    };
+    f.render_widget(
+        Paragraph::new(line).style(if flashing { t.bar.add_modifier(Modifier::REVERSED) } else { t.bar }),
+        area,
+    );
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {

@@ -91,8 +91,15 @@ pub struct Config {
     /// Read receipts for the window you are looking at: "public" (others
     /// see how far you've read), "private" (only your own clients), "off".
     pub read_receipts: ReceiptMode,
-    /// Ring the terminal bell on highlights and direct messages.
-    pub bell: bool,
+    /// Ring the terminal bell: true, false, or "away" (only while the
+    /// terminal is in the background).
+    pub bell: BellMode,
+    /// "sound" (the terminal's bell), "visual" (the status bar flashes) or
+    /// "both".
+    pub bell_style: BellStyle,
+    /// What rings: "mentions" (mentions, DMs, rooms set to /notify all),
+    /// "invites", "verification", "failed_sends", "transfers".
+    pub bell_for: Vec<BellKind>,
     /// Desktop notifications for highlights and DMs while you're looking
     /// elsewhere: "auto" (detect the terminal), "osc9", "osc777", "osc99"
     /// (kitty), or "off".
@@ -156,7 +163,9 @@ impl Default for Config {
             markdown: true,
             send_typing: true,
             read_receipts: ReceiptMode::Public,
-            bell: true,
+            bell: BellMode::On,
+            bell_style: BellStyle::Sound,
+            bell_for: BellKind::ALL.to_vec(),
             notifications: NotifyMode::Auto,
             notify_preview: true,
             scrollback: 5000,
@@ -180,6 +189,62 @@ impl Default for Config {
             palette: Theme::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BellMode {
+    On,
+    Off,
+    /// Only while the terminal is in the background.
+    Away,
+}
+
+/// `bell = true`, `false` or `"away"` (also "on"/"off").
+impl<'de> Deserialize<'de> for BellMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Word(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Flag(true) => Ok(BellMode::On),
+            Raw::Flag(false) => Ok(BellMode::Off),
+            Raw::Word(word) => match word.as_str() {
+                "on" => Ok(BellMode::On),
+                "off" => Ok(BellMode::Off),
+                "away" => Ok(BellMode::Away),
+                other => Err(serde::de::Error::custom(format!("bell is true, false or \"away\", not {other:?}"))),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BellStyle {
+    Sound,
+    Visual,
+    Both,
+}
+
+/// Things that can ring the bell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BellKind {
+    /// Mentions, highlight words, DMs, and rooms set to /notify all.
+    Mentions,
+    Invites,
+    Verification,
+    FailedSends,
+    /// Finished uploads and downloads.
+    Transfers,
+}
+
+impl BellKind {
+    pub const ALL: [BellKind; 5] =
+        [BellKind::Mentions, BellKind::Invites, BellKind::Verification, BellKind::FailedSends, BellKind::Transfers];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -249,5 +314,23 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bell_settings_parse() {
+        let parse = |text: &str| toml::from_str::<Config>(text);
+        assert_eq!(parse("bell = true").unwrap().bell, BellMode::On);
+        assert_eq!(parse("bell = false").unwrap().bell, BellMode::Off);
+        assert_eq!(parse("bell = \"away\"").unwrap().bell, BellMode::Away);
+        assert!(parse("bell = \"loud\"").is_err());
+        let cfg = parse("bell_style = \"both\"\nbell_for = [\"invites\", \"failed_sends\"]").unwrap();
+        assert_eq!(cfg.bell_style, BellStyle::Both);
+        assert_eq!(cfg.bell_for, [BellKind::Invites, BellKind::FailedSends]);
+        assert_eq!(Config::default().bell_for.len(), 5, "everything rings by default");
     }
 }

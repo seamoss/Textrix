@@ -133,7 +133,7 @@ bindings.
 | Aliases | `/alias tt /window goto Tetrix Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
-| Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>` (see below) |
+| Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
 your power level lets you post. Deleting someone else's message needs
@@ -252,6 +252,15 @@ Matrix push rules so Element and your phone follow the same setting:
 | `mute` | nothing alerts, even mentions; the room is dimmed in the window list |
 | `default` | back to the default |
 
+The bell rings for mentions and DMs (and every message in rooms set to
+`/notify all`), new invitations, verification requests, messages that
+failed to send, and finished uploads and downloads; `bell_for` picks which.
+A burst rings once (rings are at least two seconds apart). `/bell off`,
+`/bell away` (only while the terminal is in the background, in terminals
+that report focus) and `/bell visual` (flash the status bar instead of the
+sound) change it for the session; `/bell test` tries it. Inside tmux the
+bell marks the window in tmux's status line.
+
 `/hilight <word>` highlights a word in every room, like a mention (also
 synced, so your other clients notify on it too); `/hilight` lists them and
 `/dehilight <word>` removes one. `/info` shows a room's setting.
@@ -293,7 +302,9 @@ fold_joins = true          # runs of joins/leaves/renames become one line
 markdown = true
 send_typing = true
 read_receipts = "public"   # "private" (only your clients see it) or "off"
-bell = true
+bell = true                # false, or "away": only while the terminal is in the background
+bell_style = "sound"       # "visual" flashes the status bar, "both" does both
+bell_for = ["mentions", "invites", "verification", "failed_sends", "transfers"]
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
 log = false                # chat logs (plaintext!); /log on|off per session

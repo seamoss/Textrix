@@ -39,7 +39,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::{
     chatlog::ChatLog,
     compose::{Say, compose},
-    config::{Config, NotifyMode, Paths},
+    config::{BellKind, BellMode, BellStyle, Config, NotifyMode, Paths},
     convert::attachment,
     input::{Candidate, Draft, Input},
     links,
@@ -575,6 +575,10 @@ pub struct Split {
 }
 
 const PANES_MAX: usize = 4;
+/// The shortest time between two rings.
+const BELL_GAP: Duration = Duration::from_secs(2);
+/// How long the visual bell flashes.
+const FLASH: Duration = Duration::from_millis(250);
 /// Messages the mentions window keeps.
 const MENTIONS_MAX: usize = 500;
 /// Rows one notch of the mouse wheel scrolls.
@@ -590,7 +594,14 @@ pub struct App {
     pub input: Input,
     tx: Tx,
     pub quit: bool,
+    /// Ring the terminal bell after this frame.
     pub bell: bool,
+    /// The bell for this session (`/bell`), starting from the config.
+    bell_mode: BellMode,
+    bell_style: BellStyle,
+    last_bell: Option<Instant>,
+    /// The visual bell: the status bar flashes until then.
+    pub flash_until: Option<Instant>,
     pub redraw_all: bool,
     pub show_sidebar: bool,
     pub show_nicklist: bool,
@@ -771,6 +782,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
     Cmd { name: "sidebar", args: "", help: "Toggle the window list (F2)" },
     Cmd {
+        name: "bell",
+        args: "[on|off|away|sound|visual|both|test]",
+        help: "The bell for this session: when it rings, sound or a flash, or try it",
+    },
+    Cmd {
         name: "theme",
         args: "[default|light|mono]",
         help: "Switch colours for this session (theme = … in config.toml makes it stick)",
@@ -915,6 +931,7 @@ const SERVER_COMMANDS: &[&str] = &["connect", "disconnect", "logout", "recover"]
 
 impl App {
     pub fn new(cfg: Config, paths: Paths, env: EnvFile, servers: Servers, tx: Tx) -> Self {
+        let (bell_mode, bell_style) = (cfg.bell, cfg.bell_style);
         let layout = std::fs::read(paths.layout_file())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -947,6 +964,10 @@ impl App {
             tx,
             quit: false,
             bell: false,
+            bell_mode,
+            bell_style,
+            last_bell: None,
+            flash_until: None,
             redraw_all: false,
             show_sidebar,
             show_nicklist,
@@ -1456,7 +1477,9 @@ impl App {
                     line.event_id = Some(event_id);
                 }
             }
+            AppEvent::Bell(kind) => self.ring(kind),
             AppEvent::SendFailed { account, room_id, txn_id, error } => {
+                self.ring(BellKind::FailedSends);
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
                 if let Some(line) = w.lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id)) {
@@ -1677,7 +1700,64 @@ impl App {
         for line in mentions {
             self.record_mention(idx, &line, live && !viewing);
         }
-        self.bell |= ring && self.cfg.bell;
+        if ring {
+            self.ring(BellKind::Mentions);
+        }
+    }
+
+    /// Ring the bell for `kind`, as `bell`, `bell_style` and `bell_for` say.
+    /// Rings come at least [`BELL_GAP`] apart, so a burst rings once.
+    fn ring(&mut self, kind: BellKind) {
+        let now = Instant::now();
+        let allowed = match self.bell_mode {
+            BellMode::On => true,
+            BellMode::Off => false,
+            BellMode::Away => !self.focused,
+        };
+        if !allowed || !self.cfg.bell_for.contains(&kind) || self.last_bell.is_some_and(|t| now - t < BELL_GAP) {
+            return;
+        }
+        self.last_bell = Some(now);
+        if matches!(self.bell_style, BellStyle::Sound | BellStyle::Both) {
+            self.bell = true;
+        }
+        if matches!(self.bell_style, BellStyle::Visual | BellStyle::Both) {
+            self.flash_until = Some(now + FLASH);
+        }
+    }
+
+    /// `/bell [on|off|away|sound|visual|both|test]` for this session.
+    fn cmd_bell(&mut self, args: &str) -> Result<(), String> {
+        match args.trim() {
+            "" => {}
+            "on" => self.bell_mode = BellMode::On,
+            "off" => self.bell_mode = BellMode::Off,
+            "away" => self.bell_mode = BellMode::Away,
+            "sound" => self.bell_style = BellStyle::Sound,
+            "visual" => self.bell_style = BellStyle::Visual,
+            "both" => self.bell_style = BellStyle::Both,
+            "test" => {
+                self.last_bell = None;
+                let mode = std::mem::replace(&mut self.bell_mode, BellMode::On);
+                let kinds = std::mem::replace(&mut self.cfg.bell_for, vec![BellKind::Mentions]);
+                self.ring(BellKind::Mentions);
+                (self.bell_mode, self.cfg.bell_for) = (mode, kinds);
+                return Ok(());
+            }
+            _ => return Err("usage: /bell [on|off|away|sound|visual|both|test]".into()),
+        }
+        let when = match self.bell_mode {
+            BellMode::On => "on",
+            BellMode::Off => "off",
+            BellMode::Away => "only while the terminal is in the background",
+        };
+        let how = match self.bell_style {
+            BellStyle::Sound => "sound",
+            BellStyle::Visual => "the status bar flashes",
+            BellStyle::Both => "sound and a flash",
+        };
+        self.info(format!("bell: {when}; {how} (bell = … in config.toml makes it stick)"));
+        Ok(())
     }
 
     /// Copy a message that mentions you into the mentions window (made at
@@ -3045,6 +3125,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "bell" => self.cmd_bell(args),
             "keys" => self.cmd_keys(args),
             "forward" | "fwd" => self.cmd_forward(args),
             "markread" | "read" => self.cmd_markread(args),
@@ -4225,6 +4306,7 @@ impl App {
                 }
                 self.notify_mode = notify::resolve(cfg.notifications);
                 (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
+                (self.bell_mode, self.bell_style) = (cfg.bell, cfg.bell_style);
                 if cfg.mouse != self.cfg.mouse {
                     set_mouse_capture(cfg.mouse);
                 }
@@ -4523,6 +4605,13 @@ pub fn set_mouse_capture(on: bool) {
     }
 }
 
+async fn flash_end(until: Option<Instant>) {
+    match until {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
+    }
+}
+
 pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: UnboundedReceiver<AppEvent>) -> Result<()> {
     let mut keys = EventStream::new();
     let mut clock = tokio::time::interval(Duration::from_secs(1));
@@ -4559,6 +4648,8 @@ pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: Unbounded
                 }
             }
             _ = clock.tick() => {}
+            // Redraw when the visual bell's flash ends.
+            _ = flash_end(app.flash_until) => app.flash_until = None,
         }
     }
     app.shutdown();
@@ -4849,6 +4940,35 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn bells_follow_the_settings_and_dont_pile_up() {
+        let mut app = test_app();
+        app.ring(BellKind::Mentions);
+        assert!(app.bell && app.flash_until.is_none());
+        app.bell = false;
+        app.ring(BellKind::Invites);
+        assert!(!app.bell, "a burst rings once");
+
+        app.last_bell = None;
+        app.cfg.bell_for = vec![BellKind::Mentions];
+        app.ring(BellKind::Transfers);
+        assert!(!app.bell, "not in bell_for");
+
+        app.cmd_bell("away").unwrap();
+        app.focused = true;
+        app.ring(BellKind::Mentions);
+        assert!(!app.bell, "away: quiet while you're looking");
+        app.focused = false;
+        app.ring(BellKind::Mentions);
+        assert!(app.bell);
+
+        (app.bell, app.last_bell) = (false, None);
+        app.cmd_bell("visual").unwrap();
+        app.ring(BellKind::Mentions);
+        assert!(!app.bell && app.flash_until.is_some(), "flashes instead of beeping");
+        assert!(app.cmd_bell("loud").is_err());
     }
 
     #[test]

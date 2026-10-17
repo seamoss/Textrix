@@ -94,7 +94,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{Paths, ReceiptMode, SyncMode, create_private_dir},
+    config::{BellKind, Paths, ReceiptMode, SyncMode, create_private_dir},
     convert::Converter,
     model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo},
     servers::{EnvFile, Secret, ServerDef, write_private},
@@ -105,6 +105,8 @@ pub type Tx = UnboundedSender<AppEvent>;
 
 pub enum AppEvent {
     Connected(Account),
+    /// Something that may ring the bell (per `bell_for`).
+    Bell(BellKind),
     /// Rooms that have their own notification mode (others use the default).
     PushRules {
         account: AccountName,
@@ -1126,6 +1128,9 @@ impl Account {
                 "{} invited you to {name}. Type /join {room_id} to accept",
                 inviter.as_deref().unwrap_or("someone"),
             ));
+            if live {
+                self.notify.send(AppEvent::Bell(BellKind::Invites));
+            }
         }
     }
 
@@ -1279,6 +1284,7 @@ impl Account {
                     "verification request from {who} (device {}). Type /verify accept",
                     ev.content.from_device
                 ));
+                notify.send(AppEvent::Bell(BellKind::Verification));
                 slot.lock().await.request = Some(request);
             }
         });
@@ -1373,6 +1379,9 @@ impl Account {
         let acct = self.clone();
         tokio::spawn(async move {
             let result = acct.upload_file(&room_id, &path, &txn_id).await;
+            if result.is_ok() {
+                acct.notify.send(AppEvent::Bell(BellKind::Transfers));
+            }
             let account = acct.name.clone();
             acct.notify.send(match result {
                 Ok(event_id) => AppEvent::Sent { account, room_id, txn_id, event_id },
@@ -1551,6 +1560,7 @@ impl Account {
                     path.display()
                 )),
             );
+            acct.notify.send(AppEvent::Bell(BellKind::Transfers));
             Ok(())
         });
     }
