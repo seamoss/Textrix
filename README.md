@@ -83,7 +83,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
@@ -206,6 +206,13 @@ is one; otherwise the image itself is fetched (up to 20 MB) and decoded with
 size and memory limits. Inside tmux, graphics need
 `set -g allow-passthrough on`. `s` in selection mode or `/download` saves the
 original.
+
+`z` on an image in selection mode, or a click on it, opens it full screen:
+the original is fetched (up to 50 MB) and decoded in memory only, never
+written to disk. `+`/`-` or the mouse wheel zoom (up to 16×), the arrow
+keys (or `hjkl`) move around, `0` fits it again, and Esc closes. With
+kitty, iTerm2 or sixel graphics it's sharp; with half-blocks, zooming in is
+how you see the detail.
 
 ### Reading state
 

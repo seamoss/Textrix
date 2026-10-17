@@ -50,6 +50,7 @@ use crate::{
     switcher::{self, Switcher},
     theme::{Theme, ThemeName},
     ui,
+    viewer::{self, Viewer},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -618,6 +619,8 @@ pub struct App {
     pub clipboard: Option<String>,
     /// The F1 help screen, while open.
     pub help: Option<HelpView>,
+    /// The full-screen image viewer.
+    pub viewer: Option<Viewer>,
     pub split: Option<Split>,
     /// Where each message in the mentions window came from.
     mention_origins: HashMap<OwnedEventId, WinKey>,
@@ -828,7 +831,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
     ("F1 / F2 / F3", "this help / window list / member list"),
     ("F6 / Shift+F6", "focus the next / previous split pane"),
-    ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), name (mentions) or the input"),
+    ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), image (views), name or the input"),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line"),
@@ -844,6 +847,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("t", "open the thread (or start one)"),
     ("p", "pin or unpin it for everyone in the room (if allowed)"),
     ("f", "forward a copy to another room (pick it like the switcher)"),
+    ("z", "view the image full screen: + / - zoom, arrows move, 0 fits, Esc closes"),
     ("s", "save the attachment"),
     ("o", "open the link"),
     ("v", "show spoilers"),
@@ -962,6 +966,7 @@ impl App {
             compose: None,
             clipboard: None,
             help: None,
+            viewer: None,
             split: None,
             mention_origins: HashMap::new(),
             alias_depth: 0,
@@ -1176,6 +1181,23 @@ impl App {
     pub fn on_event(&mut self, ev: AppEvent) {
         let cap = self.cfg.scrollback;
         match ev {
+            AppEvent::FullImage { event_id, image } => {
+                if let Some(v) = self.viewer.as_mut().filter(|v| v.event == event_id) {
+                    v.image = match image {
+                        Ok(image) => viewer::Loading::Ready(image),
+                        Err(e) => viewer::Loading::Failed(e),
+                    };
+                }
+            }
+            AppEvent::ViewerFrame { event_id, view, protocol } => {
+                if let Some(v) = self.viewer.as_mut().filter(|v| v.event == event_id && v.pending == Some(view)) {
+                    v.pending = None;
+                    match protocol {
+                        Ok(protocol) => v.frame = Some((view, protocol)),
+                        Err(e) => v.image = viewer::Loading::Failed(e),
+                    }
+                }
+            }
             AppEvent::PushRules { account, modes } => {
                 self.push_modes.insert(account, modes);
             }
@@ -1863,6 +1885,16 @@ impl App {
     /// image previews, avatars.
     pub fn after_draw(&mut self) {
         self.request_avatars();
+        if let (Some(v), Some(picker)) = (self.viewer.as_mut(), self.picker.clone())
+            && let Some((image, view)) = v.wanted()
+        {
+            v.pending = Some(view);
+            let (tx, event_id) = (self.tx.clone(), v.event.clone());
+            tokio::task::spawn_blocking(move || {
+                let protocol = viewer::render(&image, &view, &picker).map_err(|e| format!("{e:#}"));
+                let _ = tx.send(AppEvent::ViewerFrame { event_id, view, protocol });
+            });
+        }
         // Typing notices normally end with an update from the server; don't
         // let a missed one leave someone "typing" forever.
         for w in &mut self.windows {
@@ -1968,6 +2000,10 @@ impl App {
     /// The wheel scrolls the pane under the pointer (older history loads
     /// at the top), or moves the selection in selection mode.
     fn on_wheel(&mut self, at: Position, up: bool) {
+        if let Some(v) = self.viewer.as_mut() {
+            v.zoom_by(if up { 1 } else { -1 });
+            return;
+        }
         if let Some(sw) = self.switcher.as_mut() {
             sw.selected = if up { sw.selected.saturating_sub(1) } else { sw.selected + 1 };
             return;
@@ -1989,6 +2025,9 @@ impl App {
     /// message is selected (again to unselect); a link opens; a member's
     /// name is added to your message; the input line moves the cursor.
     fn on_click(&mut self, at: Position) {
+        if self.viewer.is_some() {
+            return;
+        }
         if self.switcher.is_some() {
             // A row goes there; a click anywhere else closes the switcher.
             let picked = self.hits.switcher.as_ref().and_then(|(_, rows)| rows.iter().find(|(r, _)| r.contains(at)));
@@ -2022,6 +2061,18 @@ impl App {
             self.switch_to(idx);
         }
         if self.is_editing() {
+            return;
+        }
+        if row.image
+            && let Some(line) = row
+                .event
+                .as_ref()
+                .and_then(|e| self.win().lines.iter().rev().find(|l| l.event_id.as_ref() == Some(e)))
+                .cloned()
+        {
+            if let Err(e) = self.open_viewer(&line) {
+                self.error(e);
+            }
             return;
         }
         if self.win().is_mentions
@@ -2082,6 +2133,21 @@ impl App {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if let Some(v) = self.viewer.as_mut() {
+            match key.code {
+                Esc | Enter | Char('q' | 'z') => self.close_viewer(),
+                Char('c') if ctrl => self.close_viewer(),
+                Char('+' | '=') => v.zoom_by(1),
+                Char('-' | '_') => v.zoom_by(-1),
+                Char('0') => v.zoom_by(0),
+                Left | Char('h') => v.pan(-1.0, 0.0),
+                Right | Char('l') => v.pan(1.0, 0.0),
+                Up | Char('k') => v.pan(0.0, -1.0),
+                Down | Char('j') => v.pan(0.0, 1.0),
+                _ => {}
+            }
+            return;
+        }
         if let Some(help) = self.help.as_mut() {
             match key.code {
                 Esc if !help.filter.is_empty() => {
@@ -2586,6 +2652,11 @@ impl App {
                 self.select = None;
                 let root = line.thread_root.clone().unwrap_or(event);
                 if let Err(e) = self.open_thread(root) {
+                    self.error(e);
+                }
+            }
+            Char('z') => {
+                if let Err(e) = self.open_viewer(&line) {
                     self.error(e);
                 }
             }
@@ -3965,6 +4036,26 @@ impl App {
         Ok(())
     }
 
+    /// Show `line`'s image full screen; the original is fetched for it.
+    fn open_viewer(&mut self, line: &Line) -> Result<(), String> {
+        let media = line.media.clone().filter(|m| m.is_image && !line.redacted).ok_or("that message has no image")?;
+        let event = line.event_id.clone().ok_or("that image isn't sent yet")?;
+        if self.picker.is_none() {
+            return Err("images are off (image_previews = false in config.toml)".into());
+        }
+        let key = self.win().room.clone().or_else(|| self.mention_origins.get(&event).cloned());
+        let acct = key.and_then(|k| self.connected(&k.account)).ok_or("that image's server isn't connected")?;
+        acct.fetch_full_image(event.clone(), media.clone());
+        self.viewer = Some(Viewer::new(event, format!("{} · {}", line.nick, media.filename)));
+        Ok(())
+    }
+
+    fn close_viewer(&mut self) {
+        self.viewer = None;
+        // Terminal graphics can outlive the frame they were drawn in.
+        self.redraw_all = true;
+    }
+
     /// Open the switcher to choose where `line` goes.
     fn start_forward(&mut self, line: &Line) -> Result<(), String> {
         let event = line.event_id.clone().ok_or("that message isn't sent yet")?;
@@ -4629,7 +4720,7 @@ mod tests {
         assert_eq!(app.link_in(&event, "(https://en.wikipedia"), Some(url.to_owned()));
         assert_eq!(app.link_in(&event, "alice"), None, "underlined text that isn't a link");
 
-        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new() };
+        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new(), image: false };
         let area = ratatui::layout::Rect::new(0, 0, 40, 5);
         app.hits.panes.push(ui::PaneHits { area, window: a, rows: vec![ui::RowHit::default(), row] });
         app.on_click(Position::new(10, 1));

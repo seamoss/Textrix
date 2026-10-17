@@ -187,6 +187,17 @@ pub enum AppEvent {
         items: Vec<Item>,
     },
     /// `/threads`: the room's thread roots, newest first.
+    /// An image decoded for the viewer.
+    FullImage {
+        event_id: OwnedEventId,
+        image: Result<Arc<image::DynamicImage>, String>,
+    },
+    /// A view of it, drawn for the terminal.
+    ViewerFrame {
+        event_id: OwnedEventId,
+        view: crate::viewer::View,
+        protocol: Result<Protocol, String>,
+    },
     /// The room's pinned messages, for `/pins`.
     Pins {
         account: AccountName,
@@ -1481,6 +1492,26 @@ impl Account {
         encode_image(bytes, picker, cells).await
     }
 
+    /// The original image for the viewer, decoded in memory only.
+    pub fn fetch_full_image(&self, event_id: OwnedEventId, media: Media) {
+        const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let image = async {
+                if media.size.is_some_and(|s| s > MAX_DOWNLOAD) {
+                    bail!("{} is over 50 MB", media.filename);
+                }
+                let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
+                let bytes = acct.client.media().get_media_content(&request, true).await?;
+                let image = tokio::task::spawn_blocking(move || decode_image(&bytes)).await??;
+                anyhow::Ok(Arc::new(image))
+            }
+            .await
+            .map_err(|e| format!("{e:#}"));
+            acct.notify.send(AppEvent::FullImage { event_id, image });
+        });
+    }
+
     /// A small avatar for the window list, from a server thumbnail.
     pub fn fetch_avatar(&self, room_id: OwnedRoomId, url: OwnedMxcUri, picker: Picker, cells: Size) {
         let acct = self.clone();
@@ -2711,16 +2742,21 @@ impl Account {
 /// thread) and encode it for the terminal to fit `cells`.
 async fn encode_image(bytes: Vec<u8>, picker: Picker, cells: Size) -> Result<Protocol> {
     tokio::task::spawn_blocking(move || -> Result<Protocol> {
-        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(12_000);
-        limits.max_image_height = Some(12_000);
-        limits.max_alloc = Some(256 * 1024 * 1024);
-        reader.limits(limits);
-        let decoded = reader.decode()?;
+        let decoded = decode_image(&bytes)?;
         picker.new_protocol(decoded, cells, Resize::Fit(None)).map_err(|e| anyhow::anyhow!("{e}"))
     })
     .await?
+}
+
+/// Decode an untrusted image with caps on its size and memory (blocking).
+fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    Ok(reader.decode()?)
 }
 
 /// A sender-chosen file name reduced to a plain name: no directories, no

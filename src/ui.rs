@@ -12,7 +12,7 @@ use matrix_sdk::{
 };
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Position, Rect},
+    layout::{Constraint, Layout, Position, Rect, Size},
     style::{Color, Modifier, Style},
     text::{Line as TLine, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -30,6 +30,7 @@ use crate::{
     richtext::Marks,
     switcher,
     theme::Theme,
+    viewer,
 };
 
 /// Where things were drawn in the last frame, so mouse clicks can find
@@ -61,6 +62,8 @@ pub struct RowHit {
     pub event: Option<OwnedEventId>,
     /// Underlined (link) stretches: (from column, to column, their text).
     pub links: Vec<(u16, u16, String)>,
+    /// Part of an image preview.
+    pub image: bool,
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -93,6 +96,36 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.switcher.is_some() {
         app.hits.switcher = Some(draw_switcher(f, app));
+    }
+    if app.viewer.is_some() {
+        draw_viewer(f, app);
+    }
+}
+
+/// The full-screen image viewer: a title bar, and the image centred below.
+fn draw_viewer(f: &mut Frame, app: &mut App) {
+    let t = app.cfg.palette.clone();
+    let screen = f.area();
+    let Some(v) = app.viewer.as_mut() else { return };
+    f.render_widget(Clear, screen);
+    let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(screen);
+    v.area = Size::new(body.width, body.height);
+    let zoom = if v.zoom == 1 { "fit".to_owned() } else { format!("{}×", v.zoom) };
+    let title: String = v.title.chars().filter(|c| !c.is_control()).collect();
+    let text = format!(" {title} · {zoom} · +/- zoom · arrows move · 0 fit · Esc close");
+    f.render_widget(Paragraph::new(text).style(t.bar), bar);
+    match (&v.image, &v.frame) {
+        (viewer::Loading::Failed(e), _) => {
+            let msg = format!("  couldn't show it: {e}");
+            f.render_widget(Paragraph::new(Span::styled(msg, t.error)), body);
+        }
+        (_, Some((_, protocol))) => {
+            let size = protocol.size();
+            let x = body.x + body.width.saturating_sub(size.width) / 2;
+            let y = body.y + body.height.saturating_sub(size.height) / 2;
+            f.render_widget(Image::new(protocol), Rect { x, y, width: size.width, height: size.height });
+        }
+        _ => f.render_widget(Paragraph::new(Span::styled("  loading the full image…", t.dim)), body),
     }
 }
 
@@ -559,8 +592,9 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
 
     let mut need = height + win.scroll;
     let mut rows: Vec<TLine<'static>> = Vec::new();
-    // The message on each row, for mouse clicks.
-    let mut row_events: Vec<Option<OwnedEventId>> = Vec::new();
+    // The message on each row, and whether it's part of an image, for
+    // mouse clicks.
+    let mut row_events: Vec<(Option<OwnedEventId>, bool)> = Vec::new();
     let mut found_selected = selected.is_none();
     let mut i = visible.len();
     while i > 0 && (rows.len() < need || !found_selected) {
@@ -587,7 +621,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                     let height = protocol.size().height;
                     placements.push((id.clone(), rows.len(), height));
                     rows.extend((0..height).map(|_| TLine::default()));
-                    row_events.extend((0..height).map(|_| Some(id.clone())));
+                    row_events.extend((0..height).map(|_| (Some(id.clone()), true)));
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
                 None => {
@@ -606,7 +640,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
             }
         }
-        row_events.extend(rendered.iter().map(|_| line.event_id.clone()));
+        row_events.extend(rendered.iter().map(|_| (line.event_id.clone(), false)));
         rows.extend(rendered.into_iter().rev());
         if is_selected {
             // Scroll just enough to keep the selected message on screen.
@@ -621,7 +655,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(&cfg.palette, line.ts));
-            row_events.push(None);
+            row_events.push((None, false));
         }
         if i > 0
             && visible[i - 1].event_id.is_some()
@@ -629,7 +663,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && last_from_others.is_some_and(|j| j >= i)
         {
             rows.push(new_messages(&cfg.palette, width));
-            row_events.push(None);
+            row_events.push((None, false));
         }
     }
     let exhausted = i == 0;
@@ -654,12 +688,11 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         area,
         window: idx,
         rows: std::iter::repeat_n(RowHit::default(), pad)
-            .chain(
-                shown
-                    .iter()
-                    .zip(&row_events[start..end])
-                    .map(|(row, event)| RowHit { event: event.clone(), links: underlined(row, area.x) }),
-            )
+            .chain(shown.iter().zip(&row_events[start..end]).map(|(row, (event, image))| RowHit {
+                event: event.clone(),
+                links: underlined(row, area.x),
+                image: *image,
+            }))
             .collect(),
     };
     let area = Rect { y: area.y + pad as u16, height: shown.len() as u16, ..area };

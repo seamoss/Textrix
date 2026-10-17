@@ -17,6 +17,7 @@ mod switcher;
 mod theme;
 mod ui;
 mod vault;
+mod viewer;
 
 use std::process::ExitCode;
 
