@@ -72,31 +72,13 @@
     gap: clamp(6px, 2vw, 18px);
     perspective: 500px;
   }
-  .skull {
-    flex: none;
-    position: relative;
-    width: 1.15em;
-    height: 1.15em;
-    font-size: clamp(2rem, 8vw, 4rem);
-    transform-style: preserve-3d;
-    animation: spin 2.2s linear infinite;
-    filter: drop-shadow(0 0 10px #f00) drop-shadow(0 0 3px #ff0);
+  .skull { flex: none; line-height: 0; }
+  .skull img {
+    height: clamp(56px, 13vw, 110px);
+    width: auto;
+    filter: drop-shadow(0 0 10px #f00);
   }
-  .skull.right { animation-direction: reverse; }
-  .skull i {
-    position: absolute;
-    inset: 0;
-    font-style: normal;
-    line-height: 1.15em;
-    text-align: center;
-    filter: grayscale(1) contrast(1.6);
-  }
-  /* Slices stacked in depth so it has some heft as it turns. */
-  .skull i:nth-child(1) { transform: translateZ(-7px); filter: grayscale(1) brightness(0.35); }
-  .skull i:nth-child(2) { transform: translateZ(-4px); filter: grayscale(1) brightness(0.55); }
-  .skull i:nth-child(3) { transform: translateZ(-1px); filter: grayscale(1) brightness(0.75); }
-  .skull i:nth-child(4) { transform: translateZ(2px); }
-  @keyframes spin { to { transform: rotateY(360deg); } }
+  .skull.right img { transform: scaleX(-1); }
   .flames {
     text-align: center;
     font-size: 1.6rem;
@@ -321,9 +303,15 @@
 <body>
 <main>
   <div class="masthead">
-    <span class="skull" aria-hidden="true"><i>💀</i><i>💀</i><i>💀</i><i>💀</i></span>
+    <picture class="skull" aria-hidden="true">
+      <source media="(prefers-reduced-motion: reduce)" srcset="https://media.giphy.com/media/C5q8jnpCWoGsOjy3vt/giphy_s.gif">
+      <img src="https://media.giphy.com/media/C5q8jnpCWoGsOjy3vt/giphy.gif" alt="" referrerpolicy="no-referrer">
+    </picture>
     <h1>WELCOME TO TEXTRIX!!!1</h1>
-    <span class="skull right" aria-hidden="true"><i>💀</i><i>💀</i><i>💀</i><i>💀</i></span>
+    <picture class="skull right" aria-hidden="true">
+      <source media="(prefers-reduced-motion: reduce)" srcset="https://media.giphy.com/media/C5q8jnpCWoGsOjy3vt/giphy_s.gif">
+      <img src="https://media.giphy.com/media/C5q8jnpCWoGsOjy3vt/giphy.gif" alt="" referrerpolicy="no-referrer">
+    </picture>
   </div>
   <div class="flames" aria-hidden="true">🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</div>
   <p class="sub">The irssi-style terminal client for <b>Matrix</b>. Written in Rust. Encrypted end to end. Rad to the max.</p>
@@ -410,7 +398,7 @@ cargo install --git https://github.com/seamoss/Textrix</pre>
     <div class="badge b2">MADE WITH<br>RUST 🦀</div>
     <div class="badge b3">Y2K<br>COMPLIANT</div>
     <div class="badge b4">E2EE<br>INSIDE</div>
-    <div class="badge b5">NO COOKIES<br>NO TRACKING</div>
+    <div class="badge b5">NO COOKIES<br>NO ADS</div>
     <div class="badge b6">HAND-CODED<br>IN NOTEPAD*</div>
   </div>
 
@@ -425,6 +413,8 @@ cargo install --git https://github.com/seamoss/Textrix</pre>
     © 1999–<span id="year">2026</span> Textrix · MIT licensed · Source on
     <a href="https://github.com/seamoss/Textrix">GitHub</a><br>
     This page is not affiliated with any of the things it's nostalgic about.<br>
+    Spinning skull by <a href="https://giphy.com/stickers/spin-skull-C5q8jnpCWoGsOjy3vt">@Sarieeeel</a> via GIPHY,
+    which serves it (so GIPHY sees that request; nothing else here talks to anyone).<br>
     <span class="small">*not actually Notepad</span>
   </footer>
 </main>
