@@ -123,7 +123,7 @@ pub fn fuzzy(query: &str, name: &str) -> Option<(i32, Vec<usize>)> {
     }
 
     // The characters in order, taking the starts of words where possible:
-    // all initials ("tt" for Tetrix Tests) beats a run inside a word.
+    // all initials ("tt" for Team Tests) beats a run inside a word.
     let mut positions = Vec::new();
     let mut from = 0;
     let mut score = 0;
@@ -180,12 +180,12 @@ mod tests {
 
     #[test]
     fn fuzzy_prefers_runs_and_word_starts() {
-        assert_eq!(fuzzy("tests", "Tetrix Tests").unwrap().1, vec![7, 8, 9, 10, 11]);
-        assert_eq!(fuzzy("tt", "Tetrix Tests").unwrap().1, vec![0, 7], "word starts over the nearest t");
-        assert_eq!(fuzzy("tetrixtests", "Tetrix Tests").unwrap().1.len(), 11, "spaces don't break a run");
-        assert!(fuzzy("xyz", "Tetrix Tests").is_none());
-        let (word, _) = fuzzy("con", "Disaster Control").unwrap();
-        let (inner, _) = fuzzy("ont", "Disaster Control").unwrap();
+        assert_eq!(fuzzy("tests", "Team Tests").unwrap().1, vec![5, 6, 7, 8, 9]);
+        assert_eq!(fuzzy("tt", "Treat Tests").unwrap().1, vec![0, 6], "word starts over the nearest t");
+        assert_eq!(fuzzy("teamtests", "Team Tests").unwrap().1.len(), 9, "spaces don't break a run");
+        assert!(fuzzy("xyz", "Team Tests").is_none());
+        let (word, _) = fuzzy("owl", "Night Owls").unwrap();
+        let (inner, _) = fuzzy("wls", "Night Owls").unwrap();
         assert!(word > inner);
     }
 
@@ -194,20 +194,20 @@ mod tests {
         let all = || {
             vec![
                 cand("status", 1, 9, Activity::None),
-                cand("Disaster Control", 2, 1, Activity::None),
-                cand("LLM Party", 3, 0, Activity::None),
-                cand("Tetrix Tests", 10, 2, Activity::Message),
+                cand("Night Owls", 2, 1, Activity::None),
+                cand("Book Club", 3, 0, Activity::None),
+                cand("Team Tests", 10, 2, Activity::Message),
             ]
         };
         // Nothing typed: activity first, then where you were most recently.
-        assert_eq!(names(&rank("", all())), ["Tetrix Tests", "LLM Party", "Disaster Control", "status"]);
-        assert_eq!(names(&rank("con", all())), ["Disaster Control"]);
+        assert_eq!(names(&rank("", all())), ["Team Tests", "Book Club", "Night Owls", "status"]);
+        assert_eq!(names(&rank("owl", all())), ["Night Owls"]);
         let mut renamed = all();
-        (renamed[1].entry.name, renamed[1].entry.aka) = ("Ops".into(), Some("Disaster Control".into()));
-        assert_eq!(names(&rank("disaster", renamed)), ["Ops"], "the room's own name finds a renamed window");
+        (renamed[1].entry.name, renamed[1].entry.aka) = ("Ops".into(), Some("Night Owls".into()));
+        assert_eq!(names(&rank("night", renamed)), ["Ops"], "the room's own name finds a renamed window");
         let mut with_dm = all();
-        with_dm.push(cand("butts_mcgee", 4, 3, Activity::None));
-        assert_eq!(names(&rank("tt", with_dm))[0], "Tetrix Tests", "initials beat a run inside a word");
-        assert_eq!(names(&rank("1", all()))[..2], ["status", "Tetrix Tests"], "numbers find windows");
+        with_dm.push(cand("scotty", 4, 3, Activity::None));
+        assert_eq!(names(&rank("tt", with_dm))[0], "Team Tests", "initials beat a run inside a word");
+        assert_eq!(names(&rank("1", all()))[..2], ["status", "Team Tests"], "numbers find windows");
     }
 }

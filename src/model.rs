@@ -7,7 +7,7 @@ use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedTransactionId, OwnedUserId, events::room::MediaSource,
 };
 
-/// The dotfile name of a server, e.g. `"0x4f02"`.
+/// The dotfile name of a server, e.g. `"m4trix"`.
 pub type AccountName = Arc<str>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

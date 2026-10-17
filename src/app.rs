@@ -469,7 +469,7 @@ impl Window {
         self.last_message(false).or_else(|| self.lines.iter().rev().find(|l| is_target(l)))
     }
 
-    /// `/reply mikey hi` or `/react mikey 👍`: the last message from a nick
+    /// `/reply sam hi` or `/react sam 👍`: the last message from a nick
     /// named at the start of `args` (most recent speaker wins), else the
     /// last message to answer. Returns the target and the remaining text.
     fn answer_target<'a>(&self, args: &'a str) -> (Option<&Line>, &'a str) {
@@ -834,7 +834,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "alias",
         args: "[name [command]]",
-        help: "Your own command: /alias tt /window goto Tetrix Tests ($0 $1 $1- $* take arguments, ; chains)",
+        help: "Your own command: /alias tt /window goto Team Tests ($0 $1 $1- $* take arguments, ; chains)",
     },
     Cmd { name: "unalias", args: "<name>", help: "Remove an alias" },
     Cmd { name: "clear", args: "", help: "Clear this window's scrollback" },
@@ -3597,7 +3597,7 @@ impl App {
         let name = name.trim_start_matches('/').to_lowercase();
         if name.is_empty() {
             if self.cfg.aliases.is_empty() {
-                self.info("no aliases yet; e.g. /alias tt /window goto Tetrix Tests");
+                self.info("no aliases yet; e.g. /alias tt /window goto Team Tests");
             }
             let rows: Vec<String> = self.cfg.aliases.iter().map(|(n, e)| format!("  /{n} → {e}")).collect();
             rows.into_iter().for_each(|row| self.info(row));
@@ -5203,7 +5203,7 @@ mod tests {
 
     #[test]
     fn aliases_expand_like_irssi() {
-        assert_eq!(expand_alias("/window goto Tetrix Tests", ""), ["window goto Tetrix Tests"]);
+        assert_eq!(expand_alias("/window goto Team Tests", ""), ["window goto Team Tests"]);
         assert_eq!(expand_alias("/msg @bob:x.org", "hi there"), ["msg @bob:x.org hi there"], "args appended");
         assert_eq!(expand_alias("/msg $0 says $1-", "@a:x b c d"), ["msg @a:x says b c d"]);
         assert_eq!(expand_alias("/me waves at $*, costs $$5", "bob"), ["me waves at bob, costs $5"]);
@@ -5307,15 +5307,15 @@ mod tests {
     #[test]
     fn writing_to_someone_away_says_so_once() {
         let mut app = test_app();
-        let mikey: OwnedUserId = "@mikey:x.org".try_into().unwrap();
+        let sam: OwnedUserId = "@sam:x.org".try_into().unwrap();
         let key = WinKey { account: "t".into(), room_id: "!dm:x.org".try_into().unwrap(), thread: None };
-        let mut dm = Window::new(Some(key), "mikey".into());
-        (dm.is_dm, dm.dm_user) = (true, Some(mikey.clone()));
+        let mut dm = Window::new(Some(key), "sam".into());
+        (dm.is_dm, dm.dm_user) = (true, Some(sam.clone()));
         app.windows.push(dm);
         app.switch_to(1);
         let away = |status: &str| Presence { kind: PresenceKind::Away, status: Some(status.into()), last_active: None };
         let set = |app: &mut App, p: Presence| {
-            app.on_event(AppEvent::Presence { account: "t".into(), updates: vec![(mikey.clone(), p)] })
+            app.on_event(AppEvent::Presence { account: "t".into(), updates: vec![(sam.clone(), p)] })
         };
         let notes = |app: &App| app.windows[1].lines.iter().filter(|l| l.body.contains(" is ")).count();
 
@@ -5324,7 +5324,7 @@ mod tests {
         set(&mut app, away("lunch"));
         app.note_away(None);
         app.note_away(None);
-        assert_eq!(app.windows[1].lines.back().unwrap().body, "mikey is away: lunch");
+        assert_eq!(app.windows[1].lines.back().unwrap().body, "sam is away: lunch");
         assert_eq!(notes(&app), 1, "once, not every message");
         set(&mut app, away("in a meeting"));
         app.note_away(None);
@@ -5342,30 +5342,30 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("textrix-nicknames-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.paths.base = dir.clone();
-        let mikey: OwnedUserId = "@mikey:x.org".try_into().unwrap();
+        let sam: OwnedUserId = "@sam:x.org".try_into().unwrap();
         let key = WinKey { account: "t".into(), room_id: "!dm:x.org".try_into().unwrap(), thread: None };
-        let mut dm = Window::new(Some(key), "mikey".into());
-        (dm.is_dm, dm.dm_user) = (true, Some(mikey.clone()));
+        let mut dm = Window::new(Some(key), "sam".into());
+        (dm.is_dm, dm.dm_user) = (true, Some(sam.clone()));
         let mut line = msg("$1", "hi");
-        (line.nick, line.sender) = ("mikey".into(), Some(mikey.clone()));
+        (line.nick, line.sender) = ("sam".into(), Some(sam.clone()));
         dm.lines.push_back(line);
         app.windows.push(dm);
         app.switch_to(1);
 
-        app.cmd_nickname("@mikey:x.org Mike").unwrap();
-        assert_eq!(app.windows[1].title(), "Mike", "the DM is named after them");
-        assert_eq!(app.display_name(Some(&mikey), "mikey"), "Mike");
+        app.cmd_nickname("@sam:x.org Bear").unwrap();
+        assert_eq!(app.windows[1].title(), "Bear", "the DM is named after them");
+        assert_eq!(app.display_name(Some(&sam), "sam"), "Bear");
         let drawn = ui::render_line_with_names(&app.windows[1].lines[0], 80, &app.cfg, app.nicknames());
-        assert!(drawn.contains("<Mike>"), "{drawn}");
+        assert!(drawn.contains("<Bear>"), "{drawn}");
 
-        app.input.set_text("Mi");
+        app.input.set_text("Be");
         let candidates = app.candidates();
-        assert_eq!(candidates[0].text, "mikey: ", "completion inserts their real name");
-        assert!(std::fs::read_to_string(app.paths.layout_file()).unwrap().contains("Mike"));
+        assert_eq!(candidates[0].text, "sam: ", "completion inserts their real name");
+        assert!(std::fs::read_to_string(app.paths.layout_file()).unwrap().contains("Bear"));
 
-        app.cmd_nickname("@mikey:x.org").unwrap();
-        assert_eq!(app.windows[1].title(), "mikey");
-        assert!(app.cmd_nickname("@mikey:x.org").is_err(), "nothing to take off");
+        app.cmd_nickname("@sam:x.org").unwrap();
+        assert_eq!(app.windows[1].title(), "sam");
+        assert!(app.cmd_nickname("@sam:x.org").is_err(), "nothing to take off");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -5402,24 +5402,24 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("textrix-names-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         app.paths.base = dir.clone();
-        let a = room_window(&mut app, "!a:x.org", "Disaster Control");
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
         app.switch_to(a);
         app.cmd_window("name Ops").unwrap();
         assert_eq!(app.windows[a].title(), "Ops");
         assert_eq!(app.find_window("ops"), Ok(a));
-        assert_eq!(app.find_window("disaster"), Ok(a), "the room's own name still finds it");
+        assert_eq!(app.find_window("night"), Ok(a), "the room's own name still finds it");
         assert_eq!(app.terminal_title().unwrap(), "Ops — Textrix");
 
         // Kept in the layout, so it comes back with the window.
         let key = app.windows[a].room.clone().unwrap();
         app.remove_window(a);
-        let idx = app.insert_window(Window::new(Some(key), "Disaster Control".into()));
+        let idx = app.insert_window(Window::new(Some(key), "Night Owls".into()));
         assert_eq!(app.windows[idx].title(), "Ops");
         assert!(std::fs::read_to_string(app.paths.layout_file()).unwrap().contains("Ops"));
 
         app.switch_to(idx);
         app.cmd_window("name").unwrap();
-        assert_eq!(app.windows[idx].title(), "Disaster Control", "back to the room's name");
+        assert_eq!(app.windows[idx].title(), "Night Owls", "back to the room's name");
         app.switch_to(0);
         assert!(app.cmd_window("name Home").is_err(), "the status window keeps its name");
         std::fs::remove_dir_all(dir).unwrap();

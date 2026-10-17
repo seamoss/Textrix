@@ -145,6 +145,6 @@ mod tests {
 
     #[test]
     fn quoting_for_security_interactive() {
-        assert_eq!(quote(r#"0x4f02 /Users/a "b"/x"#), r#""0x4f02 /Users/a \"b\"/x""#);
+        assert_eq!(quote(r#"m4trix /Users/a "b"/x"#), r#""m4trix /Users/a \"b\"/x""#);
     }
 }

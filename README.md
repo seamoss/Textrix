@@ -79,7 +79,7 @@ unencrypted too.
 | Alt+1…0, Alt+Q…P | window 1–20 |
 | Ctrl+N / Ctrl+P, Alt+←/→ | next / previous window |
 | Alt+A | jump to the most important active window |
-| Ctrl+K, Alt+K | **quick switcher**: type part of a room's name (letters in order, like `tt` for Tetrix Tests) or its number; ↑/↓ choose, Enter goes there. Closed windows are included. With nothing typed it lists windows with activity first, then where you were most recently, so Ctrl+K Enter flips back to the last window. Ctrl+K still cuts to the end of the line when there's text after the cursor |
+| Ctrl+K, Alt+K | **quick switcher**: type part of a room's name (letters in order, like `tt` for Team Tests) or its number; ↑/↓ choose, Enter goes there. Closed windows are included. With nothing typed it lists windows with activity first, then where you were most recently, so Ctrl+K Enter flips back to the last window. Ctrl+K still cuts to the end of the line when there's text after the cursor |
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
@@ -136,9 +136,9 @@ bindings.
 | Files | `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/theme [default\|light\|mono]` |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
-| Aliases | `/alias tt /window goto Tetrix Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
+| Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
-| Nicknames | `/nickname mikey Mike` shows that person as "Mike" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname mikey` takes it off, `/nickname` lists them. Kept in `layout.json` |
+| Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
@@ -236,7 +236,7 @@ how you see the detail.
   45 seconds without an update.
 - Like irssi's "is away": when you write to someone who's away or offline
   (in your DM with them, by mentioning them, or replying to them), a line
-  says so ("mikey is away: lunch") once, and again only when that changes.
+  says so ("sam is away: lunch") once, and again only when that changes.
   It uses the presence your server shares, so not on sliding sync.
 - Messages that mention you or a highlight word are collected, from every
   room and in time order, in a **mentions** window (listed under status;

@@ -139,11 +139,11 @@ mod tests {
         let mut log = ChatLog::new(dir.clone());
         let room: &RoomId = "!KYsdfdYxkn:x.org".try_into().unwrap();
         let msg = Item::Line(line("$1", LineKind::Message, "hello\nsecond line"));
-        log.write("0x4f02", "Tetrix Tests!", room, &msg).unwrap();
-        log.write("0x4f02", "Tetrix Tests!", room, &msg).unwrap();
-        log.write("0x4f02", "Tetrix Tests!", room, &Item::Line(line("$2", LineKind::Emote, "waves"))).unwrap();
+        log.write("m4trix", "Team Tests!", room, &msg).unwrap();
+        log.write("m4trix", "Team Tests!", room, &msg).unwrap();
+        log.write("m4trix", "Team Tests!", room, &Item::Line(line("$2", LineKind::Emote, "waves"))).unwrap();
 
-        let file = dir.join("0x4f02").join("tetrix-tests.KYsdfd").join(format!("{}.log", today()));
+        let file = dir.join("m4trix").join("team-tests.KYsdfd").join(format!("{}.log", today()));
         let text = std::fs::read_to_string(&file).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3, "the repeat isn't written: {text}");
@@ -163,6 +163,6 @@ mod tests {
         let room: &RoomId = "!abc123XYZ:x.org".try_into().unwrap();
         assert_eq!(room_folder("../../etc", room), "etc.abc123");
         assert_eq!(room_folder("", room), "abc123");
-        assert_eq!(safe_name("Disaster Control"), "disaster-control");
+        assert_eq!(safe_name("Night Owls"), "night-owls");
     }
 }

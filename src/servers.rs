@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn keys_split_into_server_and_field() {
-        assert_eq!(parse_key("TEXTRIX_0X4F02_USER"), Some(("0x4f02".into(), Field::User)));
+        assert_eq!(parse_key("TEXTRIX_M4TRIX_USER"), Some(("m4trix".into(), Field::User)));
         assert_eq!(parse_key("TEXTRIX_MY_WORK_RECOVERY_KEY"), Some(("my_work".into(), Field::RecoveryKey)));
         assert_eq!(parse_key("TEXTRIX_HOME_KEYS_PASSPHRASE"), Some(("home".into(), Field::KeysPassphrase)));
         assert_eq!(parse_key("TEXTRIX__USER"), None);
