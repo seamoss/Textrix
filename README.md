@@ -4,6 +4,17 @@ An irssi-style terminal client for Matrix, in Rust (matrix-rust-sdk + ratatui).
 Numbered windows, a status bar with activity, slash commands, nick completion,
 and end-to-end encryption.
 
+## Install
+
+```sh
+brew install seamoss/textrix/textrix      # macOS, Linux x86_64 (tap coming soon)
+cargo install --git https://github.com/seamoss/Textrix   # anywhere with Rust 1.96+
+```
+
+Or download a build for macOS (Apple silicon, Intel) or Linux from the
+[releases](https://github.com/seamoss/Textrix/releases). Then make your
+dotfile (below) and run `textrix`.
+
 ## Setup
 
 Connections come only from a private dotfile. No file, no connections.
@@ -348,6 +359,14 @@ They're not in `/help`.
 
 `cargo build --release` gives a single binary at `target/release/textrix`
 (release builds read `~/.textrix/.env`). CI runs `cargo fmt --check`, clippy
-and the tests on every push to `master`. Pushing a `v*` tag builds archives
-for macOS (Apple silicon and Intel) and Linux x86_64 and publishes them as a
-GitHub release; running the Release workflow by hand only builds them.
+and the tests on every push to `master`.
+
+Releases come from `master`: bump `version` in `Cargo.toml` and push. CI
+then builds macOS (Apple silicon and Intel) and Linux x86_64 archives, tags
+`vX.Y.Z`, and publishes a GitHub release with them and a filled-in
+Homebrew formula (`textrix.rb`, from `packaging/homebrew/`). Running the
+Release workflow by hand releases the current version if it isn't out yet.
+For the tap, copy `textrix.rb` into the `Formula/` directory of
+`seamoss/homebrew-textrix`.
+
+Textrix is MIT licensed; see `LICENSE`.

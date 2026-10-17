@@ -1,0 +1,56 @@
+# Homebrew formula for Textrix. packaging/homebrew/formula.sh fills this in
+# for each release (CI attaches the result to the GitHub release); it goes in
+# the tap repository, github.com/seamoss/homebrew-textrix, as Formula/textrix.rb.
+class Textrix < Formula
+  desc "Irssi-style terminal client for Matrix"
+  homepage "https://github.com/seamoss/Textrix"
+  license "MIT"
+  head "https://github.com/seamoss/Textrix.git", branch: "master"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA_MACOS_ARM@"
+    end
+    on_intel do
+      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA_MACOS_INTEL@"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_INTEL@"
+    end
+  end
+
+  head do
+    depends_on "rust" => :build
+  end
+
+  def install
+    if build.head?
+      system "cargo", "install", *std_cargo_args
+    else
+      bin.install "textrix"
+    end
+    pkgshare.install ".env.example" => "env.example"
+  end
+
+  def caveats
+    <<~EOS
+      Textrix only connects to the servers listed in ~/.textrix/.env. To start:
+        mkdir -p ~/.textrix
+        cp #{opt_pkgshare}/env.example ~/.textrix/.env
+        chmod 600 ~/.textrix/.env
+      then fill in your server and account, and run `textrix`.
+      Passwords can come from a password manager instead of the file;
+      #{opt_pkgshare}/env.example explains how.
+    EOS
+  end
+
+  test do
+    assert_match "textrix", shell_output("#{bin}/textrix --version")
+  end
+end
