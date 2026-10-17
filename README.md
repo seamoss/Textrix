@@ -234,6 +234,10 @@ how you see the detail.
   `/whois` includes it. `✎` in the window list means someone is typing there;
   typing notices clear when that person's message arrives, and expire after
   45 seconds without an update.
+- Like irssi's "is away": when you write to someone who's away or offline
+  (in your DM with them, by mentioning them, or replying to them), a line
+  says so ("mikey is away: lunch") once, and again only when that changes.
+  It uses the presence your server shares, so not on sliding sync.
 - Messages that mention you or a highlight word are collected, from every
   room and in time order, in a **mentions** window (listed under status;
   `/mentions` opens it). Click one, or select it and press Enter, to go to

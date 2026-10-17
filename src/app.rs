@@ -45,7 +45,10 @@ use crate::{
     input::{Candidate, Draft, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
-    model::{AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, RoomMeta, SpaceInfo},
+    model::{
+        AccountName, Activity, Item, Line, LineKind, Media, Member, Permissions, Presence, PresenceKind, RoomMeta,
+        SpaceInfo, ago,
+    },
     notify,
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
@@ -663,6 +666,9 @@ pub struct App {
     /// The full-screen image viewer.
     pub viewer: Option<Viewer>,
     pub split: Option<Split>,
+    /// People whose away status you've been told about (irssi's "is
+    /// away"), and what it was.
+    away_noted: HashMap<OwnedUserId, String>,
     /// Where each message in the mentions window came from.
     mention_origins: HashMap<OwnedEventId, WinKey>,
     /// How many aliases deep the current command runs.
@@ -1030,6 +1036,7 @@ impl App {
             help: None,
             viewer: None,
             split: None,
+            away_noted: HashMap::new(),
             mention_origins: HashMap::new(),
             alias_depth: 0,
             konami: 0,
@@ -1466,6 +1473,12 @@ impl App {
                 self.spaces.insert(account, spaces);
             }
             AppEvent::Presence { account, updates } => {
+                // Back online: the next time they're away is news again.
+                for (user, presence) in &updates {
+                    if presence.kind == PresenceKind::Online {
+                        self.away_noted.remove(user);
+                    }
+                }
                 self.presence.entry(account).or_default().extend(updates);
             }
             AppEvent::Avatar { account, room_id, url, protocol } => {
@@ -3593,6 +3606,45 @@ impl App {
         };
         let content = self.as_thread_message(compose(text, kind, &self.mentions, self.cfg.markdown));
         self.send_content(acct, room_id, content, text, kind.line_kind(), None);
+        self.note_away(None);
+    }
+
+    /// Like irssi's "nick is away": after you write to someone (in their
+    /// DM, by mentioning them, or replying to them) who's away or offline,
+    /// say so once, and again only when that changes.
+    fn note_away(&mut self, replied_to: Option<OwnedUserId>) {
+        let Some(account) = self.win().account().map(ToOwned::to_owned) else { return };
+        let own = self.connected(&account).map(|a| a.user_id);
+        let mut people: Vec<OwnedUserId> = self.win().dm_user.iter().cloned().collect();
+        people.extend(self.mentions.iter().map(|(_, user)| user.clone()));
+        people.extend(replied_to);
+        people.dedup();
+        for user in people.into_iter().filter(|u| Some(u) != own.as_ref()) {
+            let Some(presence) = self.presence_of(&account, &user) else { continue };
+            let status = presence.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let (text, key) = match presence.kind {
+                PresenceKind::Online => continue,
+                PresenceKind::Away => ("away".to_owned(), format!("away {status:?}")),
+                PresenceKind::Offline => match presence.last_active {
+                    Some(at) => {
+                        (format!("offline, last seen {}", ago(Local::now() - at)), format!("offline {status:?}"))
+                    }
+                    None => ("offline".to_owned(), format!("offline {status:?}")),
+                },
+            };
+            if self.away_noted.get(&user) == Some(&key) {
+                continue;
+            }
+            let fallback = user.localpart().to_owned();
+            let nick = self.win().members.iter().find(|m| m.user_id == user).map_or(fallback, |m| m.name.clone());
+            let name = self.display_name(Some(&user), &nick).to_owned();
+            let line = match status {
+                Some(status) => format!("{name} is {text}: {status}"),
+                None => format!("{name} is {text}"),
+            };
+            self.away_noted.insert(user, key);
+            self.info(line);
+        }
     }
 
     /// In a thread window: (root, latest event, its sender), for sending
@@ -3693,6 +3745,7 @@ impl App {
             AddMentions::Yes,
         );
         self.send_content(acct, room_id, content, text, LineKind::Message, Some(event_id));
+        self.note_away(Some(sender));
         Ok(())
     }
 
@@ -5184,6 +5237,38 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn writing_to_someone_away_says_so_once() {
+        let mut app = test_app();
+        let mikey: OwnedUserId = "@mikey:x.org".try_into().unwrap();
+        let key = WinKey { account: "t".into(), room_id: "!dm:x.org".try_into().unwrap(), thread: None };
+        let mut dm = Window::new(Some(key), "mikey".into());
+        (dm.is_dm, dm.dm_user) = (true, Some(mikey.clone()));
+        app.windows.push(dm);
+        app.switch_to(1);
+        let away = |status: &str| Presence { kind: PresenceKind::Away, status: Some(status.into()), last_active: None };
+        let set = |app: &mut App, p: Presence| {
+            app.on_event(AppEvent::Presence { account: "t".into(), updates: vec![(mikey.clone(), p)] })
+        };
+        let notes = |app: &App| app.windows[1].lines.iter().filter(|l| l.body.contains(" is ")).count();
+
+        app.note_away(None);
+        assert_eq!(notes(&app), 0, "nothing known, nothing said");
+        set(&mut app, away("lunch"));
+        app.note_away(None);
+        app.note_away(None);
+        assert_eq!(app.windows[1].lines.back().unwrap().body, "mikey is away: lunch");
+        assert_eq!(notes(&app), 1, "once, not every message");
+        set(&mut app, away("in a meeting"));
+        app.note_away(None);
+        assert_eq!(notes(&app), 2, "a new status is news");
+        set(&mut app, Presence { kind: PresenceKind::Online, status: None, last_active: None });
+        app.note_away(None);
+        set(&mut app, away("in a meeting"));
+        app.note_away(None);
+        assert_eq!(notes(&app), 3, "away again after being back");
     }
 
     #[test]
