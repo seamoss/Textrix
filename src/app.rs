@@ -144,6 +144,8 @@ pub struct Window {
     pub pinned: Vec<OwnedEventId>,
     /// What you were typing here, kept while you're in another window.
     unsent: Option<Unsent>,
+    /// Your own name for it (`/window name`), shown instead of `name`.
+    pub local_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -197,6 +199,7 @@ impl Window {
             width: 0,
             pinned: Vec::new(),
             unsent: None,
+            local_name: None,
         }
     }
 
@@ -234,6 +237,16 @@ impl Window {
             (None, true) => WinRef::Mentions,
             (None, false) => WinRef::Status,
         }
+    }
+
+    /// The name to show: yours if you gave it one, else the room's.
+    pub fn title(&self) -> &str {
+        self.local_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Both names, for finding a window by either.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.name.as_str()).chain(self.local_name.as_deref())
     }
 
     pub fn has_draft(&self) -> bool {
@@ -563,6 +576,9 @@ struct EditSession {
 struct Layout {
     windows: Vec<WinKey>,
     closed: Vec<WinKey>,
+    /// Your own window names (`/window name`).
+    #[serde(default)]
+    names: Vec<(WinKey, String)>,
 }
 
 /// Several windows on screen at once, like irssi's split windows. Panes
@@ -768,7 +784,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "unban", args: "<@user>", help: "Lift a ban" },
     Cmd {
         name: "window",
-        args: "<n>|list|close|move <n>|goto <name>",
+        args: "<n>|list|close|move <n>|goto <name>|name [your name]",
         help: "Manage windows (alias /win; /wc closes, /wl lists)",
     },
     Cmd { name: "split", args: "<window>", help: "Show another window in a pane below (F6 moves between panes)" },
@@ -1274,7 +1290,7 @@ impl App {
                 let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
                 self.layout.closed.retain(|k| *k != key);
                 if let Some(idx) = self.window_idx(&account, &room_id) {
-                    let name = self.windows[idx].name.clone();
+                    let name = self.windows[idx].title().to_owned();
                     self.remove_window(idx);
                     self.status(Line::info(format!("{account}: you left {name}")));
                 }
@@ -1336,7 +1352,7 @@ impl App {
                 let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
                 let room = self
                     .window_idx(&account, &room_id)
-                    .map(|i| self.windows[i].name.clone())
+                    .map(|i| self.windows[i].title().to_owned())
                     .or_else(|| self.connected(&account).and_then(|a| a.quick_meta(&room_id)).map(|m| m.name))
                     .unwrap_or_else(|| room_id.to_string());
                 let rows: Vec<Line> = hits
@@ -1694,7 +1710,7 @@ impl App {
             }
             ring = true;
             if self.notify_mode != NotifyMode::Off {
-                let title = if w.is_dm { line.nick.clone() } else { format!("{} in {}", line.nick, w.name) };
+                let title = if w.is_dm { line.nick.clone() } else { format!("{} in {}", line.nick, w.title()) };
                 let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
                 self.notifications.push((title, body));
             }
@@ -1742,7 +1758,7 @@ impl App {
         Some(
             self.cfg
                 .title
-                .replace("{window}", &w.name)
+                .replace("{window}", w.title())
                 .replace("{number}", &(self.active + 1).to_string())
                 .replace("{server}", w.account().unwrap_or_default())
                 .replace("{activity}", &activity),
@@ -1793,7 +1809,7 @@ impl App {
             return;
         }
         let room =
-            self.window_idx(&key.account, &key.room_id).map_or(&self.windows[from].name, |i| &self.windows[i].name);
+            self.window_idx(&key.account, &key.room_id).map_or(self.windows[from].title(), |i| self.windows[i].title());
         let mut copy = line.clone();
         (copy.nick, copy.highlight, copy.cached) = (format!("{room}/{}", line.nick), true, false);
         let idx = self.mentions_window();
@@ -1877,7 +1893,10 @@ impl App {
     }
 
     /// Insert a room window at its saved position (or at the end).
-    fn insert_window(&mut self, window: Window) -> usize {
+    fn insert_window(&mut self, mut window: Window) -> usize {
+        if let Some(key) = &window.room {
+            window.local_name = self.layout.names.iter().find(|(k, _)| k == key).map(|(_, n)| n.clone());
+        }
         let rank = |k: &WinKey| self.layout.windows.iter().position(|x| x == k);
         let key = window.room.as_ref().expect("room window");
         let pos = match rank(key) {
@@ -1929,7 +1948,7 @@ impl App {
                 windows.push(key.clone());
             }
         }
-        let layout = Layout { windows, closed: self.layout.closed.clone() };
+        let layout = Layout { windows, closed: self.layout.closed.clone(), names: self.layout.names.clone() };
         if let Ok(json) = serde_json::to_vec_pretty(&layout)
             && let Err(e) = std::fs::write(self.paths.layout_file(), json)
         {
@@ -1939,7 +1958,7 @@ impl App {
 
     fn names_lines(&self, idx: usize) -> Vec<Line> {
         let w = &self.windows[idx];
-        let mut lines = vec![Line::info(format!("Users {} ({})", w.name, w.members.len()))];
+        let mut lines = vec![Line::info(format!("Users {} ({})", w.title(), w.members.len()))];
         let col = w.members.iter().map(|m| m.name.chars().count()).max().unwrap_or(0).clamp(4, 20);
         let per_row = ((self.view_width as usize).saturating_sub(10) / (col + 4)).max(1);
         for chunk in w.members.chunks(per_row) {
@@ -2525,11 +2544,16 @@ impl App {
             candidates.push(switcher::Candidate {
                 entry: switcher::Entry {
                     target: switcher::Target::Window(i),
-                    name: w.name.clone(),
-                    detail,
+                    name: w.title().to_owned(),
+                    detail: match (&w.local_name, detail.is_empty()) {
+                        (Some(_), true) => w.name.clone(),
+                        (Some(_), false) => format!("{} · {detail}", w.name),
+                        (None, _) => detail,
+                    },
                     activity: w.activity,
                     unread: w.unread(),
                     matched: Vec::new(),
+                    aka: w.local_name.as_ref().map(|_| w.name.clone()),
                 },
                 number: Some(i + 1),
                 recency: recency(&w.id()),
@@ -2546,6 +2570,7 @@ impl App {
                     activity: Activity::None,
                     unread: meta.unread,
                     matched: Vec::new(),
+                    aka: None,
                 },
                 number: None,
                 recency: usize::MAX,
@@ -3744,7 +3769,7 @@ impl App {
                     .iter()
                     .filter(|l| l.event_id.is_some() && l.is_message() && !l.redacted)
                     .filter(|l| l.text().to_lowercase().contains(&needle))
-                    .map(move |l| (key.clone(), w.name.clone(), l.clone()))
+                    .map(move |l| (key.clone(), w.title().to_owned(), l.clone()))
             })
             .collect();
         found.sort_by_key(|(_, _, line)| std::cmp::Reverse(line.ts));
@@ -3925,7 +3950,7 @@ impl App {
             self.info(format!("◆ {} ({} room(s))", space.name, space.children.len()));
             for child in &space.children {
                 let row = match self.window_idx(&acct.name, child) {
-                    Some(idx) => format!("   {:>2}: {}", idx + 1, self.windows[idx].name),
+                    Some(idx) => format!("   {:>2}: {}", idx + 1, self.windows[idx].title()),
                     None => match acct.quick_meta(child) {
                         Some(meta) => format!("       {} (window closed)", meta.name),
                         None => format!("       {child} (not joined)"),
@@ -3963,8 +3988,8 @@ impl App {
         let (acct, room_id) = self.room_ctx()?;
         if args.trim().is_empty() {
             let text = match &self.win().topic {
-                Some(topic) => format!("Topic for {}: {topic}", self.win().name),
-                None => format!("No topic set for {}", self.win().name),
+                Some(topic) => format!("Topic for {}: {topic}", self.win().title()),
+                None => format!("No topic set for {}", self.win().title()),
             };
             self.info(text);
         } else {
@@ -3996,7 +4021,8 @@ impl App {
                     .map(|(i, w)| {
                         let server = w.account().map(|a| format!(" ({a})")).unwrap_or_default();
                         let enc = if w.encrypted { " [E2E]" } else { "" };
-                        format!("{:>3}: {}{server}{enc}", i + 1, w.name)
+                        let real = if w.local_name.is_some() { format!(" ({})", w.name) } else { String::new() };
+                        format!("{:>3}: {}{real}{server}{enc}", i + 1, w.title())
                     })
                     .collect();
                 for row in rows {
@@ -4034,6 +4060,27 @@ impl App {
                 self.save_layout();
             }
             "goto" => self.goto_name(rest.trim())?,
+            "name" => {
+                let Some(key) = self.win().room.clone() else {
+                    return Err("only room and conversation windows can be renamed".into());
+                };
+                let name: String = rest.trim().chars().filter(|c| !c.is_control()).take(64).collect();
+                self.layout.names.retain(|(k, _)| *k != key);
+                let text = if name.is_empty() {
+                    self.win_mut().local_name = None;
+                    format!("back to the room's own name, {}", self.win().name)
+                } else {
+                    self.layout.names.push((key, name.clone()));
+                    let text = format!(
+                        "{} is now {name} here (only you see this; /window name puts it back)",
+                        self.win().name
+                    );
+                    self.win_mut().local_name = Some(name);
+                    text
+                };
+                self.save_layout();
+                self.info(text);
+            }
             n if n.parse::<usize>().is_ok() => {
                 let n: usize = n.parse().unwrap_or(1);
                 if n == 0 || n > self.windows.len() {
@@ -4053,8 +4100,8 @@ impl App {
         let wanted = name.to_lowercase();
         self.windows
             .iter()
-            .position(|w| w.name.to_lowercase() == wanted)
-            .or_else(|| self.windows.iter().position(|w| w.name.to_lowercase().contains(&wanted)))
+            .position(|w| w.names().any(|n| n.to_lowercase() == wanted))
+            .or_else(|| self.windows.iter().position(|w| w.names().any(|n| n.to_lowercase().contains(&wanted))))
             .ok_or_else(|| format!("no window matching {name}"))
     }
 
@@ -4214,7 +4261,7 @@ impl App {
         let mode = match args.trim() {
             "" => {
                 let what = matrix::describe_notify(self.room_mode(self.active), self.win().is_dm);
-                self.info(format!("notifications in {}: {what}", self.win().name));
+                self.info(format!("notifications in {}: {what}", self.win().title()));
                 return Ok(());
             }
             "all" => Some(RoomNotificationMode::AllMessages),
@@ -4239,7 +4286,7 @@ impl App {
         }
         let idx = self.find_window(target)?;
         if self.on_screen(idx) {
-            return Err(format!("{} is already on screen", self.windows[idx].name));
+            return Err(format!("{} is already on screen", self.windows[idx].title()));
         }
         let current = self.windows[self.active].id();
         let split = self.split.get_or_insert_with(|| Split { panes: vec![current.clone()], side_by_side });
@@ -4277,8 +4324,8 @@ impl App {
         let idx = self
             .windows
             .iter()
-            .position(|w| w.name.to_lowercase() == wanted)
-            .or_else(|| self.windows.iter().position(|w| w.name.to_lowercase().contains(&wanted)))
+            .position(|w| w.names().any(|n| n.to_lowercase() == wanted))
+            .or_else(|| self.windows.iter().position(|w| w.names().any(|n| n.to_lowercase().contains(&wanted))))
             .ok_or_else(|| format!("no window matching {name}"))?;
         self.switch_to(idx);
         Ok(())
@@ -4975,6 +5022,35 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn windows_can_have_your_own_names() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        let a = room_window(&mut app, "!a:x.org", "Disaster Control");
+        app.switch_to(a);
+        app.cmd_window("name Ops").unwrap();
+        assert_eq!(app.windows[a].title(), "Ops");
+        assert_eq!(app.find_window("ops"), Ok(a));
+        assert_eq!(app.find_window("disaster"), Ok(a), "the room's own name still finds it");
+        assert_eq!(app.terminal_title().unwrap(), "Ops — Textrix");
+
+        // Kept in the layout, so it comes back with the window.
+        let key = app.windows[a].room.clone().unwrap();
+        app.remove_window(a);
+        let idx = app.insert_window(Window::new(Some(key), "Disaster Control".into()));
+        assert_eq!(app.windows[idx].title(), "Ops");
+        assert!(std::fs::read_to_string(app.paths.layout_file()).unwrap().contains("Ops"));
+
+        app.switch_to(idx);
+        app.cmd_window("name").unwrap();
+        assert_eq!(app.windows[idx].title(), "Disaster Control", "back to the room's name");
+        app.switch_to(0);
+        assert!(app.cmd_window("name Home").is_err(), "the status window keeps its name");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

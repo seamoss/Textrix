@@ -269,7 +269,7 @@ fn activity_style(t: &Theme, level: Activity) -> Style {
 }
 
 fn sidebar_width(app: &App) -> u16 {
-    let longest = app.windows.iter().map(|w| w.name.chars().count()).max().unwrap_or(6);
+    let longest = app.windows.iter().map(|w| w.title().chars().count()).max().unwrap_or(6);
     let avatar = if app.cfg.sidebar_avatars { 3 } else { 0 };
     (longest.clamp(8, 22) + 9 + avatar) as u16
 }
@@ -382,7 +382,7 @@ fn avatar_slot(app: &App, i: usize) -> Vec<Span<'static>> {
     let initial = if key.thread.is_some() {
         '⤷'
     } else {
-        w.name.chars().find(|c| c.is_alphanumeric()).map_or('#', |c| c.to_uppercase().next().unwrap_or(c))
+        w.title().chars().find(|c| c.is_alphanumeric()).map_or('#', |c| c.to_uppercase().next().unwrap_or(c))
     };
     let tile = match t.nick_color(key.room_id.as_str()) {
         Color::Reset => Style::new().add_modifier(Modifier::REVERSED),
@@ -409,7 +409,7 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     // Columns before the name: avatar slot and presence dot.
     let lead_w = if avatar.is_empty() { 0 } else { 3 } + if dot.is_some() { 2 } else { 0 };
     let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + 1);
-    let name: String = w.name.chars().filter(|c| !c.is_control()).take(room_w).collect();
+    let name: String = w.title().chars().filter(|c| !c.is_control()).take(room_w).collect();
     let pad = inner.saturating_sub(number.len() + lead_w + display_len(&name) + display_len(&unread));
     let muted = app.room_mode(i) == Some(RoomNotificationMode::Mute);
     let style = if active {
@@ -496,10 +496,10 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
     let mut text = match (&win.room, &win.topic) {
         (None, _) => format!(" Textrix {} — {}", env!("CARGO_PKG_VERSION"), app.servers_summary()),
         (Some(_), Some(topic)) => format!(" {topic}"),
-        (Some(_), None) => format!(" {}", win.name),
+        (Some(_), None) => format!(" {}", win.title()),
     };
     if let Some(presence) = win.dm_presence(app) {
-        text.push_str(&format!(" · {} is {}", win.name, presence.describe()));
+        text.push_str(&format!(" · {} is {}", win.title(), presence.describe()));
     }
     let text: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     f.render_widget(Paragraph::new(text).style(t.bar), area);
@@ -548,7 +548,7 @@ fn draw_pane_bar(f: &mut Frame, area: Rect, app: &App, idx: usize) {
     let t = &app.cfg.palette;
     let w = &app.windows[idx];
     let focused = idx == app.active;
-    let mut text = format!("{} {}:{}", if focused { '▶' } else { ' ' }, idx + 1, w.name);
+    let mut text = format!("{} {}:{}", if focused { '▶' } else { ' ' }, idx + 1, w.title());
     if w.encrypted {
         text.push_str("(+E)");
     }
@@ -1061,7 +1061,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled(nick, t.bar)]);
     }
 
-    let mut name = format!("{}:{}", app.active + 1, win.name);
+    let mut name = format!("{}:{}", app.active + 1, win.title());
     if win.encrypted {
         name.push_str("(+E)");
     }
@@ -1117,7 +1117,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     }
 
     if let Some(lines) = app.confirm_paste {
-        let prompt = format!("send {lines} pasted lines to {}? y/n", win.name);
+        let prompt = format!("send {lines} pasted lines to {}? y/n", win.title());
         item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
@@ -1150,7 +1150,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
     let win = &app.windows[app.active];
     let label: String = match app.compose_label() {
         Some(label) => label.chars().take(32).collect(),
-        None => win.name.chars().take(24).collect(),
+        None => win.title().chars().take(24).collect(),
     };
     let prompt = format!("[{label}] ");
     let prompt_w: usize = prompt.chars().map(|c| c.width().unwrap_or(0)).sum();

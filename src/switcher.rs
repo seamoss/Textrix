@@ -50,6 +50,9 @@ pub struct Entry {
     pub unread: u64,
     /// Positions (in characters) of `name` that matched the query.
     pub matched: Vec<usize>,
+    /// The room's own name when you've named the window yourself, which
+    /// finds it too.
+    pub aka: Option<String>,
 }
 
 /// A candidate before ranking: `recency` is 0 for the window you were in
@@ -74,7 +77,8 @@ pub fn rank(query: &str, candidates: Vec<Candidate>) -> Vec<Entry> {
                 true if number.starts_with(query) => 200,
                 _ => 0,
             };
-            let (score, matched) = match fuzzy(query, &c.entry.name) {
+            let by_aka = || c.entry.aka.as_deref().and_then(|aka| fuzzy(query, aka)).map(|(s, _)| (s - 1, Vec::new()));
+            let (score, matched) = match fuzzy(query, &c.entry.name).or_else(by_aka) {
                 Some(found) => found,
                 None if by_number > 0 => (0, Vec::new()),
                 None => return None,
@@ -163,6 +167,7 @@ mod tests {
                 activity,
                 unread: 0,
                 matched: Vec::new(),
+                aka: None,
             },
             number: Some(number),
             recency,
@@ -197,6 +202,9 @@ mod tests {
         // Nothing typed: activity first, then where you were most recently.
         assert_eq!(names(&rank("", all())), ["Tetrix Tests", "LLM Party", "Disaster Control", "status"]);
         assert_eq!(names(&rank("con", all())), ["Disaster Control"]);
+        let mut renamed = all();
+        (renamed[1].entry.name, renamed[1].entry.aka) = ("Ops".into(), Some("Disaster Control".into()));
+        assert_eq!(names(&rank("disaster", renamed)), ["Ops"], "the room's own name finds a renamed window");
         let mut with_dm = all();
         with_dm.push(cand("butts_mcgee", 4, 3, Activity::None));
         assert_eq!(names(&rank("tt", with_dm))[0], "Tetrix Tests", "initials beat a run inside a word");
