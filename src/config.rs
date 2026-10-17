@@ -17,7 +17,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::theme::{Theme, ThemeName};
 
@@ -75,7 +75,7 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// strftime format for the timestamp column.
@@ -124,6 +124,7 @@ pub struct Config {
     /// hold decrypted messages in plaintext, so this is off by default.
     pub log: bool,
     /// Where logs go (default `~/.textrix/logs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<String>,
     /// How to receive updates: "auto" (sliding sync when the server offers
     /// it, else classic), "sliding", or "classic".
@@ -209,6 +210,16 @@ pub enum BellMode {
     Away,
 }
 
+impl Serialize for BellMode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            BellMode::On => s.serialize_bool(true),
+            BellMode::Off => s.serialize_bool(false),
+            BellMode::Away => s.serialize_str("away"),
+        }
+    }
+}
+
 /// `bell = true`, `false` or `"away"` (also "on"/"off").
 impl<'de> Deserialize<'de> for BellMode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
@@ -231,7 +242,7 @@ impl<'de> Deserialize<'de> for BellMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkTitles {
     Off,
@@ -240,7 +251,7 @@ pub enum LinkTitles {
     All,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BellStyle {
     Sound,
@@ -249,7 +260,7 @@ pub enum BellStyle {
 }
 
 /// Things that can ring the bell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BellKind {
     /// Mentions, highlight words, DMs, and rooms set to /notify all.
@@ -266,7 +277,7 @@ impl BellKind {
         [BellKind::Mentions, BellKind::Invites, BellKind::Verification, BellKind::FailedSends, BellKind::Transfers];
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReceiptMode {
     Public,
@@ -274,7 +285,7 @@ pub enum ReceiptMode {
     Off,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncMode {
     Auto,
@@ -282,7 +293,7 @@ pub enum SyncMode {
     Classic,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotifyMode {
     Auto,
@@ -290,6 +301,37 @@ pub enum NotifyMode {
     Osc777,
     Osc99,
     Off,
+}
+
+/// Write the settings in `cfg` that differ from what config.toml says into
+/// it, keeping the rest of the file (comments, layout, other keys) as it is.
+/// Returns the keys written. Tables ([colors], [aliases]) are left alone:
+/// they're edited in the file, or by /alias.
+pub fn save_settings(path: &Path, cfg: &Config) -> Result<Vec<String>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let on_disk: Config =
+        toml::from_str(&text).with_context(|| format!("{} has an error; fix it first", path.display()))?;
+    let (want, have) = (cfg.to_table()?, on_disk.to_table()?);
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parsing {}", path.display()))?;
+    let mut written = Vec::new();
+    for (key, value) in &want {
+        if value.is_table() || have.get(key) == Some(value) {
+            continue;
+        }
+        let value: toml_edit::Value = value.to_string().parse().with_context(|| format!("writing {key}"))?;
+        doc[key.as_str()] = toml_edit::Item::Value(value);
+        written.push(key.clone());
+    }
+    if !written.is_empty() {
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, doc.to_string()).with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(written)
 }
 
 /// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping
@@ -323,6 +365,19 @@ pub fn save_alias(path: &Path, name: &str, expansion: Option<&str>) -> Result<()
 }
 
 impl Config {
+    /// Every setting as TOML.
+    pub fn to_table(&self) -> Result<toml::Table> {
+        Ok(toml::Table::try_from(self)?)
+    }
+
+    /// Settings from TOML, checked like config.toml (unknown keys and wrong
+    /// types are errors).
+    pub fn from_table(table: toml::Table) -> Result<Self> {
+        let mut cfg: Self = table.try_into()?;
+        cfg.palette = Theme::build(cfg.theme, &cfg.colors)?;
+        Ok(cfg)
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
@@ -351,5 +406,40 @@ mod tests {
         assert_eq!(cfg.bell_style, BellStyle::Both);
         assert_eq!(cfg.bell_for, [BellKind::Invites, BellKind::FailedSends]);
         assert_eq!(Config::default().bell_for.len(), 5, "everything rings by default");
+    }
+
+    #[test]
+    fn save_writes_only_changed_settings_and_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!("textrix-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "# mine\nbell = false   # quiet\n\n[aliases]\ntt = \"/window 10\"\n").unwrap();
+        let mut cfg = Config::load(&path).unwrap();
+        assert!(save_settings(&path, &cfg).unwrap().is_empty(), "nothing changed");
+
+        cfg.theme = ThemeName::RedTron;
+        cfg.image_rows = 12;
+        let written = save_settings(&path, &cfg).unwrap();
+        assert_eq!(written, ["image_rows", "theme"]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# mine\nbell = false   # quiet\n"), "{text}");
+        assert!(text.contains("theme = \"red-tron\"") && text.contains("image_rows = 12"), "{text}");
+        assert!(text.contains("[aliases]\ntt = \"/window 10\""), "{text}");
+        let back = Config::load(&path).unwrap();
+        assert_eq!((back.theme, back.image_rows, back.bell), (ThemeName::RedTron, 12, BellMode::Off));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn settings_round_trip_through_toml() {
+        let table = Config::default().to_table().unwrap();
+        assert_eq!(table["bell"], toml::Value::Boolean(true));
+        assert_eq!(table["theme"], toml::Value::String("default".into()));
+        let mut changed = table.clone();
+        changed.insert("bell".into(), toml::Value::String("away".into()));
+        assert_eq!(Config::from_table(changed).unwrap().bell, BellMode::Away);
+        let mut wrong = table;
+        wrong.insert("belll".into(), toml::Value::Boolean(true));
+        assert!(Config::from_table(wrong).is_err(), "unknown settings are errors");
     }
 }

@@ -7,6 +7,17 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.1.2] - 2026-10-16
+
+### Added
+- `/set` lists every setting, or changes one for the session, checked
+  like config.toml (`/set theme red-tron`, `/set image_rows 14`); Tab
+  completes the names.
+- `/save` writes this session's settings into config.toml: what you
+  changed with `/set`, `/theme`, `/bell`, `/log` and the F2/F3 panel
+  toggles. Only changed lines are written; comments and everything else
+  in the file stay as they are.
+
 ## [0.1.1] - 2026-10-16
 
 ### Added

@@ -319,8 +319,12 @@ with the list of keys rather than being ignored.
 
 ## Optional preferences
 
-`~/.textrix/config.toml` (all keys optional; `/reload` applies changes, and
-also picks up servers added to or removed from the dotfile):
+`~/.textrix/config.toml` holds your preferences (all keys optional).
+`/set` lists them and `/set <name> <value>` changes one for the session
+(`/set theme blue-deep`); `/save` writes the session's settings back into
+the file, including what `/theme`, `/bell`, `/log`, F2 and F3 changed,
+leaving your comments alone. After editing the file by hand, `/reload`
+applies it (and picks up servers added to or removed from the dotfile):
 
 ```toml
 timestamp_format = "%H:%M"

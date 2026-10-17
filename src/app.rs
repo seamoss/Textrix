@@ -853,6 +853,12 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
     Cmd { name: "log", args: "[on|off]", help: "Chat logging for this session (log = true in config makes it stick)" },
     Cmd {
+        name: "set",
+        args: "[name [value]]",
+        help: "List the settings, or change one for this session (/save keeps it)",
+    },
+    Cmd { name: "save", args: "", help: "Save this session's settings (theme, bell, panels…) to config.toml" },
+    Cmd {
         name: "reload",
         args: "",
         help: "Re-read config.toml and the server dotfile (connects new servers, drops removed ones)",
@@ -3251,6 +3257,17 @@ impl App {
                 .collect();
         }
         let second = text.split_whitespace().nth(1).unwrap_or("");
+        if first == "/set" && text.split_whitespace().count() <= 2 && !at_start {
+            let mut names: Vec<String> =
+                self.effective_config().to_table().map(|t| t.keys().cloned().collect()).unwrap_or_default();
+            names.push("log_dir".into());
+            names.sort();
+            return names
+                .into_iter()
+                .filter(|n| n.starts_with(&lower))
+                .map(|n| Candidate { text: format!("{n} "), user: None, hint: None })
+                .collect();
+        }
         if first == "/upload" || (first == "/keys" && matches!(second, "export" | "import") && !at_start) {
             return path_candidates(&word);
         }
@@ -3380,6 +3397,8 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "set" => self.cmd_set(args),
+            "save" => self.cmd_save(),
             "nickname" => self.cmd_nickname(args),
             "bell" => self.cmd_bell(args),
             "keys" => self.cmd_keys(args),
@@ -4609,26 +4628,99 @@ impl App {
         }
     }
 
+    /// Switch to new settings, from config.toml or /set.
+    fn apply_config(&mut self, cfg: Config) {
+        if cfg.image_previews && self.picker.is_none() {
+            self.info("image previews start after a restart (graphics support is checked at startup)");
+        }
+        if !cfg.image_previews {
+            self.picker = None;
+            self.previews.clear();
+        }
+        self.notify_mode = notify::resolve(cfg.notifications);
+        (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
+        (self.bell_mode, self.bell_style) = (cfg.bell, cfg.bell_style);
+        if cfg.mouse != self.cfg.mouse {
+            set_mouse_capture(cfg.mouse);
+        }
+        if cfg.theme != self.cfg.theme || cfg.colors != self.cfg.colors {
+            self.redraw_all = true;
+        }
+        self.cfg = cfg;
+        self.apply_logging();
+    }
+
+    /// The settings as they stand in this session, after /theme, /bell,
+    /// F2, F3 and the like.
+    fn effective_config(&self) -> Config {
+        let mut cfg = self.cfg.clone();
+        (cfg.bell, cfg.bell_style) = (self.bell_mode, self.bell_style);
+        (cfg.sidebar, cfg.nicklist) = (self.show_sidebar, self.show_nicklist);
+        cfg
+    }
+
+    /// `/set`: list the settings, show one, or change one for the session
+    /// (checked like config.toml). Values are TOML (`12`, `true`,
+    /// `["mentions"]`); anything else is taken as text.
+    fn cmd_set(&mut self, args: &str) -> Result<(), String> {
+        let current = self.effective_config().to_table().map_err(|e| format!("{e:#}"))?;
+        let (key, value) = split_first(args.trim());
+        let value = value.trim();
+        if key.is_empty() {
+            self.info("Settings (/set <name> <value> changes one for this session, /save keeps them):");
+            let rows: Vec<String> = current
+                .iter()
+                .map(|(k, v)| match v.as_table() {
+                    Some(t) => {
+                        format!("  [{k}] {} entr{} (edit config.toml)", t.len(), if t.len() == 1 { "y" } else { "ies" })
+                    }
+                    None => format!("  {k} = {v}"),
+                })
+                .collect();
+            rows.into_iter().for_each(|row| self.info(row));
+            return Ok(());
+        }
+        if value.is_empty() {
+            let text = match current.get(key) {
+                Some(v) => format!("{key} = {v}"),
+                None => format!("no setting {key}; /set lists them"),
+            };
+            self.info(text);
+            return Ok(());
+        }
+        if current.get(key).is_some_and(toml::Value::is_table) {
+            return Err(format!("[{key}] is a table: edit it in config.toml, then /reload"));
+        }
+        let parsed = toml::from_str::<toml::Table>(&format!("v = {value}"))
+            .ok()
+            .and_then(|mut t| t.remove("v"))
+            .unwrap_or_else(|| toml::Value::String(value.to_owned()));
+        let mut table = current;
+        table.insert(key.to_owned(), parsed.clone());
+        let cfg = Config::from_table(table).map_err(|e| format!("{key}: {e:#}"))?;
+        self.apply_config(cfg);
+        self.info(format!("{key} = {parsed} for this session; /save keeps it"));
+        Ok(())
+    }
+
+    /// `/save`: write this session's settings into config.toml.
+    fn cmd_save(&mut self) -> Result<(), String> {
+        let path = self.paths.config_file();
+        let written = crate::config::save_settings(&path, &self.effective_config()).map_err(|e| format!("{e:#}"))?;
+        let text = match written.len() {
+            0 => format!("{} already has these settings", path.display()),
+            _ => format!("saved {} to {}", written.join(", "), path.display()),
+        };
+        self.info(text);
+        Ok(())
+    }
+
     /// `/reload`: apply config.toml and the dotfile without restarting. A
     /// broken file leaves the current settings in place.
     fn cmd_reload(&mut self) {
         match Config::load(&self.paths.config_file()) {
             Ok(cfg) => {
-                if cfg.image_previews && self.picker.is_none() {
-                    self.info("image previews start after a restart (graphics support is checked at startup)");
-                }
-                if !cfg.image_previews {
-                    self.picker = None;
-                    self.previews.clear();
-                }
-                self.notify_mode = notify::resolve(cfg.notifications);
-                (self.show_sidebar, self.show_nicklist) = (cfg.sidebar, cfg.nicklist);
-                (self.bell_mode, self.bell_style) = (cfg.bell, cfg.bell_style);
-                if cfg.mouse != self.cfg.mouse {
-                    set_mouse_capture(cfg.mouse);
-                }
-                self.cfg = cfg;
-                self.apply_logging();
+                self.apply_config(cfg);
                 self.info(format!("reloaded {}", self.paths.config_file().display()));
             }
             Err(e) => self.error(format!("{e:#}; keeping the current settings")),
@@ -5360,6 +5452,38 @@ mod tests {
         app.cmd_nickname("@sam:x.org").unwrap();
         assert_eq!(app.windows[1].title(), "sam");
         assert!(app.cmd_nickname("@sam:x.org").is_err(), "nothing to take off");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn set_and_save_keep_what_you_changed() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-set-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        std::fs::write(app.paths.config_file(), "# my config\nmarkdown = false\n").unwrap();
+        app.cfg = Config::load(&app.paths.config_file()).unwrap();
+
+        app.cmd_set("image_rows 14").unwrap();
+        assert_eq!(app.cfg.image_rows, 14);
+        app.cmd_set("bell away").unwrap();
+        assert_eq!(app.bell_mode, crate::config::BellMode::Away, "words are taken as text");
+        assert!(app.cmd_set("image_rows lots").is_err(), "checked like config.toml");
+        assert!(app.cmd_set("belll true").is_err(), "unknown settings are errors");
+        assert!(app.cmd_set("aliases x").is_err(), "tables are edited in the file");
+        app.cmd_theme("blue-deep").unwrap();
+        app.on_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+
+        app.cmd_save().unwrap();
+        let saved = std::fs::read_to_string(app.paths.config_file()).unwrap();
+        assert!(saved.starts_with("# my config\nmarkdown = false\n"), "{saved}");
+        for line in ["image_rows = 14", "bell = \"away\"", "theme = \"blue-deep\"", "sidebar = false"] {
+            assert!(saved.contains(line), "{line} missing from:\n{saved}");
+        }
+        let back = Config::load(&app.paths.config_file()).unwrap();
+        assert!(!back.markdown && back.image_rows == 14 && !back.sidebar);
+        app.cmd_save().unwrap();
+        assert!(app.windows[0].lines.back().unwrap().body.contains("already has these settings"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

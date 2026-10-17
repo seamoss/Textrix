@@ -10,7 +10,7 @@ use ratatui::{
 };
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeName {
     /// For dark terminal backgrounds.
