@@ -41,6 +41,7 @@ use crate::{
     compose::{Say, compose},
     config::{BellKind, BellMode, BellStyle, Config, NotifyMode, Paths},
     convert::attachment,
+    eggs,
     input::{Candidate, Draft, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
@@ -655,6 +656,8 @@ pub struct App {
     mention_origins: HashMap<OwnedEventId, WinKey>,
     /// How many aliases deep the current command runs.
     alias_depth: usize,
+    /// How much of the Konami code has been typed.
+    konami: usize,
     pub switcher: Option<Switcher>,
     /// Windows you were in, most recent first (for the switcher).
     recent: Vec<WinRef>,
@@ -839,6 +842,9 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
+/// Commands that aren't in /help on purpose.
+const EGGS: &[&str] = &["slap", "tableflip", "unflip", "shrug", "8ball", "bofh"];
+
 const ALIASES: &[(&str, &str)] = &[
     ("j", "join"),
     ("leave", "part"),
@@ -1010,6 +1016,7 @@ impl App {
             split: None,
             mention_origins: HashMap::new(),
             alias_depth: 0,
+            konami: 0,
             switcher: None,
             recent: Vec::new(),
             push_modes: HashMap::new(),
@@ -1029,7 +1036,11 @@ impl App {
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
         app.apply_logging();
-        app.status(Line::info(format!("Textrix {} — irssi-style Matrix client", env!("CARGO_PKG_VERSION"))));
+        app.status(Line::info(format!(
+            "Textrix {} — irssi-style Matrix client. {}",
+            env!("CARGO_PKG_VERSION"),
+            eggs::pick(&eggs::TAGLINES)
+        )));
         app.status(Line::info(format!("servers from {}", app.env.path().display())));
         for warning in servers.warnings {
             app.status(Line::error(warning));
@@ -1765,6 +1776,66 @@ impl App {
         )
     }
 
+    /// ↑↑↓↓←→←→BA: the phosphor theme, or back again.
+    fn konami_unlocked(&mut self) {
+        if self.input.text() == "b" {
+            self.input.clear();
+        }
+        let back = self.cfg.theme == ThemeName::Phosphor;
+        let name = if back { ThemeName::Default } else { ThemeName::Phosphor };
+        if let Ok(palette) = Theme::build(name, &self.cfg.colors) {
+            (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, name, true);
+        }
+        self.info(if back {
+            "Phosphor off. The code still works."
+        } else {
+            "+30 lives. Phosphor on: the screen glows green until you type it again."
+        });
+    }
+
+    /// The hidden ones: mIRC's trout, emoticon classics, the 8-ball, and an
+    /// excuse for today. `None` if `name` isn't one.
+    fn egg_command(&mut self, name: &str, args: &str) -> Option<Result<(), String>> {
+        let args = args.trim();
+        let with = |art: &str| if args.is_empty() { art.to_owned() } else { format!("{args} {art}") };
+        Some(match name {
+            "slap" if args.is_empty() => Err("slap whom?".into()),
+            "slap" => {
+                self.say_as_is(&eggs::slap(args), Say::Emote);
+                Ok(())
+            }
+            "tableflip" => {
+                self.say_as_is(&with("(╯°□°)╯︵ ┻━┻"), Say::Text);
+                Ok(())
+            }
+            "unflip" => {
+                self.say_as_is(&with("┬─┬ノ( º _ ºノ)"), Say::Text);
+                Ok(())
+            }
+            "shrug" => {
+                self.say_as_is(&with("¯\\_(ツ)_/¯"), Say::Text);
+                Ok(())
+            }
+            "8ball" => {
+                let asked = if args.is_empty() { String::new() } else { format!("“{args}” ") };
+                self.info(format!("{asked}The 8-ball says: {}", eggs::pick(&eggs::EIGHT_BALL)));
+                Ok(())
+            }
+            "bofh" => {
+                self.info(format!("Today's excuse: {}.", eggs::pick(&eggs::EXCUSES)));
+                Ok(())
+            }
+            _ => return None,
+        })
+    }
+
+    /// Send text exactly as typed, without Markdown (for ¯\_(ツ)_/¯).
+    fn say_as_is(&mut self, text: &str, kind: Say) {
+        let markdown = std::mem::replace(&mut self.cfg.markdown, false);
+        self.say(text, kind);
+        self.cfg.markdown = markdown;
+    }
+
     /// `/bell [on|off|away|sound|visual|both|test]` for this session.
     fn cmd_bell(&mut self, args: &str) -> Result<(), String> {
         match args.trim() {
@@ -2298,6 +2369,15 @@ impl App {
         }
         if self.switcher.is_some() {
             return self.on_switcher_key(key);
+        }
+        if self.select.is_none() && (key.modifiers - KeyModifiers::SHIFT).is_empty() {
+            self.konami = eggs::konami_step(self.konami, key.code);
+            if self.konami == eggs::KONAMI.len() {
+                self.konami = 0;
+                return self.konami_unlocked();
+            }
+        } else {
+            self.konami = 0;
         }
         if self.confirm_paste.take().is_some() {
             // Declining leaves the text in the input line to edit.
@@ -2972,6 +3052,9 @@ impl App {
             return Some("Enter sends · Esc cancels".into());
         }
         let text = self.input.text();
+        if let Some(hint) = eggs::clippy(&text) {
+            return Some(format!("  {hint}"));
+        }
         let typed = text.strip_prefix('/').filter(|t| !t.starts_with('/') && !t.contains('\n'))?;
         let (word, rest) = match typed.find(' ') {
             Some(i) => (&typed[..i], Some(&typed[i + 1..])),
@@ -2994,6 +3077,7 @@ impl App {
                     COMMANDS.iter().map(|c| c.name).filter(|n| n.starts_with(word.as_str())).collect();
                 (!names.is_empty()).then(|| format!("  {}", names.join(" ")))
             }
+            (None, _) if EGGS.contains(&word.as_str()) => None,
             (None, Some(_)) => Some("  unknown command; /help lists them".into()),
         }
     }
@@ -3359,7 +3443,11 @@ impl App {
             "unalias" => self.cmd_unalias(args),
             other => match self.cfg.aliases.get(other).cloned() {
                 Some(template) => self.run_alias(&template, args),
-                None => Err(format!("unknown command /{other}; try /help")),
+                None => {
+                    let other = other.to_owned();
+                    self.egg_command(&other, args)
+                        .unwrap_or_else(|| Err(format!("unknown command /{other}; try /help")))
+                }
             },
         };
         if let Err(e) = result {
@@ -4179,6 +4267,7 @@ impl App {
             "default" | "dark" => ThemeName::Default,
             "light" => ThemeName::Light,
             "mono" => ThemeName::Mono,
+            "phosphor" => ThemeName::Phosphor,
             other => return Err(format!("no theme {other}; there's default, light and mono")),
         };
         self.cfg.palette = Theme::build(name, &self.cfg.colors).map_err(|e| format!("{e:#}"))?;
@@ -5022,6 +5111,33 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.active, a, "Enter goes to the room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"), "with the message selected");
+    }
+
+    #[test]
+    fn easter_eggs() {
+        let mut app = test_app();
+        for code in eggs::KONAMI {
+            app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Phosphor);
+        assert!(app.input.is_empty(), "the b doesn't stay in the input line");
+        for code in eggs::KONAMI {
+            app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Default, "again turns it off");
+
+        app.command("8ball will it ship");
+        assert!(app.windows[0].lines.back().unwrap().body.contains("The 8-ball says:"));
+        app.command("bofh");
+        assert!(app.windows[0].lines.back().unwrap().body.starts_with("Today's excuse:"));
+        app.command("slap");
+        assert!(app.windows[0].lines.back().unwrap().body.contains("slap whom"));
+
+        app.input.set_text("Dear team,");
+        assert!(app.input_hint().unwrap().contains("writing a letter"));
+        app.input.set_text("/slap bob");
+        assert!(app.input_hint().is_none(), "no 'unknown command' spoiler");
+        assert!(!COMMANDS.iter().any(|c| EGGS.contains(&c.name)), "not in /help");
     }
 
     #[test]

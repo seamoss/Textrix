@@ -333,6 +333,11 @@ history_page = 50
 completion_char = ":"
 ```
 
+## Secrets
+
+If you grew up on mIRC and irssi, a few things in here may feel familiar.
+They're not in `/help`.
+
 ## Building and releases
 
 `cargo build --release` gives a single binary at `target/release/textrix`

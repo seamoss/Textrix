@@ -68,6 +68,9 @@ pub struct RowHit {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits = Hits::default();
+    if app.cfg.palette.base != Style::new() {
+        f.render_widget(Block::new().style(app.cfg.palette.base), f.area());
+    }
     let [topic, middle, status, input] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
             .areas(f.area());
@@ -1054,7 +1057,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled("] ", t.bar_accent));
     };
 
-    item(&mut spans, vec![Span::styled(Local::now().format("%H:%M").to_string(), t.bar)]);
+    let now = Local::now().format("%H:%M").to_string();
+    // Elite o'clock.
+    let clock = if now == "13:37" { "1337".to_owned() } else { now };
+    item(&mut spans, vec![Span::styled(clock, t.bar)]);
 
     if let Some(state) = win.account().and_then(|a| app.accounts.get(a)) {
         let nick = state.nick.clone().unwrap_or_else(|| state.user.clone());

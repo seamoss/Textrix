@@ -17,11 +17,15 @@ pub enum ThemeName {
     Light,
     /// No colours: bold, underline and reverse video only.
     Mono,
+    /// A green CRT, for those who know the code.
+    Phosphor,
 }
 
 /// The style of every part of the screen.
 #[derive(Clone, Debug)]
 pub struct Theme {
+    /// Laid under everything (empty: the terminal's own colours).
+    pub base: Style,
     /// Topic and status bars, and the focused pane's title.
     pub bar: Style,
     /// The brackets around status bar items.
@@ -82,6 +86,7 @@ impl Default for Theme {
     fn default() -> Self {
         let bold = Modifier::BOLD;
         Self {
+            base: Style::new(),
             // Fixed 256-colour shades, not the terminal's own "blue" (which
             // many colour schemes make too light for white text).
             bar: Style::new().fg(Color::Indexed(255)).bg(BAR_BG),
@@ -136,6 +141,7 @@ impl Theme {
             ThemeName::Default => Self::default(),
             ThemeName::Light => Self::light(),
             ThemeName::Mono => Self::mono(),
+            ThemeName::Phosphor => Self::phosphor(),
         };
         for (key, value) in overrides {
             theme.set(key, value)?;
@@ -178,6 +184,7 @@ impl Theme {
         let bold = plain.add_modifier(Modifier::BOLD);
         let reversed = plain.add_modifier(Modifier::REVERSED);
         Self {
+            base: plain,
             bar: reversed,
             bar_accent: reversed,
             bar_alert: reversed.add_modifier(Modifier::BOLD),
@@ -208,6 +215,49 @@ impl Theme {
             away: Color::Reset,
             offline: Color::Reset,
             nicks: vec![Color::Reset],
+            message_colors: false,
+        }
+    }
+
+    /// Green on black, like a 1980s terminal.
+    fn phosphor() -> Self {
+        let (bright, green, dim, dark) =
+            (Color::Indexed(46), Color::Indexed(34), Color::Indexed(28), Color::Indexed(22));
+        let g = Style::new().fg(bright);
+        let bold = Modifier::BOLD;
+        let bar = Style::new().fg(Color::Black).bg(green);
+        Self {
+            base: Style::new().fg(bright).bg(Color::Black),
+            bar,
+            bar_accent: bar.fg(dark),
+            bar_alert: bar.add_modifier(bold),
+            pane: Style::new().fg(bright).bg(dark),
+            dim: Style::new().fg(dim),
+            accent: g.add_modifier(bold),
+            frame: g,
+            own: g.add_modifier(bold),
+            highlight: Style::new().fg(Color::Indexed(118)).add_modifier(bold | Modifier::UNDERLINED),
+            highlight_text: Style::new().fg(Color::Indexed(118)),
+            error: g.add_modifier(bold | Modifier::REVERSED),
+            divider: g,
+            link: g.add_modifier(Modifier::UNDERLINED),
+            mention: Style::new().fg(Color::Indexed(118)).add_modifier(bold),
+            code: Style::new().fg(Color::Indexed(40)),
+            badge: Style::new().fg(dim),
+            pinned: g,
+            receipts: Style::new().fg(dim),
+            matched: Style::new().fg(Color::Indexed(118)).add_modifier(bold),
+            current: Style::new().fg(Color::Black).bg(bright).add_modifier(bold),
+            shown: g.add_modifier(bold),
+            inactive: Style::new().fg(green),
+            activity_event: Style::new().fg(green),
+            activity: g.add_modifier(bold),
+            op: g.add_modifier(bold),
+            voice: g,
+            online: bright,
+            away: green,
+            offline: dark,
+            nicks: [46, 40, 34, 82, 118, 77, 41].map(Color::Indexed).to_vec(),
             message_colors: false,
         }
     }
