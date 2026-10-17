@@ -602,6 +602,8 @@ pub struct App {
     last_bell: Option<Instant>,
     /// The visual bell: the status bar flashes until then.
     pub flash_until: Option<Instant>,
+    /// The terminal title last set.
+    last_title: Option<String>,
     pub redraw_all: bool,
     pub show_sidebar: bool,
     pub show_nicklist: bool,
@@ -968,6 +970,7 @@ impl App {
             bell_style,
             last_bell: None,
             flash_until: None,
+            last_title: None,
             redraw_all: false,
             show_sidebar,
             show_nicklist,
@@ -1724,6 +1727,26 @@ impl App {
         if matches!(self.bell_style, BellStyle::Visual | BellStyle::Both) {
             self.flash_until = Some(now + FLASH);
         }
+    }
+
+    /// The terminal title for where you are, from the `title` template.
+    pub fn terminal_title(&self) -> Option<String> {
+        if self.cfg.title.trim().is_empty() {
+            return None;
+        }
+        let w = self.win();
+        let busy = (0..self.windows.len())
+            .filter(|&i| !self.on_screen(i) && self.windows[i].activity >= Activity::Message)
+            .count();
+        let activity = if busy > 0 { format!(" [{busy}]") } else { String::new() };
+        Some(
+            self.cfg
+                .title
+                .replace("{window}", &w.name)
+                .replace("{number}", &(self.active + 1).to_string())
+                .replace("{server}", w.account().unwrap_or_default())
+                .replace("{activity}", &activity),
+        )
     }
 
     /// `/bell [on|off|away|sound|visual|both|test]` for this session.
@@ -4621,6 +4644,18 @@ pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: Unbounded
             terminal.clear()?;
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
+        let title = app.terminal_title();
+        if title != app.last_title {
+            match &title {
+                Some(title) => notify::set_title(title),
+                // Turned off (by /reload): back to the terminal's own title.
+                None => {
+                    notify::pop_title();
+                    notify::push_title();
+                }
+            }
+            app.last_title = title;
+        }
         if std::mem::take(&mut app.bell) {
             let mut out = std::io::stdout();
             let _ = out.write_all(b"\x07").and_then(|()| out.flush());

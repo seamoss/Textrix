@@ -45,6 +45,31 @@ pub fn send(mode: NotifyMode, title: &str, body: &str) {
     }
 }
 
+/// Set the terminal's title (the tab or window name; inside tmux, the
+/// pane's). Room names can't escape it: control characters are dropped.
+pub fn title_sequence(title: &str) -> String {
+    format!("\x1b]2;{}\x07", clean(title, 200))
+}
+
+pub fn set_title(title: &str) {
+    write(&title_sequence(title));
+}
+
+/// Save the title the terminal had (xterm's title stack, which most
+/// terminals keep), and put it back on exit.
+pub fn push_title() {
+    write("\x1b[22;0t");
+}
+
+pub fn pop_title() {
+    write("\x1b[23;0t");
+}
+
+fn write(seq: &str) {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(seq.as_bytes()).and_then(|()| out.flush());
+}
+
 /// Put text on the system clipboard with OSC 52 (tmux forwards it when
 /// `set-clipboard` is on).
 pub fn copy_to_clipboard(text: &str) {
@@ -82,6 +107,13 @@ fn clean(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_names_cannot_escape_the_title() {
+        let title = title_sequence("evil\x07\x1b]0;pwned\x1b\\ room\u{9c}x");
+        assert_eq!(title, "\x1b]2;evil  ]0;pwned \\ room x\x07");
+        assert_eq!(title.matches('\x1b').count(), 1, "only the sequence's own escape");
+    }
 
     #[test]
     fn message_text_cannot_escape_the_sequence() {

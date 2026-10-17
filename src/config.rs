@@ -143,6 +143,10 @@ pub struct Config {
     /// startup. They're stored decrypted, next to the keys and session
     /// that can decrypt them anyway; off clears what's stored.
     pub history_cache: bool,
+    /// The terminal's title: {window}, {number}, {server}, and {activity}
+    /// (" [3]" when other windows have new messages). Empty leaves the
+    /// title alone.
+    pub title: String,
     /// Built-in colours: "default" (dark backgrounds), "light", or "mono".
     pub theme: ThemeName,
     /// Your own commands (`/alias`): name -> what it runs.
@@ -182,6 +186,7 @@ impl Default for Config {
             mouse: true,
             paste_confirm_lines: 5,
             history_cache: true,
+            title: "{window}{activity} — Textrix".into(),
             encrypt_store: true,
             theme: ThemeName::Default,
             colors: BTreeMap::new(),

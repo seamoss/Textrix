@@ -99,6 +99,12 @@ in the member list to mention them, or the input line to move the cursor.
 While the mouse is on, hold Shift (Option in iTerm2 and Terminal.app) and
 drag to select text, or use `c` in selection mode to copy a message.
 
+The terminal's tab or window title follows the window you're in (the
+focused pane when split), as set by `title`: `{window}`, `{number}`,
+`{server}`, and `{activity}`, which adds ` [3]` while three other windows
+have new messages. Inside tmux it's the pane title. The title you had is
+put back when Textrix exits.
+
 While you type a command, its usage appears in dim text after the cursor.
 
 What you've typed stays with its window: switch away and it's waiting when
@@ -318,6 +324,7 @@ nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 theme = "default"          # or "light", "mono"; [colors] overrides parts (see above)
+title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
 scrollback = 5000

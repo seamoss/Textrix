@@ -105,6 +105,7 @@ async fn run() -> Result<()> {
         )?;
     }
     crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+    notify::push_title();
     if mouse {
         app::set_mouse_capture(true);
     }
@@ -112,10 +113,12 @@ async fn run() -> Result<()> {
     let restore = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         app::set_mouse_capture(false);
+        notify::pop_title();
         restore(info);
     }));
     let result = app::run(&mut terminal, app, rx).await;
     app::set_mouse_capture(false);
+    notify::pop_title();
     if enhanced_keys {
         let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
