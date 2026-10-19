@@ -44,13 +44,17 @@ class Textrix < Formula
         mkdir -p ~/.textrix
         cp #{opt_pkgshare}/env.example ~/.textrix/.env
         chmod 600 ~/.textrix/.env
-      then fill in your server and account, and run `textrix`.
-      Passwords can come from a password manager instead of the file;
-      #{opt_pkgshare}/env.example explains how.
+      then fill in your server and account, check it with `textrix --check`,
+      and run `textrix`. Passwords can come from a password manager instead
+      of the file; #{opt_pkgshare}/env.example explains how.
+
+      To upgrade: brew upgrade textrix. A Textrix that's running (in the
+      background too) then shows "[x.y.z installed: /restart]", and
+      /restart switches to the new one where you were.
     EOS
   end
 
   test do
-    assert_match "textrix", shell_output("#{bin}/textrix --version")
+    assert_match(/^textrix \d+\.\d+\.\d+$/, shell_output("#{bin}/textrix --version").strip)
   end
 end

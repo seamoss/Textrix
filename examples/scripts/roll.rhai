@@ -1,8 +1,8 @@
 // /roll [NdM]: roll dice for the room, e.g. /roll 2d6 (default 1d6).
 
 command("roll", "Roll dice: /roll 2d6", |args, ctx| {
-    args.trim();    // trim and to_lower change the string in place
-    args.to_lower();
+    args.trim();    // trim and make_lower change the string in place
+    args.make_lower();
     let spec = if args == "" { "1d6" } else { args };
     if !matches(spec, "^[0-9]{0,2}d[0-9]{1,4}$") {
         print("usage: /roll NdM, e.g. /roll 2d6");

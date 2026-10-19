@@ -49,7 +49,7 @@ use crate::{
     app::App,
     config::{Config, Paths, create_private_dir},
     servers::EnvFile,
-    theme::{Theme, ThemeName},
+    theme::{Theme, ThemeId, ThemeName},
 };
 
 /// `--check`: what Textrix would use, without connecting anywhere or
@@ -108,8 +108,9 @@ struct Cli {
     /// TEXTRIX_HOME also sets it]
     #[arg(long, value_name = "DIR")]
     home: Option<PathBuf>,
-    /// Start with this colour theme, for this run only
-    #[arg(long, value_name = "NAME", value_parser = theme_names())]
+    /// Start with this colour theme, for this run only: a built-in one or
+    /// a theme file's name (in ~/.textrix/themes)
+    #[arg(long, value_name = "NAME", value_parser = ThemeArg, hide_possible_values = true)]
     theme: Option<String>,
     /// Check the dotfile, config.toml, keychain and stores, then exit
     #[arg(long)]
@@ -238,14 +239,38 @@ An irssi-style terminal client for Matrix: numbered windows, a status bar, \
 slash commands, and end-to-end encryption.
 
 Textrix connects to every server defined in its dotfile (~/.textrix/.env), \
-a private file of TEXTRIX_<NAME>_HOMESERVER, _USER, _PASSWORD and \
-_RECOVERY_KEY lines; see the env.example installed with it. Secrets are read \
-only for the call that needs them, and environment variables of the same \
-name override the file. Preferences live in ~/.textrix/config.toml; inside \
-Textrix, /set and /save change them, and F1 lists every key and command.";
+a private file of TEXTRIX_<NAME>_HOMESERVER, _USER, _PASSWORD, _RECOVERY_KEY \
+and _KEYS_PASSPHRASE lines; see .env.example in the source, or env.example \
+where Textrix is installed (Homebrew: $(brew --prefix)/share/textrix). \
+Secrets are read only for the call that needs them, and environment \
+variables of the same name override the file. Preferences live in \
+~/.textrix/config.toml and your own themes in ~/.textrix/themes; inside \
+Textrix, /set and /save change preferences, /theme lists the themes, and F1 \
+lists every key and command.";
 
-fn theme_names() -> clap::builder::PossibleValuesParser {
-    clap::builder::PossibleValuesParser::new(ThemeName::ALL.map(|(name, _)| name))
+/// `--theme`: any theme name, with the built-in ones offered to shell
+/// completion.
+#[derive(Clone)]
+struct ThemeArg;
+
+impl clap::builder::TypedValueParser for ThemeArg {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<String, clap::Error> {
+        let invalid = |text: String| clap::Error::raw(clap::error::ErrorKind::InvalidValue, format!("{text}\n"));
+        let name = value.to_str().ok_or_else(|| invalid("--theme: not a theme name".into()))?;
+        ThemeId::parse(name).map_err(|e| invalid(format!("--theme: {e}")))?;
+        Ok(name.to_owned())
+    }
+
+    fn possible_values(&self) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(ThemeName::ALL.iter().map(|(name, _)| clap::builder::PossibleValue::new(*name))))
+    }
 }
 
 #[tokio::main]
@@ -307,8 +332,9 @@ async fn run() -> Result<()> {
     let env = EnvFile::new(paths.env_file.clone());
     let servers = env.servers().map_err(|e| anyhow::anyhow!("{e:#}\n(see .env.example for the format)"))?;
     let mut cfg = Config::load(&paths.config_file())?;
-    if let Some(theme) = cli.theme.as_deref().and_then(ThemeName::parse) {
-        cfg.palette = Theme::build(theme, &cfg.colors)?;
+    if let Some(name) = cli.theme.as_deref() {
+        let theme = ThemeId::parse(name)?;
+        cfg.palette = Theme::load(&theme, &cfg.colors, &paths.themes_dir())?;
         cfg.theme = theme;
     }
 

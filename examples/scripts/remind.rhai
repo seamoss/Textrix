@@ -4,7 +4,10 @@
 // after(seconds, fn) calls fn once that time has passed (every(seconds, fn)
 // keeps calling it), and both return an ID that cancel(id) takes.
 
+// The reminders still to come, each #{ key, id }; a fired one takes
+// itself off.
 let pending = [];
+let made = 0;
 
 command("remind", "Remind you: /remind 10 stretch", |args, ctx| {
     args.trim();
@@ -13,8 +16,8 @@ command("remind", "Remind you: /remind 10 stretch", |args, ctx| {
         return;
     }
     if args == "cancel" {
-        for id in pending {
-            cancel(id);
+        for r in pending {
+            cancel(r.id);
         }
         pending.clear();
         print("reminders cancelled");
@@ -31,11 +34,14 @@ command("remind", "Remind you: /remind 10 stretch", |args, ctx| {
         print("usage: /remind <minutes> <text>");
         return;
     }
+    made += 1;
+    let key = made;
     let id = after(minutes * 60, || {
+        pending.retain(|r| r.key != key);
         bell();
         notify("Reminder", text);
         print(`⏰ ${text}`);
     });
-    pending.push(id);
+    pending.push(#{ key: key, id: id });
     print(`I'll remind you in ${minutes} min: ${text}`);
 });

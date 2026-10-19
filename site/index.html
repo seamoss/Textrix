@@ -184,6 +184,7 @@
   .side .cur { background: #00afaf; color: #000; font-weight: bold; }
   .side .act { color: #fff; font-weight: bold; }
   .side .hi { color: #ff5fff; font-weight: bold; }
+  .side .sec { color: #777; }
   .msgs { flex: 1; padding: 2px 8px; white-space: pre-wrap; }
   .ts { color: #666; }
   .n1 { color: #5fd7ff; } .n2 { color: #87ff5f; } .n3 { color: #ffd75f; }
@@ -194,6 +195,13 @@
   .cursor { background: #ddd; color: #000; animation: blink 1s steps(1) infinite; }
   .input { padding: 0 6px; white-space: pre; }
   .input .p { color: #00afaf; }
+
+  .shot { display: block; width: 100%; height: auto; margin: 16px 0; border: 4px outset var(--panel); box-shadow: 8px 8px 0 #000; }
+  .shelf { font-family: "Courier New", monospace; color: #0ff; margin: 18px 0 6px; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .gallery figure { margin: 0; padding: 4px; background: var(--panel); border: 3px outset #fff; }
+  .gallery img { display: block; width: 100%; height: auto; }
+  .gallery figcaption { color: #000; text-align: center; font-family: "Courier New", monospace; font-weight: bold; }
 
   table.features {
     width: 100%;
@@ -317,7 +325,7 @@
   <p class="sub">The irssi-style terminal client for <b>Matrix</b>. Written in Rust. Encrypted end to end. Rad to the max.</p>
 
   <div class="marquee" aria-hidden="true"><span>
-    ★ NOW WITH END-TO-END ENCRYPTION ★ RUNS IN THE BACKGROUND LIKE IT'S 1999 ★ BEST VIEWED IN 80×24 ★ NO WINAMP SKINS WERE HARMED ★ ALL YOUR ROOMS ARE BELONG TO YOU ★ /join #the-future ★ HACK THE PLANET ★
+    ★ NOW WITH END-TO-END ENCRYPTION ★ NOW IN 30 THEMES ★ RUNS IN THE BACKGROUND LIKE IT'S 1999 ★ BEST VIEWED IN 80×24 ★ NO WINAMP SKINS WERE HARMED ★ ALL YOUR ROOMS ARE BELONG TO YOU ★ /join #the-future ★ HACK THE PLANET ★
   </span></div>
 
   <div class="construction"><b>🚧 UNDER CONSTRUCTION 🚧</b> <span class="small" style="color:#000;background:#ffcc00">(forever, like all good homepages)</span></div>
@@ -331,7 +339,7 @@
   <h2>📟 What is this?!</h2>
   <p>
     Remember <b>irssi</b>? Numbered windows, a status bar that told you everything, <code>/commands</code> for
-    absolutely everything, and you never touched the mouse (you can now, though <span class="new blink">NEW!</span>).
+    absolutely everything, and you never touched the mouse (you can now, though).
     <b>Textrix</b> is that, for <b>Matrix</b>: chat with anyone on any Matrix server, from a terminal, with real
     end-to-end encryption, and no web browser pretending to be an app.
   </p>
@@ -343,12 +351,15 @@
       <div class="screen">
         <div class="side"> 1    status
 11    mentions
+<span class="sec"> Unreads</span>
  2 N  Night Owls      <span class="hi">2</span>
  3 B  Book Club       <span class="act">5</span>
- 4 S  ● sam
+<span class="sec"> Rooms</span>
 <span class="cur">10 T  Team Tests      </span>
+<span class="sec"> DMs</span>
+ 4 S  ● sam
 </div>
-        <div class="msgs"><span class="ts">21:00</span> <span class="info">-!-</span> Textrix 0.1.0 — irssi-style Matrix client. Hack the planet!
+        <div class="msgs"><span class="ts">21:00</span> <span class="info">-!-</span> Textrix {{VERSION}} — irssi-style Matrix client. Hack the planet!
 <span class="ts">21:02</span> <span class="rx">&lt;</span><span class="n1">sam</span><span class="rx">&gt;</span> did you see the new release?
 <span class="ts">21:02</span> <span class="rx">&lt;</span><span class="me">you</span><span class="rx">&gt;</span> it has a <b>full-screen image viewer</b> now
 <span class="ts">21:03</span> <span class="rx">&lt;</span><span class="n2">jo</span><span class="rx">&gt;</span> <span class="hl">you</span>: does it do threads? <span class="rx">[2 replies]</span>
@@ -365,26 +376,88 @@
   <table class="features">
     <tr><td>🔐 Encryption</td><td>End-to-end encrypted rooms, emoji verification, your recovery key, key backup. Even the local store is encrypted, with its key in your keychain.</td></tr>
     <tr><td>🪟 Windows</td><td>irssi-style numbered windows, a window list, split panes you can drag to size and save as layouts, and a quick switcher (Ctrl+K) that finds anything you half-remember.</td></tr>
-    <tr><td>🌙 Background mode</td><td>Like irssi in screen: <code>textrix --daemon</code> keeps you connected with no terminal, <code>textrix</code> comes back to it, <code>/detach</code> leaves it running. <span class="new">NEW!</span></td></tr>
-    <tr><td>🔎 Search</td><td>Every message, from any time, in encrypted rooms too, found instantly from an index kept encrypted on your disk. <code>/search from:sam in:"Book Club" before:2026 pizza</code> <span class="new">NEW!</span></td></tr>
+    <tr><td>🌙 Background mode</td><td>Like irssi in screen: <code>textrix --daemon</code> keeps you connected with no terminal, <code>textrix</code> comes back to it, <code>/detach</code> leaves it running.</td></tr>
+    <tr><td>⬆️ Upgrades</td><td><code>brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing. <span class="new">NEW!</span></td></tr>
+    <tr><td>🔎 Search</td><td>Every room, encrypted ones too, up to 20,000 messages back in each, found instantly from an index kept encrypted on your disk. <code>/search from:sam in:"Book Club" before:2026 pizza</code></td></tr>
     <tr><td>🧵 Threads &amp; spaces</td><td>Threads open in their own windows. Spaces group your rooms.</td></tr>
-    <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. Drag a file onto the terminal to send it. <span class="new">NEW!</span></td></tr>
+    <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. Drag a file onto the terminal to send it.</td></tr>
     <tr><td>🎤 Voice &amp; video</td><td>See the waveform ▁▃▅▇▅▃▁, press <code>z</code> to hear it; videos open in your player.</td></tr>
     <tr><td>🌈 Code</td><td>Code blocks in colour, even on a green-screen monitor (in shades of green).</td></tr>
     <tr><td>🔔 Bells</td><td>Mentions, highlight words, per-room notification levels that sync with your other clients, a visual bell, and a mentions inbox.</td></tr>
-    <tr><td>🎨 Themes</td><td>Dark, light, mono, your own colours, and monochrome monitors in green, blue, red or amber: on black, on 80s-airport deep blue with double-line frames, or Tron neon outlines. There's also a secret way to get the green one. Ask a 1986 video game.</td></tr>
+    <tr><td>🎨 Themes</td><td>Thirty! Turbo Pascal blue, Procomm, C64, Amiga Workbench, Delphi 7, mIRC, Solarized, Monokai, Dracula, Nord, Gruvbox, Catppuccin, an IBM 5151 framed in ASCII, and monochrome monitors in green, blue, red or amber (on black, on 80s-airport blue, or Tron neon on pure black). Make your own and send it to a friend. There's also a secret way to get the green one. Ask a 1986 video game. <span class="new">NEW!</span> <a href="#themes">See them all</a></td></tr>
     <tr><td>📜 Scripts</td><td>Like irssi's Perl scripts, but in Rhai: drop a file in <code>~/.textrix/scripts</code> to add commands, answer messages, run timers and put things in the status bar. The examples include dice.</td></tr>
     <tr><td>⌨️ Commands</td><td>/join /msg /me /away /ignore /lastlog /search /alias … and a few that aren't in <code>/help</code>.</td></tr>
   </table>
 
+  <h2 id="screenshots">📸 Real screenshots!!</h2>
+  <p>
+    Not drawn with HTML this time: the real Textrix, drawing made-up rooms
+    (nobody's chats were harmed). Pictures come out in little blocks in any
+    terminal, and properly in ones that do graphics.
+  </p>
+  <img class="shot" src="screenshots/main.svg" alt="Textrix: the window list with unread rooms on top, a conversation with a code block, a voice message and a picture, and the member list" width="1144" height="673">
+  <img class="shot" src="screenshots/panes.svg" alt="Two rooms side by side in the blue-tron theme, framed in neon lines on pure black" width="1144" height="616" loading="lazy">
+
+  <h2 id="themes">🎨 The Theme-O-Rama</h2>
+  <p>
+    All thirty. Type <code>/theme dracula</code> to try one, put
+    <code>theme = "dracula"</code> in <code>config.toml</code> to keep it, or
+    <code>/theme save mine</code> to bottle your own and send it to a friend
+    on a floppy.
+  </p>
+  <p class="shelf">» Classic</p>
+  <div class="gallery">
+    <figure><a href="screenshots/themes/turbo.svg"><img src="screenshots/themes/turbo.svg" alt="Textrix in the turbo theme" loading="lazy" width="928" height="654"></a><figcaption>turbo</figcaption></figure>
+    <figure><a href="screenshots/themes/procomm.svg"><img src="screenshots/themes/procomm.svg" alt="Textrix in the procomm theme" loading="lazy" width="928" height="654"></a><figcaption>procomm</figcaption></figure>
+    <figure><a href="screenshots/themes/c64.svg"><img src="screenshots/themes/c64.svg" alt="Textrix in the c64 theme" loading="lazy" width="928" height="654"></a><figcaption>c64</figcaption></figure>
+    <figure><a href="screenshots/themes/amiga.svg"><img src="screenshots/themes/amiga.svg" alt="Textrix in the amiga theme" loading="lazy" width="928" height="654"></a><figcaption>amiga</figcaption></figure>
+    <figure><a href="screenshots/themes/delphi.svg"><img src="screenshots/themes/delphi.svg" alt="Textrix in the delphi theme" loading="lazy" width="928" height="654"></a><figcaption>delphi</figcaption></figure>
+    <figure><a href="screenshots/themes/mirc.svg"><img src="screenshots/themes/mirc.svg" alt="Textrix in the mirc theme" loading="lazy" width="928" height="654"></a><figcaption>mirc</figcaption></figure>
+    <figure><a href="screenshots/themes/solarized-dark.svg"><img src="screenshots/themes/solarized-dark.svg" alt="Textrix in the solarized-dark theme" loading="lazy" width="928" height="654"></a><figcaption>solarized-dark</figcaption></figure>
+    <figure><a href="screenshots/themes/solarized-light.svg"><img src="screenshots/themes/solarized-light.svg" alt="Textrix in the solarized-light theme" loading="lazy" width="928" height="654"></a><figcaption>solarized-light</figcaption></figure>
+  </div>
+  <p class="shelf">» Nouveau</p>
+  <div class="gallery">
+    <figure><a href="screenshots/themes/monokai.svg"><img src="screenshots/themes/monokai.svg" alt="Textrix in the monokai theme" loading="lazy" width="928" height="654"></a><figcaption>monokai</figcaption></figure>
+    <figure><a href="screenshots/themes/dracula.svg"><img src="screenshots/themes/dracula.svg" alt="Textrix in the dracula theme" loading="lazy" width="928" height="654"></a><figcaption>dracula</figcaption></figure>
+    <figure><a href="screenshots/themes/nord.svg"><img src="screenshots/themes/nord.svg" alt="Textrix in the nord theme" loading="lazy" width="928" height="654"></a><figcaption>nord</figcaption></figure>
+    <figure><a href="screenshots/themes/gruvbox.svg"><img src="screenshots/themes/gruvbox.svg" alt="Textrix in the gruvbox theme" loading="lazy" width="928" height="654"></a><figcaption>gruvbox</figcaption></figure>
+    <figure><a href="screenshots/themes/catppuccin.svg"><img src="screenshots/themes/catppuccin.svg" alt="Textrix in the catppuccin theme" loading="lazy" width="928" height="654"></a><figcaption>catppuccin</figcaption></figure>
+  </div>
+  <p class="shelf">» Monitors</p>
+  <div class="gallery">
+    <figure><a href="screenshots/themes/green.svg"><img src="screenshots/themes/green.svg" alt="Textrix in the green theme" loading="lazy" width="928" height="654"></a><figcaption>green</figcaption></figure>
+    <figure><a href="screenshots/themes/green-deep.svg"><img src="screenshots/themes/green-deep.svg" alt="Textrix in the green-deep theme" loading="lazy" width="928" height="654"></a><figcaption>green-deep</figcaption></figure>
+    <figure><a href="screenshots/themes/green-tron.svg"><img src="screenshots/themes/green-tron.svg" alt="Textrix in the green-tron theme" loading="lazy" width="928" height="654"></a><figcaption>green-tron</figcaption></figure>
+    <figure><a href="screenshots/themes/blue.svg"><img src="screenshots/themes/blue.svg" alt="Textrix in the blue theme" loading="lazy" width="928" height="654"></a><figcaption>blue</figcaption></figure>
+    <figure><a href="screenshots/themes/blue-deep.svg"><img src="screenshots/themes/blue-deep.svg" alt="Textrix in the blue-deep theme" loading="lazy" width="928" height="654"></a><figcaption>blue-deep</figcaption></figure>
+    <figure><a href="screenshots/themes/blue-tron.svg"><img src="screenshots/themes/blue-tron.svg" alt="Textrix in the blue-tron theme" loading="lazy" width="928" height="654"></a><figcaption>blue-tron</figcaption></figure>
+    <figure><a href="screenshots/themes/red.svg"><img src="screenshots/themes/red.svg" alt="Textrix in the red theme" loading="lazy" width="928" height="654"></a><figcaption>red</figcaption></figure>
+    <figure><a href="screenshots/themes/red-deep.svg"><img src="screenshots/themes/red-deep.svg" alt="Textrix in the red-deep theme" loading="lazy" width="928" height="654"></a><figcaption>red-deep</figcaption></figure>
+    <figure><a href="screenshots/themes/red-tron.svg"><img src="screenshots/themes/red-tron.svg" alt="Textrix in the red-tron theme" loading="lazy" width="928" height="654"></a><figcaption>red-tron</figcaption></figure>
+    <figure><a href="screenshots/themes/amber.svg"><img src="screenshots/themes/amber.svg" alt="Textrix in the amber theme" loading="lazy" width="928" height="654"></a><figcaption>amber</figcaption></figure>
+    <figure><a href="screenshots/themes/amber-deep.svg"><img src="screenshots/themes/amber-deep.svg" alt="Textrix in the amber-deep theme" loading="lazy" width="928" height="654"></a><figcaption>amber-deep</figcaption></figure>
+    <figure><a href="screenshots/themes/amber-tron.svg"><img src="screenshots/themes/amber-tron.svg" alt="Textrix in the amber-tron theme" loading="lazy" width="928" height="654"></a><figcaption>amber-tron</figcaption></figure>
+    <figure><a href="screenshots/themes/mono-tron.svg"><img src="screenshots/themes/mono-tron.svg" alt="Textrix in the mono-tron theme" loading="lazy" width="928" height="654"></a><figcaption>mono-tron</figcaption></figure>
+    <figure><a href="screenshots/themes/ibm5151.svg"><img src="screenshots/themes/ibm5151.svg" alt="Textrix in the ibm5151 theme" loading="lazy" width="928" height="654"></a><figcaption>ibm5151</figcaption></figure>
+  </div>
+  <p class="shelf">» Plain</p>
+  <div class="gallery">
+    <figure><a href="screenshots/themes/default.svg"><img src="screenshots/themes/default.svg" alt="Textrix in the default theme" loading="lazy" width="928" height="654"></a><figcaption>default</figcaption></figure>
+    <figure><a href="screenshots/themes/light.svg"><img src="screenshots/themes/light.svg" alt="Textrix in the light theme" loading="lazy" width="928" height="654"></a><figcaption>light</figcaption></figure>
+    <figure><a href="screenshots/themes/mono.svg"><img src="screenshots/themes/mono.svg" alt="Textrix in the mono theme" loading="lazy" width="928" height="654"></a><figcaption>mono</figcaption></figure>
+  </div>
+
   <h2>💾 Download it!!</h2>
   <center>
     <a class="download" href="https://github.com/seamoss/Textrix/releases">⬇ DOWNLOAD NOW ⬇</a><br>
-    <span class="small">*about 19 MB, or 47 minutes on a good day with a 56k modem</span><br>
+    <span class="small">*about 22 MB, or 55 minutes on a good day with a 56k modem</span><br>
     Latest version: <b>v{{VERSION}}</b> · <a href="changelog.html">📜 what's new?</a>
   </center>
   <pre class="cmd">brew install seamoss/textrix/textrix
-cargo install --git https://github.com/seamoss/Textrix</pre>
+cargo install --git https://github.com/seamoss/Textrix
+
+brew upgrade textrix      # later, for the next one</pre>
   <p>
     Then put your server in <code>~/.textrix/.env</code> (copy
     <a href="https://github.com/seamoss/Textrix/blob/master/.env.example">.env.example</a>), run

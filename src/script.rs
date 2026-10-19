@@ -1165,11 +1165,15 @@ mod tests {
         assert_eq!(run("shout", "hello"), [Effect::Say("HELLO!".into())]);
         assert!(matches!(&run("shout", "")[..], [Effect::Print(usage)] if usage.starts_with("usage")));
 
-        for _ in 0..4 {
+        // Five rolls in all: what the rate limit allows at once.
+        for _ in 0..3 {
             let [Effect::Say(said)] = &run("roll", "3d6")[..] else { panic!("one roll") };
             let total: i64 = said.rsplit(' ').next().unwrap().parse().unwrap();
             assert!(said.starts_with("🎲 3d6: ") && (3..=18).contains(&total), "{said}");
         }
+        let rolled = run("roll", "2D6");
+        let [Effect::Say(caps)] = &rolled[..] else { panic!("{rolled:?}") };
+        assert!(caps.starts_with("🎲 2d6: "), "{caps}");
         let [Effect::Say(one)] = &run("roll", "")[..] else { panic!("one roll") };
         assert!(one.starts_with("🎲 1d6: "), "{one}");
         assert!(matches!(&run("roll", "lots")[..], [Effect::Print(usage)] if usage.starts_with("usage")));
@@ -1211,5 +1215,7 @@ mod tests {
         time_passes(&mut scripts);
         let due = scripts.run_timers().0;
         assert!(due.contains(&Effect::Bell) && due.contains(&Effect::Print("⏰ stretch your legs".into())), "{due:?}");
+        let left = scripts.run_command("remind", "", &here).unwrap().unwrap();
+        assert_eq!(left, [Effect::Print("no reminders".into())], "a fired reminder isn't waiting");
     }
 }

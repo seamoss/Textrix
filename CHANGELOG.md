@@ -7,6 +7,51 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.0] - 2026-10-19
+
+### Added
+- Thirteen new themes. Classic: `turbo` (Turbo Pascal's DOS blue, grey
+  menu bars, double-line windows), `procomm` (a DOS terminal program
+  dialling a BBS: grey on black, ANSI colours, a cyan status line), `c64`,
+  `amiga` (Workbench 1.3), `delphi` (Delphi 7's editor in Windows grey),
+  `mirc`, `solarized-dark` and `solarized-light`. Nouveau: `monokai`,
+  `dracula`, `nord`, `gruvbox` and `catppuccin` (Mocha). And two more
+  monitors: `mono-tron`, Tron in greys, and `ibm5151`, the IBM monochrome
+  display's #00FF66 green with its panels framed in plain ASCII.
+- Your own themes: a file in `~/.textrix/themes/<name>.toml` starts from a
+  built-in theme (`base`), changes any colour (`[colors]`, which now also
+  takes `background`, `foreground`, `border` and `border_focus`), and can
+  pick the outlines (`none`, `plain`, `rounded`, `double`, `thick` or
+  `ascii`). `/theme <name>`, `theme = "<name>"` and `--theme <name>` use it
+  like a built-in one. `/theme save <name>` writes the look you have now
+  to a theme file to share, and `/theme import <file>` checks one you were
+  sent and adds it. `/theme` lists every theme by shelf, yours included,
+  and Tab completes their names.
+- Screenshots in the README and on the website, and a gallery of every
+  theme there. `scripts/screenshots.sh` draws them from the real interface
+  and made-up rooms, without an account or a network.
+
+### Changed
+- The Tron themes are on pure black (#000000), not the terminal's own
+  "black", which many colour schemes make a dark grey.
+- In terminals without 24-bit colour, themes (and `#rrggbb` colours in
+  `[colors]`) use the nearest of the 256 colours instead of sending
+  colours the terminal can't show.
+- `/help` lists the other names commands have had all along (`/fwd`,
+  `/read`, `/sessions`, `/pinned`, `/highlight`, `/unhilight`), and its
+  usage lines for `/search`, `/upgrade`, `/logout`, `/devices` and
+  `/layout` say what they actually take. F1 lists the word-movement keys
+  and Enter in the mentions window.
+- The README covers upgrading (`brew upgrade textrix` once the tap is
+  added), and the Homebrew caveats mention `textrix --check` and
+  `/restart`.
+
+### Fixed
+- `/alias` no longer accepts names that already belong to a command
+  (`/alias read …`, `/alias wc …`), which saved aliases that never ran.
+- The `/roll` example script takes `2D6` as well as `2d6`, and `/remind`
+  no longer counts reminders that have already gone off.
+
 ## [0.8.1] - 2026-10-19
 
 ### Changed

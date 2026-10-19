@@ -265,10 +265,10 @@ fn draw_help(f: &mut Frame, app: &mut App) {
 
 /// A titled frame, when the theme draws outlines.
 fn outline(t: &Theme, title: &str, focused: bool) -> Option<Block<'static>> {
-    let lines = t.outlines?;
+    let lines = t.outlines.set()?;
     let style = if focused { t.border_focus } else { t.border };
     let title: String = title.chars().filter(|c| !c.is_control()).collect();
-    Some(Block::bordered().border_type(lines).border_style(style).title(Span::styled(format!(" {title} "), style)))
+    Some(Block::bordered().border_set(lines).border_style(style).title(Span::styled(format!(" {title} "), style)))
 }
 
 fn activity_style(t: &Theme, level: Activity) -> Style {
@@ -283,7 +283,7 @@ fn activity_style(t: &Theme, level: Activity) -> Style {
 fn sidebar_width(app: &App) -> u16 {
     let longest = app.windows.iter().map(|w| w.title().chars().count()).max().unwrap_or(6);
     let avatar = if app.cfg.sidebar_avatars { 3 } else { 0 };
-    let frame = if app.cfg.palette.outlines.is_some() { 1 } else { 0 };
+    let frame = if app.cfg.palette.outlines.framed() { 1 } else { 0 };
     (longest.clamp(8, 22) + 9 + avatar + frame) as u16
 }
 
@@ -494,7 +494,7 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
 fn nicklist_width(app: &App) -> u16 {
     let win = &app.windows[app.active];
     let longest = win.members.iter().map(|m| m.name.chars().count()).max().unwrap_or(6);
-    let frame = if app.cfg.palette.outlines.is_some() { 1 } else { 0 };
+    let frame = if app.cfg.palette.outlines.framed() { 1 } else { 0 };
     (longest.clamp(6, 18) + 5 + frame) as u16
 }
 

@@ -4,12 +4,26 @@ An irssi-style terminal client for Matrix, in Rust (matrix-rust-sdk + ratatui).
 Numbered windows, a status bar with activity, slash commands, nick completion,
 and end-to-end encryption.
 
+![Textrix in a dark terminal: the window list with unread rooms on top and the rest by space, a conversation in Night Owls with a code block, a voice message and a picture, and the member list](site/screenshots/main.svg)
+
 ## Install
 
 ```sh
 brew install seamoss/textrix/textrix      # macOS, Linux (x86_64, ARM); with completions and a man page
 cargo install --git https://github.com/seamoss/Textrix   # anywhere with Rust 1.96+
 ```
+
+`seamoss/textrix/textrix` is the formula `textrix` in the tap
+`seamoss/textrix` (the [homebrew-textrix](https://github.com/seamoss/homebrew-textrix)
+repository). Once it's installed, the short name works:
+
+```sh
+brew upgrade textrix
+cargo install --git https://github.com/seamoss/Textrix --force   # the cargo way
+```
+
+A Textrix that's running then offers to switch to the new version in
+place (see [Upgrading while it runs](#upgrading-while-it-runs)).
 
 Or download a build for macOS (universal, or per chip) or Linux (x86_64,
 ARM) from the [releases](https://github.com/seamoss/Textrix/releases).
@@ -37,20 +51,21 @@ and so does closing the terminal. Attaching from another terminal takes it
 over. `/quit` in it, or `textrix --stop`, stops it.
 
 The terminal and the background Textrix talk over a socket only you can
-open (`~/.textrix/daemon.sock`). Only one Textrix runs per home at a time:
+open (`~/.textrix/daemon.sock`, or one in your temp folder when that path
+is too long for a socket). Only one Textrix runs per home at a time:
 a second one is refused, since two would share one store and can scramble
 its encryption keys.
 
 ### Upgrading while it runs
 
 A running Textrix notices when the `textrix` it was started as changes
-(`brew upgrade`, a new `cargo build`) and says so in the status bar,
-`[0.8.1 installed: /restart]`. `/restart` saves everything as quitting
+(`brew upgrade textrix`, a new `cargo build`) and says so in the status
+bar, `[0.9.1 installed: /restart]`. `/restart` saves everything as quitting
 would and becomes the new one in place: the same terminal, back in the
 window you were in, every window's unsent text kept. In the background it
 restarts itself, and the attached terminal follows. With
 `check_updates = true`, it also asks GitHub once an hour for new releases
-and shows `[0.8.1 is out]` until you have it; that's off unless you turn
+and shows `[0.9.1 is out]` until you have it; that's off unless you turn
 it on.
 
 ## Setup
@@ -60,7 +75,7 @@ Connections come only from a private dotfile. No file, no connections.
 | Build              | Dotfile                         |
 |--------------------|---------------------------------|
 | `cargo run` (debug)| `.textrix` in the repo (git-ignored) |
-| release binary     | `~/.textrix/.env`               |
+| release binary     | `~/.textrix/.env` (`.env` in `TEXTRIX_HOME` or `--home`) |
 | either             | `TEXTRIX_ENV=/path/to/file`     |
 
 ```sh
@@ -180,23 +195,24 @@ bindings.
 | Area | Commands |
 |---|---|
 | Rooms | `/create [-public] [-space] <name>`, `/join`, `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
-| Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [version] [confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all. `/close` shuts a room you own down for everyone: it says what it will do, and `/close confirm` makes it invite-only, takes it off the directory, removes its addresses, withdraws invites, removes every member less powerful than you, then leaves and forgets it. Matrix has no "delete room" for clients (other servers keep their copy while their members are in it), but when you're an admin on your Synapse homeserver, `/close` also has it delete the room and block it there |
+| Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [<version> confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all. `/close` shuts a room you own down for everyone: it says what it will do, and `/close confirm` makes it invite-only, takes it off the directory, removes its addresses, withdraws invites, removes every member less powerful than you, then leaves and forgets it. Matrix has no "delete room" for clients (other servers keep their copy while their members are in it), but when you're an admin on your Synapse homeserver, `/close` also has it delete the room and block it there |
 | Directory | `/list [search]` (public rooms) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |
 | Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode, or click one. Links are real hyperlinks in terminals that have them (Ghostty, iTerm2, kitty, WezTerm…): hovering shows where they go and Cmd/Ctrl+click opens them, a link wrapped over lines included; `hyperlinks = false` turns that off. The page title of a message's first link shows under it (`↳ Title — Site`), fetched by your homeserver's URL preview so the site never sees you. That's on in unencrypted rooms, which the server reads anyway; `link_titles = "all"` adds encrypted rooms (the server then sees those links), `"off"` stops it. Synapse needs `url_preview_enabled` for this; Textrix tells you once if it's off |
 | Forwarding | `f` in selection mode opens a "Forward to" list of that server's other rooms (closed ones too), filtered as you type like the switcher; Enter sends a copy and leaves you where you are. `/forward [room]` does the same for the latest message here. The copy keeps formatting and attachments but not reply or thread links or mentions, so nobody is pinged again; an edited message goes as its edited text. Forwarding out of an encrypted room into one that isn't says so |
 | Pins | `p` in selection mode pins a message for everyone in the room, or unpins it (needs the power level to change pins). Pinned messages show `[pinned]`, and the topic bar counts them. `/pins` lists them, newest pin first; `/jump N` goes to one |
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Thread roots show `[N replies]`; replies also appear in the room with their context |
-| Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep <text>` reads each room's last 500 messages |
-| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>` |
-| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/theme [name]` |
+| Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
+| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is |
+| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| save <name> \| import <file>]` (see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
 | Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Drag the line between two panes (or the upper one's title bar) to resize them, or `/resize +5`, `/resize -5` (rows, or columns side by side), `/resize =` to even them up. The split you quit with is back next time, sizes and all. `/layout save <name>` keeps the panes (and whether the window and member lists show) to bring back with `/layout load <name>` or `/layout <name>`; `/layout` lists them, `/layout delete <name>` removes one |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
+| Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
 | Scripts | `/script` lists them, `/script load\|unload\|reload <name>`, `/script exec <code>`; see [Scripts](#scripts) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
@@ -362,16 +378,41 @@ bell marks the window in tmux's status line.
 synced, so your other clients notify on it too); `/hilight` lists them and
 `/dehilight <word>` removes one. `/info` shows a room's setting.
 
-### Colours
+### Themes
 
-`theme = "default"` suits dark terminal backgrounds, `"light"` light ones,
-`"mono"` uses no colour at all (bold, underline and reverse video). The
-rest are monochrome monitors in green (phosphor), blue, red (Virtual Boy)
-or amber, each three ways: on black (`"green"`), on deep blue with every panel
-framed in double lines like an 80s airport terminal (`"green-deep"`), or
-on black with thin neon outlines (`"green-tron"`). `/theme blue-deep`
-tries one for the session; `/theme` lists them. A `[colors]` table changes single
-parts, by colour name (`lightcyan`), `#rrggbb`, or a 256-colour number:
+![Two rooms side by side in blue-tron, every panel framed in thin neon lines on pure black](site/screenshots/panes.svg)
+
+`/theme` lists them, `/theme <name>` tries one for the session, and
+`theme = "<name>"` in config.toml keeps it (`--theme <name>` for one run).
+
+| Shelf | Themes |
+|---|---|
+| Plain | `default` (for dark backgrounds), `light`, `mono` (no colour at all: bold, underline and reverse video) |
+| Monitors | `green`, `blue`, `red` (Virtual Boy) and `amber`: one colour on black, each also `-deep` (on deep blue with every panel framed in double lines, like an 80s airport terminal) and `-tron` (on pure black with thin neon outlines). `mono-tron` is Tron in greys, and `ibm5151` the IBM monochrome display's green, its panels framed in ASCII |
+| Classic | `turbo` (Turbo Pascal's DOS blue), `procomm` (a DOS terminal program dialling a BBS), `c64`, `amiga` (Workbench 1.3), `delphi` (Delphi 7), `mirc`, `solarized-dark`, `solarized-light` |
+| Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha) |
+
+<table>
+<tr>
+<td><img src="site/screenshots/themes/turbo.svg" alt="turbo"><br><code>turbo</code></td>
+<td><img src="site/screenshots/themes/amiga.svg" alt="amiga"><br><code>amiga</code></td>
+<td><img src="site/screenshots/themes/ibm5151.svg" alt="ibm5151"><br><code>ibm5151</code></td>
+</tr>
+<tr>
+<td><img src="site/screenshots/themes/delphi.svg" alt="delphi"><br><code>delphi</code></td>
+<td><img src="site/screenshots/themes/dracula.svg" alt="dracula"><br><code>dracula</code></td>
+<td><img src="site/screenshots/themes/amber-deep.svg" alt="amber-deep"><br><code>amber-deep</code></td>
+</tr>
+</table>
+
+The website has [every theme](https://seamoss.github.io/Textrix/#themes).
+The plain themes use your terminal's own background; the rest bring their
+own, and the Tron ones are #000000 whatever your terminal's colour scheme
+calls black. In terminals without 24-bit colour (no
+`COLORTERM=truecolor`), Textrix uses the nearest of the 256 colours.
+
+A `[colors]` table in config.toml changes single parts of whichever theme
+you use, by colour name (`lightcyan`), `#rrggbb`, or a 256-colour number:
 
 ```toml
 theme = "light"
@@ -382,16 +423,44 @@ link = "lightcyan"
 nicks = "red, 214, #00aa88, blue"   # the colours nicks are picked from
 ```
 
-The keys: `bar_fg`, `bar_bg`, `bar_accent`, `bar_alert` (the topic and
-status bars), `pane_fg`, `pane_bg` (unfocused split panes), `dim`,
-`accent`, `frame`, `own_nick`, `highlight`, `highlight_text`, `error`,
-`divider`, `link`, `mention`, `code`, `code_comment`, `code_keyword`,
-`code_string`, `code_number`, `code_function`, `code_type` (syntax colours
-in code blocks), `badge` (reply counts), `pinned`,
-`receipts`, `matched`, `current_fg`, `current_bg`, `shown`, `inactive`,
-`activity_event`, `activity` (the window list), `op`, `voice`, `online`,
-`away`, `offline` (the member list), and `nicks`. A typo stops Textrix
-with the list of keys rather than being ignored.
+The keys: `background`, `foreground` (under everything), `bar_fg`,
+`bar_bg`, `bar_accent`, `bar_alert` (the topic and status bars),
+`pane_fg`, `pane_bg` (unfocused split panes), `dim`, `accent`, `frame`,
+`own_nick`, `highlight`, `highlight_text`, `error`, `divider`, `link`,
+`mention`, `code`, `code_comment`, `code_keyword`, `code_string`,
+`code_number`, `code_function`, `code_type` (syntax colours in code
+blocks), `badge` (reply counts), `pinned`, `receipts`, `matched`,
+`current_fg`, `current_bg`, `shown`, `inactive`, `activity_event`,
+`activity` (the window list), `op`, `voice`, `online`, `away`, `offline`
+(the member list), `border`, `border_focus` (outlines), and `nicks`. A
+typo stops Textrix with the list of keys rather than being ignored.
+
+#### Your own themes
+
+A theme file, `~/.textrix/themes/<name>.toml`, starts from a built-in
+theme and changes what you like. `/theme <name>` uses it like any other:
+
+```toml
+# ~/.textrix/themes/midnight.toml
+name = "midnight"             # what /theme import calls it
+description = "blue-tron, later"
+base = "blue-tron"            # any built-in theme
+outlines = "rounded"          # none, plain, rounded, double, thick or ascii
+message_colors = false        # show the colours senders put in messages
+
+[colors]                      # the keys above
+background = "#000010"
+foreground = "#c0d0ff"
+bar_bg = "#102040"
+nicks = "#7aa2f7, #bb9af7, #9ece6a"
+```
+
+`/theme save <name>` writes the look you have now (the theme with your
+`[colors]` changes) to a file like that, ready to send to someone;
+`/theme import <file>` checks one you were sent and adds it. A theme file
+holds colours and nothing else, so there's nothing in it to run. A mistake
+in one says what and where, and `/reload` reads it again after you edit
+it.
 
 ### Scripts
 
@@ -420,7 +489,9 @@ DM counter and `/remind` to start from.
 
 `~/.textrix/config.toml` holds your preferences (all keys optional).
 `/set` lists them and `/set <name> <value>` changes one for the session
-(`/set theme blue-deep`); `/save` writes the session's settings back into
+(`/set theme blue-deep`; `sync`, `encrypt_store`, `search_index`,
+`history_cache`, `check_updates` and `scripts` take effect at the next
+start); `/save` writes the session's settings back into
 the file, including what `/theme`, `/bell`, `/log`, F2 and F3 changed,
 leaving your comments alone. After editing the file by hand, `/reload`
 applies it (and picks up servers added to or removed from the dotfile):
@@ -452,7 +523,7 @@ sidebar_avatars = true     # room avatars there (coloured initials without graph
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
-theme = "default"          # light, mono, green, blue, red, amber (+ -deep, -tron); [colors] overrides
+theme = "default"          # or one of the others /theme lists, or your own; [colors] overrides
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
@@ -474,6 +545,10 @@ They're not in `/help`.
 `cargo build --release` gives a single binary at `target/release/textrix`
 (release builds read `~/.textrix/.env`). CI runs `cargo fmt --check`, clippy
 and the tests on every push to `master`.
+
+`scripts/screenshots.sh` draws the screenshots in `site/screenshots`
+from the real interface and made-up rooms, without an account or a
+network; run it after changing how anything looks.
 
 `scripts/linux.sh` tries Textrix on Linux in Docker: `test` builds it and
 runs the tests there, `run` runs it (with your dotfile mounted read-only,

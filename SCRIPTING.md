@@ -24,10 +24,10 @@ examples in [`examples/scripts`](examples/scripts): copy one into
 | Command | |
 |---|---|
 | `/script` | Lists the loaded scripts, with their commands and hooks |
-| `/script load <name>` | Loads `~/.textrix/scripts/<name>.rhai`, or a path |
+| `/script load <name>` | Loads `~/.textrix/scripts/<name>.rhai` (the name without `.rhai`), or a path: anything with a `/` or ending in `.rhai`, like `./seen.rhai` |
 | `/script reload [name]` | Reads one script's file again (or every file in the directory), replacing what was loaded |
 | `/script unload <name>` | Takes a script out |
-| `/script exec <code>` | Runs a line of Rhai once, e.g. `/script exec 6 * 7` |
+| `/script exec <code>` | Runs a line of Rhai once, e.g. `/script exec 6 * 7`. Stores, settings, status items and timers belong to a script's file, so they're for loaded scripts only |
 
 A script that fails to load, or whose handler fails, says why in the
 status window; the rest keep working.
@@ -44,13 +44,13 @@ handlers, and what it prints there shows in the status window.
 | `on_highlight(\|msg\| …)` | Called for each message that mentions you or a `/hilight` word |
 | `on_join(\|m\| …)`, `on_leave(\|m\| …)` | Called when someone joins or leaves a room: `m.nick`, `m.user` (their Matrix ID) and the `ctx` fields |
 | `on_reaction(\|r\| …)` | Called when someone reacts: `r.nick`, `r.key` (the emoji), `r.target` (the message's ID), `r.text` (its text, if it's loaded) and the `ctx` fields |
-| `every(secs, \|\| …)`, `after(secs, \|\| …)` | Calls the function every `secs` seconds, or once after them (at least a second; up to 32 timers a script). Returns an ID |
+| `every(secs, \|\| …)`, `after(secs, \|\| …)` | Calls the function every `secs` seconds, or once after them (between a second and a week; fractions are fine; up to 32 timers a script). Returns an ID |
 | `cancel(id)` | Stops a timer; `true` if it was running |
 | `print(text)` | A line only you see, in the room the script is working in |
 | `say(text)` | Sends a message to that room (Markdown, like typing it) |
-| `send(room, text)` | Sends to another room: by its whole name as the window list shows it, or an `#alias:server`, `!id:server` or `@user:server` (their DM, started if you haven't one) |
+| `send(room, text)` | Sends to another room: by its whole name as the window list shows it, or an `#alias:server`, `!id:server` or `@user:server` (their DM, started if you haven't one). Those go out from the account of the room the script is working in |
 | `run(command)` | Runs a Textrix command, e.g. `run("/markread all")` |
-| `bell()` | Rings the bell, following your `bell` settings |
+| `bell()` | Rings the bell, following your `bell` settings. It rings as a mention would, so not if `bell_for` leaves out `"mentions"` |
 | `notify(title, body)` | A desktop notification, following your `notifications` setting |
 | `matches(text, pattern)` | Whether `text` matches a [regular expression](https://docs.rs/regex/latest/regex/#syntax) |
 | `random(n)` | A number from 0 to n − 1 |
@@ -171,8 +171,10 @@ Scripts run inside Textrix, so they're kept on a short leash:
 
 - They can't read or write files, open network connections, or run
   programs. `eval` is switched off.
-- A handler that runs too long (an endless loop, say) is stopped, with an
-  error in the status window.
+- A handler that runs too long (more than 500,000 operations: an endless
+  loop, say) is stopped, with an error in the status window. Strings are
+  kept under 64 KB, arrays and maps under 10,000 items, and calls 48
+  deep.
 - Each script can send at most 5 things (`say`, `send`, `run`) in any 10
   seconds; anything beyond that is dropped, and Textrix says so.
 - Scripts don't hear your own messages or reactions, so a script that

@@ -19,7 +19,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{Theme, ThemeName};
+use crate::theme::{Theme, ThemeId};
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -45,6 +45,11 @@ impl Paths {
 
     pub fn config_file(&self) -> PathBuf {
         self.base.join("config.toml")
+    }
+
+    /// Theme files, `<name>.toml`.
+    pub fn themes_dir(&self) -> PathBuf {
+        self.base.join("themes")
     }
 
     pub fn log_dir(&self, configured: Option<&str>) -> PathBuf {
@@ -181,7 +186,7 @@ pub struct Config {
     /// Keep an encrypted local index of decrypted messages for /search
     /// (needs the encrypted store).
     pub search_index: bool,
-    /// Once a day, ask GitHub whether a newer Textrix is out.
+    /// Once an hour, ask GitHub whether a newer Textrix is out.
     pub check_updates: bool,
     /// Keep recent messages in the local store so windows fill instantly at
     /// startup. They're stored decrypted, next to the keys and session
@@ -191,9 +196,10 @@ pub struct Config {
     /// (" [3]" when other windows have new messages). Empty leaves the
     /// title alone.
     pub title: String,
-    /// Built-in colours: "default" (dark backgrounds), "light", "mono", or
-    /// one colour on black like an old monitor: "green", "blue", "red".
-    pub theme: ThemeName,
+    /// Colours: a built-in theme ("default", "light", "green-tron",
+    /// "turbo", "dracula"… /theme lists them) or a theme file's name, from
+    /// `themes/<name>.toml` next to this file.
+    pub theme: ThemeId,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,
     /// Scripts' settings, by script: `[script_settings.watchwords]`.
@@ -244,7 +250,7 @@ impl Default for Config {
             search_index: true,
             title: "{window}{activity} — Textrix".into(),
             encrypt_store: true,
-            theme: ThemeName::Default,
+            theme: ThemeId::default(),
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
             script_settings: BTreeMap::new(),
@@ -444,10 +450,10 @@ impl Config {
     }
 
     /// Settings from TOML, checked like config.toml (unknown keys and wrong
-    /// types are errors).
-    pub fn from_table(table: toml::Table) -> Result<Self> {
+    /// types are errors); theme files come from `themes`.
+    pub fn from_table(table: toml::Table, themes: &Path) -> Result<Self> {
         let mut cfg: Self = table.try_into()?;
-        cfg.palette = Theme::build(cfg.theme, &cfg.colors)?;
+        cfg.palette = Theme::load(&cfg.theme, &cfg.colors, themes)?;
         Ok(cfg)
     }
 
@@ -455,7 +461,9 @@ impl Config {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 let mut cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-                cfg.palette = Theme::build(cfg.theme, &cfg.colors).with_context(|| format!("in {}", path.display()))?;
+                let themes = path.with_file_name("themes");
+                cfg.palette =
+                    Theme::load(&cfg.theme, &cfg.colors, &themes).with_context(|| format!("in {}", path.display()))?;
                 Ok(cfg)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -490,7 +498,7 @@ mod tests {
         let mut cfg = Config::load(&path).unwrap();
         assert!(save_settings(&path, &cfg).unwrap().is_empty(), "nothing changed");
 
-        cfg.theme = ThemeName::RedTron;
+        cfg.theme = crate::theme::ThemeName::RedTron.into();
         cfg.image_rows = 12;
         let written = save_settings(&path, &cfg).unwrap();
         assert_eq!(written, ["image_rows", "theme"]);
@@ -499,7 +507,10 @@ mod tests {
         assert!(text.contains("theme = \"red-tron\"") && text.contains("image_rows = 12"), "{text}");
         assert!(text.contains("[aliases]\ntt = \"/window 10\""), "{text}");
         let back = Config::load(&path).unwrap();
-        assert_eq!((back.theme, back.image_rows, back.bell), (ThemeName::RedTron, 12, BellMode::Off));
+        assert_eq!(
+            (back.theme, back.image_rows, back.bell),
+            (crate::theme::ThemeName::RedTron.into(), 12, BellMode::Off)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -510,9 +521,9 @@ mod tests {
         assert_eq!(table["theme"], toml::Value::String("default".into()));
         let mut changed = table.clone();
         changed.insert("bell".into(), toml::Value::String("away".into()));
-        assert_eq!(Config::from_table(changed).unwrap().bell, BellMode::Away);
+        assert_eq!(Config::from_table(changed, Path::new("")).unwrap().bell, BellMode::Away);
         let mut wrong = table;
         wrong.insert("belll".into(), toml::Value::Boolean(true));
-        assert!(Config::from_table(wrong).is_err(), "unknown settings are errors");
+        assert!(Config::from_table(wrong, Path::new("")).is_err(), "unknown settings are errors");
     }
 }

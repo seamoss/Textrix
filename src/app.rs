@@ -50,7 +50,7 @@ use crate::{
     script::{self, Scripts},
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
-    theme::{Theme, ThemeName},
+    theme::{Theme, ThemeFile, ThemeId, ThemeName},
     ui, update,
     viewer::{self, Viewer},
 };
@@ -869,7 +869,7 @@ const COMMANDS: &[Cmd] = &[
         help: "Who can read past messages: members since joining/invited, all members, or anyone",
     },
     Cmd { name: "publish", args: "<on|off>", help: "List the room in the server's room directory" },
-    Cmd { name: "upgrade", args: "[version] [confirm]", help: "Show room versions, or move the room to a new version" },
+    Cmd { name: "upgrade", args: "[<version> confirm]", help: "Show room versions, or move the room to a new version" },
     Cmd {
         name: "close",
         args: "[confirm]",
@@ -916,10 +916,10 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
     Cmd {
         name: "search",
-        args: "[-deep] <text>",
-        help: "Search all rooms' loaded history (-deep: last 500 messages per room)",
+        args: "[-deep] [from:name] [in:room] [after:date] [before:date] [text]",
+        help: "Search every room (the encrypted local index, and loaded history; -deep also reads open rooms' last 500)",
     },
-    Cmd { name: "jump", args: "<N>", help: "Go to /search result N and select it" },
+    Cmd { name: "jump", args: "<N>", help: "Go to result N of /search or /pins and select it" },
     Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
     Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
@@ -962,7 +962,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "layout",
-        args: "[save <name> | load <name> | delete <name>]",
+        args: "[<name> | save <name> | load <name> | delete <name>]",
         help: "Saved arrangements of split panes and panels; /layout lists them",
     },
     Cmd { name: "markread", args: "[all]", help: "Mark this room read (all: every room), for your other clients too" },
@@ -981,8 +981,8 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[name]",
-        help: "Colours for this session: default, light, mono, or green, blue, red, amber (each also -deep, -tron)",
+        args: "[name | save <name> | import <file>]",
+        help: "Colours for this session (no name lists them); save writes this look to a theme file, import adds one",
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
@@ -1000,7 +1000,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "connect", args: "<server>", help: "Connect a server from the dotfile" },
     Cmd { name: "disconnect", args: "<server>", help: "Stop syncing a server (session is kept)" },
-    Cmd { name: "logout", args: "<server>", help: "Log out and delete the local session and keys" },
+    Cmd { name: "logout", args: "[server]", help: "Log out and delete the local session and keys" },
     Cmd {
         name: "verify",
         args: "[accept|confirm|mismatch|cancel|@user]",
@@ -1014,7 +1014,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "devices",
-        args: "[rename <id> <name> | delete <id>]",
+        args: "[rename <id> <name> | delete <id> [confirm]]",
         help: "List your sessions, rename one, or sign one out (asks to confirm)",
     },
     Cmd { name: "version", args: "[check]", help: "Show the version; check asks GitHub for a newer one" },
@@ -1050,6 +1050,12 @@ const ALIASES: &[(&str, &str)] = &[
     ("delete", "redact"),
     ("exit", "quit"),
     ("h", "help"),
+    ("fwd", "forward"),
+    ("read", "markread"),
+    ("sessions", "devices"),
+    ("highlight", "hilight"),
+    ("unhilight", "dehilight"),
+    ("pinned", "pins"),
 ];
 
 pub const KEYS: &[(&str, &str)] = &[
@@ -1067,6 +1073,8 @@ pub const KEYS: &[(&str, &str)] = &[
     ("F6 / Shift+F6", "focus the next / previous split pane"),
     ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), image (views), name or the input"),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
+    ("Alt+B / Alt+F, Ctrl+← / Ctrl+→", "back / forward a word"),
+    ("Home / End, Ctrl+D", "start / end of the line; delete the character under the cursor"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line; on an empty one, twice quits (detaches, in the background)"),
     ("Ctrl+L", "redraw the screen"),
@@ -1088,6 +1096,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("v", "show spoilers"),
     ("c", "copy the text"),
     ("i", "sender, time and event ID"),
+    ("Enter", "in the mentions window: go to the message in its room"),
     ("Esc", "leave selection mode"),
 ];
 
@@ -1487,7 +1496,7 @@ impl App {
         Ok(())
     }
 
-    /// `check_updates`: once a day (remembered across restarts), ask GitHub
+    /// `check_updates`: once an hour (remembered across restarts), ask GitHub
     /// for the latest release.
     fn watch_for_updates(&self) {
         let (tx, stamp) = (self.tx.clone(), self.paths.base.join("update-check"));
@@ -1724,6 +1733,10 @@ impl App {
                 self.avatars.clear();
                 self.viewer = None;
                 self.notify_mode = notify::resolve(self.cfg.notifications);
+                // This terminal may have more colours, or fewer.
+                if let Ok(palette) = Theme::load(&self.cfg.theme, &self.cfg.colors, &self.paths.themes_dir()) {
+                    self.cfg.palette = palette;
+                }
                 (self.redraw_all, self.last_title) = (true, None);
                 if self.cfg.mouse {
                     set_mouse_capture(true);
@@ -2359,10 +2372,11 @@ impl App {
         if self.input.text() == "b" {
             self.input.clear();
         }
-        let back = self.cfg.theme == ThemeName::Green;
-        let name = if back { ThemeName::Default } else { ThemeName::Green };
-        if let Ok(palette) = Theme::build(name, &self.cfg.colors) {
-            (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, name, true);
+        let green = ThemeId::Builtin(ThemeName::Green);
+        let back = self.cfg.theme == green;
+        let id = if back { ThemeId::default() } else { green };
+        if let Ok(palette) = Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()) {
+            (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, id, true);
         }
         self.info(if back {
             "Phosphor off. The code still works."
@@ -3945,6 +3959,19 @@ impl App {
         if matches!(first, "/avatar" | "/roomavatar") && !at_start {
             return path_candidates(&word);
         }
+        if first == "/theme" && !at_start {
+            let words = text.split_whitespace().count();
+            if words <= 1 || (words == 2 && !text.ends_with(' ')) {
+                let yours = crate::theme::files(&self.paths.themes_dir());
+                let names = ThemeName::ALL.iter().map(|(n, _)| *n).chain(yours.iter().map(String::as_str));
+                return names
+                    .chain(["save", "import"])
+                    .filter(|n| n.starts_with(&lower))
+                    .map(|n| Candidate { text: format!("{n} "), user: None, hint: None })
+                    .collect();
+            }
+            return if second == "import" { path_candidates(&word) } else { Vec::new() };
+        }
 
         if word.is_empty() {
             return Vec::new();
@@ -4157,15 +4184,15 @@ impl App {
             "nickname" => self.cmd_nickname(args),
             "bell" => self.cmd_bell(args),
             "keys" => self.cmd_keys(args),
-            "forward" | "fwd" => self.cmd_forward(args),
-            "markread" | "read" => self.cmd_markread(args),
+            "forward" => self.cmd_forward(args),
+            "markread" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
-            "devices" | "sessions" => self.cmd_devices(args),
-            "hilight" | "highlight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
+            "devices" => self.cmd_devices(args),
+            "hilight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
                 "" => acct.list_highlights(self.here()),
                 word => acct.set_highlight(self.here(), word.to_owned(), true),
             }),
-            "dehilight" | "unhilight" => self.pick_account(args).and_then(|(acct, word)| {
+            "dehilight" => self.pick_account(args).and_then(|(acct, word)| {
                 if word.trim().is_empty() {
                     return Err("usage: /dehilight <word>".to_owned());
                 }
@@ -4214,7 +4241,7 @@ impl App {
                 self.switch_to(idx);
                 Ok(())
             }
-            "pins" | "pinned" => self.room_ctx().map(|(acct, room_id)| acct.pins(room_id)),
+            "pins" => self.room_ctx().map(|(acct, room_id)| acct.pins(room_id)),
             "joinrule" => self.cmd_joinrule(args),
             "guests" => self.room_ctx().and_then(|(acct, room_id)| {
                 acct.set_guest_access(room_id, on_off(args, "usage: /guests <on|off>")?);
@@ -4414,7 +4441,11 @@ impl App {
         if !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
             return Err("alias names are letters, digits, - and _".into());
         }
-        if COMMANDS.iter().any(|c| c.name == name) || ALIASES.iter().any(|(a, _)| *a == name) {
+        let builtin = COMMANDS.iter().any(|c| c.name == name)
+            || ALIASES.iter().any(|(a, _)| *a == name)
+            || ["wc", "wl"].contains(&name.as_str())
+            || EGGS.contains(&name.as_str());
+        if builtin {
             return Err(format!("/{name} is a built-in command"));
         }
         let expansion = expansion.trim().to_owned();
@@ -5326,7 +5357,7 @@ impl App {
                 }
                 acct.delete_device(self.here(), id.into(), confirm.trim() == "confirm");
             }
-            _ => return Err("usage: /devices [rename <id> <name> | delete <id>]".into()),
+            _ => return Err("usage: /devices [rename <id> <name> | delete <id> [confirm]]".into()),
         }
         Ok(())
     }
@@ -5366,18 +5397,105 @@ impl App {
     }
 
     fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
-        let all = || ThemeName::ALL.map(|(n, _)| n).join(", ");
-        let name = match args.trim() {
+        let args = args.trim();
+        let (sub, rest) = args.split_once(' ').map_or((args, ""), |(a, b)| (a, b.trim()));
+        match sub {
             "" => {
-                let custom = if self.cfg.colors.is_empty() { "" } else { ", with your [colors] changes" };
-                self.info(format!("theme: {}{custom}. There's {}", self.cfg.theme.name(), all()));
+                self.list_themes();
                 return Ok(());
             }
-            other => ThemeName::parse(other).ok_or_else(|| format!("no theme {other}; there's {}", all()))?,
-        };
-        self.cfg.palette = Theme::build(name, &self.cfg.colors).map_err(|e| format!("{e:#}"))?;
-        self.cfg.theme = name;
+            "save" => return self.save_theme(rest),
+            "import" => return self.import_theme(rest),
+            _ => {}
+        }
+        let id = ThemeId::parse(args).map_err(|e| format!("{e:#}"))?;
+        self.cfg.palette =
+            Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()).map_err(|e| format!("{e:#}"))?;
+        self.cfg.theme = id;
         self.redraw_all = true;
+        Ok(())
+    }
+
+    fn list_themes(&mut self) {
+        let custom = if self.cfg.colors.is_empty() { "" } else { ", with your [colors] changes" };
+        self.info(format!("theme: {}{custom}", self.cfg.theme));
+        let mut shelves: Vec<(&str, Vec<&str>)> = Vec::new();
+        for (name, theme) in ThemeName::ALL {
+            match shelves.last_mut() {
+                Some((group, names)) if *group == theme.group() => names.push(name),
+                _ => shelves.push((theme.group(), vec![name])),
+            }
+        }
+        for (group, names) in shelves {
+            self.info(format!("  {group}: {}", names.join(", ")));
+        }
+        let dir = self.paths.themes_dir();
+        let yours = crate::theme::files(&dir);
+        if !yours.is_empty() {
+            self.info(format!("  yours, in {}:", dir.display()));
+        }
+        for name in yours {
+            let about = match ThemeFile::read(&ThemeFile::path(&dir, &name)) {
+                Ok(file) => file.description.map(|d| format!(": {d}")).unwrap_or_default(),
+                Err(e) => format!(" (can't be used: {})", e.root_cause()),
+            };
+            self.info(format!("    {name}{about}"));
+        }
+        self.info(
+            "/theme <name> tries one (theme = \"<name>\" in config.toml keeps it); /theme save <name> writes \
+             this look to a theme file to share, /theme import <file> adds one",
+        );
+    }
+
+    /// `/theme save <name>`: the theme in use, with your `[colors]`, as a
+    /// theme file.
+    fn save_theme(&mut self, name: &str) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("usage: /theme save <name>".into());
+        }
+        if !matches!(ThemeId::parse(name).map_err(|e| format!("{e:#}"))?, ThemeId::File(_)) {
+            return Err(format!("{name} is a built-in theme; pick another name"));
+        }
+        let dir = self.paths.themes_dir();
+        let path = ThemeFile::path(&dir, name);
+        if path.exists() && self.cfg.theme != ThemeId::File(name.to_owned()) {
+            return Err(format!("there's already a theme {name} ({}); pick another name", path.display()));
+        }
+        let mut file = ThemeFile::of(&self.cfg.theme, &self.cfg.colors, &dir).map_err(|e| format!("{e:#}"))?;
+        file.name = Some(name.to_owned());
+        let text = file.to_toml(name).map_err(|e| format!("{e:#}"))?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(&tmp, text))
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|e| format!("writing {}: {e}", path.display()))?;
+        self.info(format!("saved this look as {}: /theme {name} uses it, and the file shares it", path.display()));
+        Ok(())
+    }
+
+    /// `/theme import <file>`: a theme file someone sent you, checked and
+    /// copied into the themes folder.
+    fn import_theme(&mut self, arg: &str) -> Result<(), String> {
+        if arg.is_empty() {
+            return Err("usage: /theme import <file>".into());
+        }
+        let from = parse_path(arg);
+        let file = ThemeFile::read(&from).map_err(|e| format!("{e:#}"))?;
+        let stem = from.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let name = file.name.as_deref().unwrap_or(stem);
+        match ThemeId::parse(name).map_err(|e| format!("{e:#}"))? {
+            ThemeId::File(_) if !matches!(name, "save" | "import") => {}
+            _ => return Err(format!("{name} is a built-in theme's name; change the file's name = line")),
+        }
+        let dir = self.paths.themes_dir();
+        let to = ThemeFile::path(&dir, name);
+        if to.exists() {
+            return Err(format!("there's already a theme {name} ({})", to.display()));
+        }
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::copy(&from, &to))
+            .map_err(|e| format!("copying it to {}: {e}", to.display()))?;
+        self.info(format!("added theme {name}: /theme {name} tries it"));
         Ok(())
     }
 
@@ -5771,7 +5889,7 @@ impl App {
         let side = self.split.as_ref()?.side_by_side;
         // Framed panes meet at two frame lines; plain ones at the line on
         // the right-hand pane's edge, or the upper pane's title bar.
-        let framed = self.cfg.palette.outlines.is_some();
+        let framed = self.cfg.palette.outlines.framed();
         self.hits.splits.windows(2).position(|pair| {
             let (a, b) = (pair[0].0, pair[1].0);
             if side {
@@ -5942,7 +6060,7 @@ impl App {
         let parsed = parse(value);
         let mut table = current;
         table.insert(key.to_owned(), parsed.clone());
-        let cfg = Config::from_table(table).map_err(|e| format!("{key}: {e:#}"))?;
+        let cfg = Config::from_table(table, &self.paths.themes_dir()).map_err(|e| format!("{key}: {e:#}"))?;
         self.apply_config(cfg);
         self.info(format!("{key} = {parsed} for this session; /save keeps it"));
         Ok(())
@@ -6436,6 +6554,9 @@ where
 }
 
 #[cfg(test)]
+mod shots;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -6643,6 +6764,37 @@ mod tests {
     }
 
     #[test]
+    fn themes_are_saved_and_imported() {
+        let dir = std::env::temp_dir().join(format!("textrix-theme-cmd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = test_app();
+        app.paths.base = dir.clone();
+        app.cmd_theme("dracula").unwrap();
+        app.cfg.colors.insert("link".into(), "red".into());
+        app.cmd_theme("save vampire").unwrap();
+        let saved = std::fs::read_to_string(dir.join("themes/vampire.toml")).unwrap();
+        assert!(saved.contains("base = \"dracula\"") && saved.contains("link = \"red\""), "{saved}");
+        assert!(app.cmd_theme("save nord").is_err(), "not under a built-in name");
+        app.cmd_theme("vampire").unwrap();
+        assert_eq!(app.cfg.theme, ThemeId::File("vampire".into()));
+        app.cmd_theme("save vampire").unwrap();
+        app.cmd_theme("default").unwrap();
+        assert!(app.cmd_theme("save vampire").is_err(), "not over another theme");
+
+        // Sent to a friend, who imports it by its name = line.
+        let sent = dir.join("sent.toml");
+        std::fs::write(&sent, saved.replace("name = \"vampire\"", "name = \"bat\"")).unwrap();
+        app.cmd_theme(&format!("import {}", sent.display())).unwrap();
+        app.cmd_theme("bat").unwrap();
+        assert!(app.cmd_theme(&format!("import {}", sent.display())).is_err(), "already there");
+        std::fs::write(&sent, "base = \"plaid\"").unwrap();
+        assert!(app.cmd_theme(&format!("import {}", sent.display())).unwrap_err().contains("plaid"));
+        assert!(app.cmd_theme("nosuch").is_err());
+        assert!(app.cmd_theme("../../etc/passwd").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn panes_resize_by_command_and_by_dragging() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut app = test_app();
@@ -6841,9 +6993,12 @@ mod tests {
         assert!(saved.starts_with("# my settings\nbell = false\n"), "the rest of the file is kept: {saved}");
         assert!(saved.contains("[aliases]") && saved.contains("tt = \"/theme mono\""), "{saved}");
         assert!(app.cmd_alias("join /say no").is_err(), "built-ins can't be replaced");
+        for taken in ["read /say no", "fwd /say no", "wc /say no", "shrug /say no"] {
+            assert!(app.cmd_alias(taken).is_err(), "{taken}: other names for built-ins neither");
+        }
 
         app.command("tt");
-        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Mono, "the alias ran");
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Mono.into(), "the alias ran");
         app.cfg.aliases.insert("loop".into(), "/loop".into());
         app.command("loop");
         assert!(app.windows[0].lines.iter().any(|l| l.body.contains("too deeply")));
@@ -7220,12 +7375,12 @@ mod tests {
         for code in eggs::KONAMI {
             app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
-        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Green);
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Green.into());
         assert!(app.input.is_empty(), "the b doesn't stay in the input line");
         for code in eggs::KONAMI {
             app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
-        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Default, "again turns it off");
+        assert_eq!(app.cfg.theme, crate::theme::ThemeName::Default.into(), "again turns it off");
 
         app.command("8ball will it ship");
         assert!(app.windows[0].lines.back().unwrap().body.contains("The 8-ball says:"));

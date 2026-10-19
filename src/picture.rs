@@ -213,7 +213,7 @@ fn distance(p: &[u8; 4], c: [u8; 3]) -> u32 {
 
 /// The nearest colour in the xterm 256-colour palette (its colour cube or
 /// grey ramp).
-fn xterm256(r: u8, g: u8, b: u8) -> u8 {
+pub(crate) fn xterm256(r: u8, g: u8, b: u8) -> u8 {
     const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
     let nearest = |v: u8| (0..6).min_by_key(|&i| (i32::from(LEVELS[i]) - i32::from(v)).abs()).unwrap_or(0);
     let (ri, gi, bi) = (nearest(r), nearest(g), nearest(b));
