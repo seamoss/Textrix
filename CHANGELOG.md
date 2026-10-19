@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.3] - 2026-10-19
+
+### Changed
+- Nicks sit in a column, irssi-style: `<sam>`, then spaces up to a bar, so
+  every message starts in the same place and its wrapped lines (code
+  blocks, pictures and link titles too) stay on their side of the bar.
+  Nicks longer than 12 characters are cut short; `nick_column` sets the
+  width, and 0 puts nicks inline as before. Joins show `-->` in the
+  column, leaves `<--`. Panes too narrow for the column keep nicks inline.
+- Textrix's own lines in a room (replies to your commands, errors,
+  netsplits) are set apart from the conversation: a blank row before and
+  after each run of them, in the theme's quiet colour and italic (errors
+  keep their colour). Joins, leaves and topic changes happened in the
+  room, so they stay as they were.
+
 ## [0.9.2] - 2026-10-19
 
 ### Changed

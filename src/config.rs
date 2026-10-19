@@ -107,6 +107,10 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 pub struct Config {
     /// strftime format for the timestamp column.
     pub timestamp_format: String,
+    /// Nicks in a column this many characters wide (longer ones are cut
+    /// short), so every message starts in line; 0 puts them inline,
+    /// `<nick> text`.
+    pub nick_column: usize,
     /// Show joins, parts, and nick changes.
     pub show_joins: bool,
     /// Page titles under links, fetched by your homeserver: "unencrypted"
@@ -216,6 +220,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             timestamp_format: "%H:%M".into(),
+            nick_column: 12,
             show_joins: true,
             link_titles: LinkTitles::Unencrypted,
             hyperlinks: true,

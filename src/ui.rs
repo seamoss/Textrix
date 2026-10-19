@@ -27,7 +27,7 @@ use crate::{
     model::{Activity, Fold, Line, LineKind, PresenceKind},
     richtext::Marks,
     switcher,
-    theme::Theme,
+    theme::{Outlines, Theme},
     viewer,
 };
 
@@ -758,8 +758,14 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let (titles, title_requests) = (&mut app.link_titles, &mut app.link_title_requests);
     let cfg = &app.cfg;
     let win = &mut app.windows[idx];
-    // Images sit under their message, lined up with the message text.
-    let image_x = display_len(&Local::now().format(&cfg.timestamp_format).to_string()) as u16 + 1;
+    // Images and link titles sit under their message, where its text
+    // starts (past the nick column's bar, when there is one).
+    let under = gutter(cfg, width);
+    let image_x = under.0 as u16;
+    // Textrix's own lines in a room, set apart from the conversation: a
+    // blank row before and after each run of them, and quieter.
+    let set_apart = win.room.is_some();
+    let own = |line: &Line| matches!(line.kind, LineKind::Info | LineKind::Error);
     // A server preview of a link in an encrypted room would show it the link.
     let titles_here = match cfg.link_titles {
         LinkTitles::Off => false,
@@ -788,10 +794,22 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     // mouse clicks.
     let mut row_events: Vec<(Option<OwnedEventId>, bool)> = Vec::new();
     let mut found_selected = selected.is_none();
+    // Whether the last row added was a divider.
+    let mut divided = false;
     let mut i = visible.len();
     while i > 0 && (rows.len() < need || !found_selected) {
         i -= 1;
         let line: &Line = &visible[i];
+        // Where Textrix's own lines meet the conversation (and there's no
+        // divider there already), a blank row.
+        if set_apart
+            && visible.get(i + 1).is_some_and(|next| own(next) != own(line))
+            && rows.last().is_none_or(|row| row.width() > 0 && !divided)
+        {
+            rows.push(TLine::default());
+            row_events.push((None, false));
+        }
+        divided = false;
         let read: Vec<&str> = line
             .event_id
             .as_ref()
@@ -812,7 +830,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                 Some(Preview::Ready(protocol)) => {
                     let height = protocol.size().height;
                     placements.push((id.clone(), rows.len(), height));
-                    rows.extend((0..height).map(|_| TLine::default()));
+                    rows.extend((0..height).map(|_| TLine::from(under.1.clone())));
                     row_events.extend((0..height).map(|_| (Some(id.clone()), true)));
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
@@ -832,7 +850,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         {
             match titles.get(url) {
                 Some(LinkTitle::Ready(title)) => {
-                    rows.push(link_title_row(&cfg.palette, title, width, image_x as usize));
+                    rows.push(link_title_row(&cfg.palette, title, width, &under));
                     row_events.push((line.event_id.clone(), false));
                 }
                 Some(_) => {}
@@ -847,6 +865,16 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         let below = rows.len();
         let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
         let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
+        if set_apart && line.kind == LineKind::Info {
+            let quiet = cfg.palette.dim.add_modifier(Modifier::ITALIC);
+            for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
+                span.style = span.style.patch(quiet);
+            }
+        } else if set_apart && line.kind == LineKind::Error {
+            for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
+                span.style = span.style.add_modifier(Modifier::ITALIC);
+            }
+        }
         if is_selected {
             for row in &mut rendered {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
@@ -868,6 +896,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(&cfg.palette, line.ts));
             row_events.push((None, false));
+            divided = true;
         }
         if i > 0
             && visible[i - 1].event_id.is_some()
@@ -876,6 +905,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         {
             rows.push(new_messages(&cfg.palette, width));
             row_events.push((None, false));
+            divided = true;
         }
     }
     let exhausted = i == 0;
@@ -999,6 +1029,12 @@ fn fold_summary(run: &[&Line]) -> Line {
     let last = run[run.len() - 1];
     let mut line = Line::new(LineKind::Membership, parts.join(" · "));
     (line.ts, line.event_id) = (last.ts, last.event_id.clone());
+    // Only joins, or only leaves, get their arrow in the nick column.
+    line.fold = match (joined.is_empty(), left.is_empty(), renamed.is_empty()) {
+        (false, true, true) => Some(Fold::Joined(String::new())),
+        (true, false, true) => Some(Fold::Left(String::new())),
+        _ => None,
+    };
     line
 }
 
@@ -1012,8 +1048,14 @@ fn name_list(names: &[&str]) -> String {
     }
 }
 
-/// "↳ Page title — Site", dim, cut to fit.
-fn link_title_row(t: &Theme, title: &str, width: usize, indent: usize) -> TLine<'static> {
+/// "↳ Page title — Site", dim, cut to fit, after `gutter` (as wide as
+/// `indent`).
+fn link_title_row(
+    t: &Theme,
+    title: &str,
+    width: usize,
+    (indent, gutter): &(usize, Vec<Span<'static>>),
+) -> TLine<'static> {
     let avail = width.saturating_sub(indent + 3);
     let mut shown = String::new();
     let mut used = 0;
@@ -1026,10 +1068,59 @@ fn link_title_row(t: &Theme, title: &str, width: usize, indent: usize) -> TLine<
         used += w;
         shown.push(c);
     }
-    TLine::from(vec![
-        Span::raw(" ".repeat(indent)),
-        Span::styled(format!("↳ {shown}"), t.dim.add_modifier(Modifier::ITALIC)),
-    ])
+    let mut spans = gutter.clone();
+    spans.push(Span::styled(format!("↳ {shown}"), t.dim.add_modifier(Modifier::ITALIC)));
+    TLine::from(spans)
+}
+
+/// How many characters of nick the nick column holds at this width (none
+/// when it's off, or the pane is too narrow for it).
+fn nick_column(cfg: &Config, width: usize) -> Option<usize> {
+    let n = cfg.nick_column;
+    let stamp = display_len(&Local::now().format(&cfg.timestamp_format).to_string());
+    (n > 0 && width >= stamp + n + 6 + 20).then_some(n)
+}
+
+/// The nick column's separator.
+fn column_bar(t: &Theme) -> &'static str {
+    if t.outlines == Outlines::Ascii { "|" } else { "│" }
+}
+
+/// What starts the rows under a message's first: blank to where the text
+/// starts, with the nick column's bar when there is one. Also how wide it
+/// is, which is where pictures and link titles go.
+pub fn gutter(cfg: &Config, width: usize) -> (usize, Vec<Span<'static>>) {
+    let stamp = display_len(&Local::now().format(&cfg.timestamp_format).to_string());
+    match nick_column(cfg, width) {
+        Some(n) => {
+            let pad = stamp + 1 + n + 3;
+            let spans = vec![
+                Span::raw(" ".repeat(pad)),
+                Span::styled(format!("{} ", column_bar(&cfg.palette)), cfg.palette.border),
+            ];
+            (pad + 2, spans)
+        }
+        None => (stamp + 1, vec![Span::raw(" ".repeat(stamp + 1))]),
+    }
+}
+
+/// `name`, cut to `max` columns with "…" if it's longer.
+fn cut(name: &str, max: usize) -> String {
+    if display_len(name) <= max {
+        return name.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in name.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out.push('…');
+    out
 }
 
 fn new_messages(t: &Theme, width: usize) -> TLine<'static> {
@@ -1103,24 +1194,52 @@ fn render_line_with(
         body_style = t.dim;
     }
 
-    match line.kind {
-        LineKind::Message | LineKind::Utd => {
-            push(&mut cells, "<", t.dim);
-            push(&mut cells, &nick, nick_style);
-            push(&mut cells, "> ", t.dim);
+    let column = nick_column(cfg, width);
+    if let Some(n) = column {
+        // <nick>, * nick, -nick-, -->, -!-… then spaces to the bar.
+        let short = cut(&nick, n);
+        let parts: Vec<(&str, Style)> = match line.kind {
+            LineKind::Message | LineKind::Utd => vec![("<", t.dim), (&short, nick_style), (">", t.dim)],
+            LineKind::Emote => vec![("* ", t.accent), (&short, nick_style)],
+            LineKind::Notice => vec![("-", t.dim), (&short, nick_style), ("-", t.dim)],
+            LineKind::Error => vec![("-!-", t.error.add_modifier(Modifier::BOLD))],
+            LineKind::Membership => match line.fold {
+                Some(Fold::Joined(_)) => vec![("-->", t.accent)],
+                Some(Fold::Left(_)) => vec![("<--", t.dim)],
+                _ => vec![("-!-", t.accent)],
+            },
+            LineKind::Event | LineKind::Info => vec![("-!-", t.accent)],
+        };
+        let used: usize = parts.iter().map(|(s, _)| display_len(s)).sum();
+        for (text, style) in parts {
+            push(&mut cells, text, style);
         }
-        LineKind::Emote => {
-            push(&mut cells, " * ", t.accent);
+        push(&mut cells, &" ".repeat((n + 2).saturating_sub(used) + 1), Style::new());
+        push(&mut cells, &format!("{} ", column_bar(t)), t.border);
+        if line.kind == LineKind::Emote {
             push(&mut cells, &nick, nick_style);
             push(&mut cells, " ", Style::new());
         }
-        LineKind::Notice => {
-            push(&mut cells, "-", t.dim);
-            push(&mut cells, &nick, nick_style);
-            push(&mut cells, "- ", t.dim);
+    } else {
+        match line.kind {
+            LineKind::Message | LineKind::Utd => {
+                push(&mut cells, "<", t.dim);
+                push(&mut cells, &nick, nick_style);
+                push(&mut cells, "> ", t.dim);
+            }
+            LineKind::Emote => {
+                push(&mut cells, " * ", t.accent);
+                push(&mut cells, &nick, nick_style);
+                push(&mut cells, " ", Style::new());
+            }
+            LineKind::Notice => {
+                push(&mut cells, "-", t.dim);
+                push(&mut cells, &nick, nick_style);
+                push(&mut cells, "- ", t.dim);
+            }
+            LineKind::Error => push(&mut cells, "-!- ", t.error.add_modifier(Modifier::BOLD)),
+            LineKind::Membership | LineKind::Event | LineKind::Info => push(&mut cells, "-!- ", t.accent),
         }
-        LineKind::Error => push(&mut cells, "-!- ", t.error.add_modifier(Modifier::BOLD)),
-        LineKind::Membership | LineKind::Event | LineKind::Info => push(&mut cells, "-!- ", t.accent),
     }
     // Inside its own thread window a thread message needs no "in thread"
     // context; only explicit replies to a later message say what they answer.
@@ -1141,8 +1260,14 @@ fn render_line_with(
         push(&mut cells, &to, t.dim);
     }
 
-    let prefix_width: usize = cells.iter().map(|(c, _)| display_width(*c)).sum();
-    let indent = if prefix_width > width / 2 { 4.min(width.saturating_sub(1)) } else { prefix_width };
+    let gutter = if column.is_some() {
+        gutter(cfg, width).1
+    } else {
+        // Wrapped text lines up after the nick, unless that's half the row.
+        let prefix_width: usize = cells.iter().map(|(c, _)| display_width(*c)).sum();
+        let indent = if prefix_width > width / 2 { 4.min(width.saturating_sub(1)) } else { prefix_width };
+        vec![Span::raw(" ".repeat(indent))]
+    };
 
     match &line.rich {
         Some(spans) if !line.redacted => {
@@ -1190,7 +1315,7 @@ fn render_line_with(
         push(&mut cells, &text, t.receipts);
     }
 
-    wrap(&cells, width, indent)
+    wrap(&cells, width, &gutter)
 }
 
 fn rich_style(t: &Theme, base: Style, marks: Marks, highlight: bool) -> Style {
@@ -1243,8 +1368,11 @@ fn sanitize(c: char) -> Option<char> {
     }
 }
 
-fn wrap(cells: &[(char, Style)], width: usize, indent: usize) -> Vec<TLine<'static>> {
+/// `cells` in rows of `width`, broken at spaces where it can be; the rows
+/// after the first start with `gutter`.
+fn wrap(cells: &[(char, Style)], width: usize, gutter: &[Span<'static>]) -> Vec<TLine<'static>> {
     let width = width.max(1);
+    let indent: usize = gutter.iter().map(|s| display_len(&s.content)).sum();
     let mut rows = Vec::new();
     let mut i = 0;
     let mut first = true;
@@ -1278,7 +1406,7 @@ fn wrap(cells: &[(char, Style)], width: usize, indent: usize) -> Vec<TLine<'stat
 
         let mut spans = Vec::new();
         if !first && indent > 0 {
-            spans.push(Span::raw(" ".repeat(indent)));
+            spans.extend(gutter.iter().cloned());
         }
         let mut k = i;
         while k < end {
@@ -1487,6 +1615,41 @@ mod tests {
     }
 
     #[test]
+    fn nicks_line_up_in_a_column() {
+        let cfg = Config::default();
+        let said = |nick: &str, body: &str| {
+            let mut line = Line::new(LineKind::Message, body);
+            line.nick = nick.into();
+            line
+        };
+        let mut join = Line::new(LineKind::Membership, "bbartek joined");
+        join.fold = Some(Fold::Joined("bbartek".into()));
+        let mut emote = Line::new(LineKind::Emote, "slaps jo around a bit");
+        emote.nick = "sam".into();
+        let lines = [
+            said("nesbitt", "can anyone tell me how to get my resolv.conf file to have the right servers in it"),
+            said("a_very_long_nickname", "hi"),
+            join,
+            emote,
+            Line::info("theme: dracula"),
+        ];
+        let rows: Vec<String> = lines.iter().flat_map(|l| text(&render_line(l, 60, &cfg))).collect();
+        let bar = |row: &String| row.chars().position(|c| c == '│');
+        assert!(rows.iter().all(|r| bar(r) == Some(21)), "every row's bar in line: {rows:#?}");
+        assert!(rows[0].ends_with("<nesbitt>      │ can anyone tell me how to get my"), "{}", rows[0]);
+        assert!(rows[1].trim_start().starts_with('│'), "wrapped text keeps to its side of the bar");
+        assert!(rows.iter().any(|r| r.contains("<a_very_long…> │ hi")), "long nicks are cut short");
+        assert!(rows.iter().any(|r| r.contains("-->            │ bbartek joined")));
+        assert!(rows.iter().any(|r| r.contains("* sam          │ sam slaps jo")));
+        assert!(rows.iter().any(|r| r.contains("-!-            │ theme: dracula")));
+
+        // Narrow panes, and nick_column = 0, keep nicks inline.
+        assert!(text(&render_line(&lines[1], 40, &cfg))[0].contains("<a_very_long_nickname> hi"));
+        let inline = Config { nick_column: 0, ..Config::default() };
+        assert!(text(&render_line(&lines[0], 60, &inline))[0].contains("<nesbitt> can"));
+    }
+
+    #[test]
     fn code_takes_the_themes_syntax_colours() {
         use crate::{highlight::Syntax, richtext::Marks};
         let t = Theme::default();
@@ -1499,13 +1662,13 @@ mod tests {
     #[test]
     fn wraps_at_spaces_with_hanging_indent() {
         let cells: Vec<(char, Style)> = "ab: one two three".chars().map(|c| (c, Style::new())).collect();
-        assert_eq!(text(&wrap(&cells, 10, 4)), vec!["ab: one", "    two", "    three"]);
+        assert_eq!(text(&wrap(&cells, 10, &[Span::raw("    ")])), vec!["ab: one", "    two", "    three"]);
     }
 
     #[test]
     fn newline_forces_break_and_long_words_split() {
         let cells: Vec<(char, Style)> = "x\nabcdefgh".chars().map(|c| (c, Style::new())).collect();
-        assert_eq!(text(&wrap(&cells, 4, 1)), vec!["x", " abc", " def", " gh"]);
+        assert_eq!(text(&wrap(&cells, 4, &[Span::raw(" ")])), vec!["x", " abc", " def", " gh"]);
     }
 
     #[test]

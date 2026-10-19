@@ -210,6 +210,7 @@ fn night_owls(theme: ThemeName, picture: bool) -> Scene {
         lines.push(image);
     }
     s.post("Night Owls", lines);
+    s.app.info("jo_bloggs is away: making tea");
 
     let spoilers = s.line(19, "bob", "chapter 3 spoilers incoming");
     s.post("Book Club", vec![spoilers]);

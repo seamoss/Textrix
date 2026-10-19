@@ -6934,6 +6934,50 @@ mod tests {
     }
 
     #[test]
+    fn textrix_lines_stand_apart_in_rooms() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let say = |app: &mut App, id: &str, body: &str| {
+            let items = vec![Item::Line(msg(id, body))];
+            app.on_event(AppEvent::Timeline {
+                account: "t".into(),
+                room_id: room.clone(),
+                items,
+                live: true,
+                limited: false,
+            });
+        };
+        say(&mut app, "$1", "before");
+        app.info("theme: dracula");
+        app.error("that went wrong");
+        say(&mut app, "$2", "after");
+        app.show_sidebar = false;
+        app.show_nicklist = false;
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> =
+            (0..buf.area.height).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect();
+        let at = |text: &str| rows.iter().position(|r| r.contains(text)).unwrap_or_else(|| panic!("{text}: {rows:#?}"));
+        let (before, theme, wrong, after) = (at("before"), at("theme: dracula"), at("that went wrong"), at("after"));
+        assert_eq!([theme - before, wrong - theme, after - wrong], [2, 1, 2], "a blank row either side of the run");
+        assert!(rows[before + 1].trim().is_empty() && rows[wrong + 1].trim().is_empty());
+        let x = rows[theme].find("theme").unwrap() as u16;
+        let cell = &buf[(x, theme as u16)];
+        assert!(
+            cell.modifier.contains(ratatui::style::Modifier::ITALIC) && cell.fg == app.cfg.palette.dim.fg.unwrap(),
+            "quieter"
+        );
+        assert!(
+            buf[(rows[wrong].find("that").unwrap() as u16, wrong as u16)]
+                .modifier
+                .contains(ratatui::style::Modifier::ITALIC)
+        );
+    }
+
+    #[test]
     fn the_theme_picker_shows_each_theme_as_you_move() {
         use crate::theme::ThemeName;
         let dir = std::env::temp_dir().join(format!("textrix-picker-{}", std::process::id()));

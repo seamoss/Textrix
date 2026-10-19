@@ -225,6 +225,19 @@ moderator rights; Textrix checks before asking you to confirm.
 When several servers are connected, prefix a command with `-<server>` while in
 the status window (e.g. `/join -work #ops:work.example`).
 
+### The nick column
+
+Nicks sit in a column: `<sam>`, then spaces up to a bar, so every message
+starts in the same place and its wrapped lines stay on their side of the
+bar. Nicks longer than 12 characters are cut short (`nick_column` sets how
+many; 0 puts nicks inline, `<sam> hi`), and panes too narrow for the
+column keep them inline. Joins show `-->` there, leaves `<--`, and
+Textrix's own lines `-!-`.
+
+Those own lines (replies to your commands, errors, netsplits) are set
+apart in a room: a blank row before and after each run of them, in the
+theme's quiet colour and italic, so they don't read as the conversation.
+
 ### Joins and leaves
 
 Runs of two or more joins, leaves and name changes (on the same day) show
@@ -504,6 +517,7 @@ applies it (and picks up servers added to or removed from the dotfile):
 
 ```toml
 timestamp_format = "%H:%M"
+nick_column = 12           # nicks in a column this wide (0: inline)
 show_joins = true
 link_titles = "unencrypted" # page titles under links: "all", "off"
 hyperlinks = true          # links as real hyperlinks (OSC 8)
