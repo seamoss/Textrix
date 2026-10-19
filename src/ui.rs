@@ -19,8 +19,6 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use ratatui_image::Image;
-
 use crate::{
     app::{App, ConnStatus, HelpRow, LinkTitle, Preview, help_rows},
     config::{Config, LinkTitles},
@@ -126,7 +124,7 @@ fn draw_viewer(f: &mut Frame, app: &mut App) {
             let size = protocol.size();
             let x = body.x + body.width.saturating_sub(size.width) / 2;
             let y = body.y + body.height.saturating_sub(size.height) / 2;
-            f.render_widget(Image::new(protocol), Rect { x, y, width: size.width, height: size.height });
+            f.render_widget(protocol, Rect { x, y, width: size.width, height: size.height });
         }
         _ => f.render_widget(Paragraph::new(Span::styled("  loading the full image…", t.dim)), body),
     }
@@ -384,7 +382,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
         hits.push((Rect { y: body.y + row as u16, height: 1, ..body }, *i));
         if let Some(Preview::Ready(protocol)) = avatar_of(app, *i) {
             let rect = Rect { x: body.x + 3, y: body.y + row as u16, width: 2, height: 1 };
-            f.render_widget(Image::new(protocol), rect);
+            f.render_widget(protocol, rect);
         }
     }
     hits
@@ -816,7 +814,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             continue;
         }
         let rect = Rect { x, y: area.y + (top - start) as u16, width: size.width, height: size.height };
-        f.render_widget(Image::new(protocol), rect);
+        f.render_widget(protocol, rect);
     }
     app.hits.panes.push(hits);
 }

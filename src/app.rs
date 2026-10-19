@@ -27,10 +27,7 @@ use ratatui::{
     backend::Backend,
     layout::{Position, Size},
 };
-use ratatui_image::{
-    picker::{Picker, ProtocolType},
-    protocol::Protocol,
-};
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -49,6 +46,7 @@ use crate::{
         RoomMeta, SpaceInfo, ago,
     },
     notify,
+    picture::{Painter, Picture},
     script::{self, Scripts},
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
@@ -564,7 +562,7 @@ pub enum LinkTitle {
 
 pub enum Preview {
     Loading,
-    Ready(Protocol),
+    Ready(Picture),
     Failed,
 }
 
@@ -734,7 +732,8 @@ pub struct App {
     /// Where the last frame drew things, for the mouse.
     pub hits: ui::Hits,
     /// Terminal graphics support, probed at startup; `None` disables previews.
-    pub picker: Option<Picker>,
+    /// How pictures are drawn here (`None`: they aren't).
+    pub picker: Option<Painter>,
     pub previews: HashMap<OwnedEventId, Preview>,
     preview_order: VecDeque<OwnedEventId>,
     /// Images the renderer wants, fetched after the draw.
@@ -1584,7 +1583,8 @@ impl App {
             }
             AppEvent::Attached { picker } => {
                 // Images are drawn afresh for this terminal.
-                self.picker = picker.filter(|_| self.cfg.image_previews);
+                self.picker = picker.filter(|_| self.cfg.image_previews).map(|p| Painter::new(p, self.cfg.image_text));
+                self.note_images();
                 self.previews.clear();
                 self.avatars.clear();
                 self.viewer = None;
@@ -2507,7 +2507,7 @@ impl App {
     /// Whether window-list avatars can be real images (a 2-cell picture in
     /// half-blocks would be noise, so those terminals get initials).
     pub fn avatar_images(&self) -> bool {
-        self.cfg.sidebar_avatars && self.picker.as_ref().is_some_and(|p| p.protocol_type() != ProtocolType::Halfblocks)
+        self.cfg.sidebar_avatars && self.picker.as_ref().is_some_and(Painter::graphics)
     }
 
     /// Fetch avatars for rooms in the window list that don't have one yet
@@ -2533,6 +2533,21 @@ impl App {
 
     /// Called after every draw: lazy history, member lists, read markers,
     /// image previews, avatars.
+    /// Say how pictures are drawn in this terminal.
+    pub fn note_images(&mut self) {
+        let Some(painter) = &self.picker else { return };
+        let note = if painter.graphics() {
+            format!("images: {}", painter.describe())
+        } else {
+            format!(
+                "images: {}, as this terminal can't show pictures (kitty, Ghostty, WezTerm and iTerm2 can); \
+                 image_text in /set changes how",
+                painter.describe()
+            )
+        };
+        self.status(Line::info(note));
+    }
+
     /// Whether to notify: as the terminal allows, or, in the background
     /// with no terminal attached, through the system (unless notifications
     /// are off altogether).
@@ -5425,6 +5440,13 @@ impl App {
         (self.bell_mode, self.bell_style) = (cfg.bell, cfg.bell_style);
         if cfg.mouse != self.cfg.mouse {
             set_mouse_capture(cfg.mouse);
+        }
+        if cfg.image_text != self.cfg.image_text
+            && let Some(painter) = self.picker.as_mut()
+        {
+            *painter = Painter::new(painter.picker.clone(), cfg.image_text);
+            self.previews.clear();
+            self.viewer = None;
         }
         if cfg.theme != self.cfg.theme || cfg.colors != self.cfg.colors {
             self.redraw_all = true;

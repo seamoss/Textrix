@@ -251,9 +251,13 @@ person's) as a tiny image in terminals with graphics, and a coloured initial
 tile elsewhere.
 
 Images show inline under their message. Textrix asks the terminal what it
-supports at startup: kitty graphics (kitty, Ghostty, WezTerm), iTerm2 inline
-images, or sixel, falling back to coloured half-block characters elsewhere
-(e.g. Terminal.app). Encrypted images use the sender's thumbnail when there
+supports at startup, and says in the status window: kitty graphics (kitty,
+Ghostty, WezTerm), iTerm2 inline images, or sixel. Elsewhere (Terminal.app,
+VS Code, Claude's desktop app) pictures are drawn in text, each character
+split into blocks in two colours: sextants (2×3) where the terminal draws
+them itself, quadrants (2×2, in every font) otherwise; `image_text` picks
+`"sextants"`, `"quadrants"` or `"halfblocks"` instead. Images are always
+scaled down smoothly. Encrypted images use the sender's thumbnail when there
 is one; otherwise the image itself is fetched (up to 20 MB) and decoded with
 size and memory limits. Inside tmux, graphics need
 `set -g allow-passthrough on`. `s` in selection mode or `/download` saves the
@@ -420,6 +424,7 @@ log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
+image_text = "auto"        # without graphics: "sextants", "quadrants" or "halfblocks"
 audio_player = ""          # e.g. "mpv --no-video"; "" uses the system's player
 video_player = ""          # e.g. "mpv" or "open -a IINA"; "" uses mpv, else the system's app
 sidebar = true             # window list (F2)

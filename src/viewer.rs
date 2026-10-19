@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use image::{DynamicImage, imageops::FilterType};
+use crate::picture::{Painter, Picture};
+use image::DynamicImage;
 use matrix_sdk::ruma::OwnedEventId;
 use ratatui::layout::Size;
-use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 
 pub const ZOOM_MAX: u32 = 16;
 
@@ -23,7 +23,7 @@ pub struct Viewer {
     /// Cells the image is drawn into (set while drawing).
     pub area: Size,
     /// The view as last drawn, and the one being prepared.
-    pub frame: Option<(View, Protocol)>,
+    pub frame: Option<(View, Picture)>,
     pub pending: Option<View>,
 }
 
@@ -107,10 +107,9 @@ pub fn crop(width: u32, height: u32, view: &View) -> (u32, u32, u32, u32) {
 
 /// Draw a view for the terminal (slow for big images: run it off the UI
 /// thread).
-pub fn render(image: &DynamicImage, view: &View, picker: &Picker) -> anyhow::Result<Protocol> {
+pub fn render(image: &DynamicImage, view: &View, painter: &Painter) -> anyhow::Result<Picture> {
     let (x, y, w, h) = crop(image.width(), image.height(), view);
-    let part = image.crop_imm(x, y, w, h);
-    picker.new_protocol(part, view.area, Resize::Scale(Some(FilterType::Triangle))).map_err(|e| anyhow::anyhow!("{e}"))
+    painter.scale(image.crop_imm(x, y, w, h), view.area)
 }
 
 #[cfg(test)]
@@ -144,6 +143,10 @@ mod tests {
         assert_eq!(crop(1000, 800, &v.view()), (0, 0, 1000, 800));
     }
 
+    fn halfblocks() -> Painter {
+        Painter::new(ratatui_image::picker::Picker::halfblocks(), crate::picture::TextMode::Halfblocks)
+    }
+
     #[test]
     fn redraws_only_when_the_view_changes() {
         let mut v = viewer();
@@ -153,11 +156,11 @@ mod tests {
         v.pending = Some(view);
         v.zoom_by(1);
         assert!(v.wanted().is_none(), "one at a time: wait for the frame being drawn");
-        let protocol = render(&image, &view, &Picker::halfblocks()).unwrap();
+        let protocol = render(&image, &view, &halfblocks()).unwrap();
         (v.pending, v.frame) = (None, Some((view, protocol)));
         assert_eq!(v.wanted().map(|(_, next)| next.zoom), Some(2), "then catch up with the zoom");
         v.pending = Some(v.view());
-        let protocol = render(&image, &v.view(), &Picker::halfblocks()).unwrap();
+        let protocol = render(&image, &v.view(), &halfblocks()).unwrap();
         (v.pending, v.frame) = (None, Some((v.view(), protocol)));
         assert!(v.wanted().is_none(), "up to date");
     }

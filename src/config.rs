@@ -142,6 +142,9 @@ pub struct Config {
     pub image_previews: bool,
     /// Maximum height of an inline image, in rows.
     pub image_rows: u16,
+    /// How pictures are drawn in a terminal without graphics: "auto",
+    /// "sextants", "quadrants" or "halfblocks".
+    pub image_text: crate::picture::TextMode,
     /// The command that plays audio, the file on the end ("" picks the
     /// system's own: afplay on macOS, pw-play, paplay… on Linux).
     pub audio_player: String,
@@ -224,6 +227,7 @@ impl Default for Config {
             sync: SyncMode::Auto,
             image_previews: true,
             image_rows: 10,
+            image_text: crate::picture::TextMode::Auto,
             audio_player: String::new(),
             video_player: String::new(),
             sidebar: true,

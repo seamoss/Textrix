@@ -21,6 +21,8 @@ pub struct TermInfo {
     pub term_program: String,
     pub kitty: bool,
     pub tmux: bool,
+    /// 24-bit colour (`COLORTERM=truecolor`).
+    pub truecolor: bool,
 }
 
 impl TermInfo {
@@ -30,6 +32,7 @@ impl TermInfo {
             term_program: std::env::var("TERM_PROGRAM").unwrap_or_default(),
             kitty: std::env::var_os("KITTY_WINDOW_ID").is_some(),
             tmux: std::env::var_os("TMUX").is_some(),
+            truecolor: std::env::var("COLORTERM").is_ok_and(|c| c == "truecolor" || c == "24bit"),
         }
     }
 }

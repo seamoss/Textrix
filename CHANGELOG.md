@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.5] - 2026-10-18
+
+### Fixed
+- Pictures are scaled down smoothly: inline previews and room avatars
+  were shrunk by skipping pixels, which made photos (especially your own
+  uploads, sent without a thumbnail) look rough in every terminal.
+
+### Changed
+- In terminals without graphics (Terminal.app, VS Code, Claude's desktop
+  app), pictures are drawn with sextants (2×3 blocks a character) or
+  quadrants (2×2) in two colours, two or three times the detail of the
+  half-blocks before; `image_text` picks. Without 24-bit colour they use
+  the 256-colour palette.
+- The status window says how pictures are drawn in this terminal.
+
 ## [0.6.4] - 2026-10-18
 
 ### Added

@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use crate::picture::{Painter, Picture};
 use anyhow::{Context, Result, bail};
 use eyeball::SharedObservable;
 use futures_util::StreamExt;
@@ -84,7 +85,6 @@ use matrix_sdk::{
     sync::RoomUpdates,
 };
 use ratatui::layout::Size;
-use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use ruma_html::{HtmlSanitizerMode, RemoveReplyFallback};
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
@@ -231,7 +231,7 @@ pub enum AppEvent {
     ViewerFrame {
         event_id: OwnedEventId,
         view: crate::viewer::View,
-        protocol: Result<Protocol, String>,
+        protocol: Result<Picture, String>,
     },
     /// The room's pinned messages, for `/pins`.
     Pins {
@@ -255,12 +255,12 @@ pub enum AppEvent {
         account: AccountName,
         room_id: OwnedRoomId,
         url: OwnedMxcUri,
-        protocol: Option<Protocol>,
+        protocol: Option<Picture>,
     },
     /// An inline image preview, encoded for the terminal (`None` on failure).
     ImagePreview {
         event_id: OwnedEventId,
-        protocol: Option<Protocol>,
+        protocol: Option<Picture>,
     },
     Members {
         account: AccountName,
@@ -1634,7 +1634,7 @@ impl Account {
 
     /// Fetch an image (preferably a thumbnail) and encode it for the
     /// terminal to fit in `cells`.
-    pub fn fetch_preview(&self, event_id: OwnedEventId, media: Media, picker: Picker, cells: Size) {
+    pub fn fetch_preview(&self, event_id: OwnedEventId, media: Media, picker: Painter, cells: Size) {
         let acct = self.clone();
         tokio::spawn(async move {
             let protocol = match acct.load_preview(&media, picker, cells).await {
@@ -1648,9 +1648,9 @@ impl Account {
         });
     }
 
-    async fn load_preview(&self, media: &Media, picker: Picker, cells: Size) -> Result<Protocol> {
+    async fn load_preview(&self, media: &Media, picker: Painter, cells: Size) -> Result<Picture> {
         const MAX_FULL_DOWNLOAD: u64 = 20 * 1024 * 1024;
-        let font = picker.font_size();
+        let font = picker.picker.font_size();
         let width = u32::from(cells.width) * u32::from(font.width);
         let height = u32::from(cells.height) * u32::from(font.height);
         let media_api = self.client.media();
@@ -1844,7 +1844,7 @@ impl Account {
     }
 
     /// A small avatar for the window list, from a server thumbnail.
-    pub fn fetch_avatar(&self, room_id: OwnedRoomId, url: OwnedMxcUri, picker: Picker, cells: Size) {
+    pub fn fetch_avatar(&self, room_id: OwnedRoomId, url: OwnedMxcUri, picker: Painter, cells: Size) {
         let acct = self.clone();
         tokio::spawn(async move {
             let settings = MediaThumbnailSettings::new(UInt::from(64u32), UInt::from(64u32));
@@ -3074,10 +3074,10 @@ impl Account {
 
 /// Decode an untrusted image (capped in size and memory, off the UI
 /// thread) and encode it for the terminal to fit `cells`.
-async fn encode_image(bytes: Vec<u8>, picker: Picker, cells: Size) -> Result<Protocol> {
-    tokio::task::spawn_blocking(move || -> Result<Protocol> {
+async fn encode_image(bytes: Vec<u8>, painter: Painter, cells: Size) -> Result<Picture> {
+    tokio::task::spawn_blocking(move || -> Result<Picture> {
         let decoded = decode_image(&bytes)?;
-        picker.new_protocol(decoded, cells, Resize::Fit(None)).map_err(|e| anyhow::anyhow!("{e}"))
+        painter.fit(decoded, cells)
     })
     .await?
 }

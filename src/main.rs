@@ -15,6 +15,7 @@ mod links;
 mod matrix;
 mod model;
 mod notify;
+mod picture;
 mod remote;
 mod richtext;
 mod script;
@@ -310,7 +311,9 @@ async fn run() -> Result<()> {
     // Ask the terminal about graphics and key reporting before anything
     // else reads stdin.
     if previews {
-        app.picker = Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
+        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+        app.picker = Some(picture::Painter::new(picker, app.cfg.image_text));
+        app.note_images();
     }
     // Lets terminals that support it (kitty, Ghostty, WezTerm, …) report
     // Shift+Enter distinctly; elsewhere Alt+Enter inserts a newline.
