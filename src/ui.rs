@@ -1257,6 +1257,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled(text, t.bar)]);
     }
 
+    if let Some(note) = app.upgrade_note() {
+        item(&mut spans, vec![Span::styled(note, t.bar_alert)]);
+    }
+
     if app.playing.is_some() {
         item(&mut spans, vec![Span::styled("▶ playing", t.bar.add_modifier(Modifier::BOLD))]);
     }

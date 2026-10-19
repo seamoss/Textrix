@@ -751,6 +751,21 @@ pub struct App {
     quit_armed: Option<Instant>,
     /// The divider being dragged (between drawn panes k and k + 1).
     dragging: Option<usize>,
+    /// The textrix this was started as, and as it was last seen on disk.
+    pub install: Option<crate::install::Install>,
+    /// A newer textrix installed under this one: its version ("" when it
+    /// didn't say).
+    installed: Option<String>,
+    /// A newer release on GitHub (`check_updates`).
+    released: Option<String>,
+    /// Asking a changed textrix its version.
+    probing: bool,
+    /// `/restart`: quit to become the textrix on disk.
+    pub restart: bool,
+    /// Seconds the clock has ticked.
+    clock_ticks: u64,
+    /// Where you were before a `/restart`, waiting for its window.
+    pending_resume: Option<crate::install::Resume>,
     /// The edit to go back to if a delete started from it is declined.
     resume_edit: Option<EditSession>,
     editing: Option<EditSession>,
@@ -1013,6 +1028,11 @@ const COMMANDS: &[Cmd] = &[
         args: "",
         help: "Leave Textrix running in the background (started with textrix --daemon); textrix --attach comes back",
     },
+    Cmd {
+        name: "restart",
+        args: "",
+        help: "Start Textrix again in place (to run a newly installed version), back where you were",
+    },
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
@@ -1130,6 +1150,9 @@ const SERVER_COMMANDS: &[&str] = &["connect", "disconnect", "logout", "recover"]
 
 impl App {
     pub fn new(cfg: Config, paths: Paths, env: EnvFile, servers: Servers, tx: Tx) -> Self {
+        let pending_resume = std::fs::read(crate::install::resume_file(&paths.base))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         let (bell_mode, bell_style) = (cfg.bell, cfg.bell_style);
         let layout: Layout = std::fs::read(paths.layout_file())
             .ok()
@@ -1189,6 +1212,13 @@ impl App {
             upload_declined: None,
             quit_armed: None,
             dragging: None,
+            install: None,
+            installed: None,
+            released: None,
+            probing: false,
+            restart: false,
+            clock_ticks: 0,
+            pending_resume,
             resume_edit: None,
             editing: None,
             compose: None,
@@ -1251,6 +1281,7 @@ impl App {
         if self.cfg.check_updates {
             self.watch_for_updates();
         }
+        let _ = std::fs::remove_file(crate::install::resume_file(&self.paths.base));
         // Audio left over from a crash; anything playing deletes its own.
         let _ = std::fs::remove_dir_all(self.paths.base.join("tmp"));
         self.scripts.set_data_dir(self.paths.base.join("script-data"));
@@ -1658,9 +1689,14 @@ impl App {
             AppEvent::Update { latest, asked } => {
                 let current = env!("CARGO_PKG_VERSION");
                 match latest {
-                    Some((version, url)) if update::newer(&version, current) => self.status(Line::info(format!(
-                        "Textrix {version} is out (you have {current}): brew upgrade textrix, or {url}"
-                    ))),
+                    Some((version, url)) if update::newer(&version, current) => {
+                        if self.released.as_deref() != Some(&version) {
+                            self.status(Line::info(format!(
+                                "Textrix {version} is out (you have {current}): brew upgrade textrix, or {url}"
+                            )));
+                        }
+                        self.released = Some(version);
+                    }
                     Some(_) if asked => self.info(format!("Textrix {current} is the latest")),
                     None if asked => self.error("couldn't reach GitHub to check for updates"),
                     _ => {}
@@ -1694,6 +1730,20 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::Installed { version } => {
+                self.probing = false;
+                let current = env!("CARGO_PKG_VERSION");
+                let text = match version.as_deref() {
+                    Some(v) if v != current => {
+                        format!("Textrix {v} is installed (this is {current}): /restart switches to it")
+                    }
+                    _ => "a new build of Textrix is installed: /restart runs it".to_owned(),
+                };
+                if self.installed.is_none() {
+                    self.status(Line::info(text));
+                }
+                self.installed = Some(version.filter(|v| v != current).unwrap_or_default());
+            }
             AppEvent::Detached => {
                 self.status(Line::info("detached: Textrix carries on in the background (textrix --attach)"));
             }
@@ -2699,6 +2749,10 @@ impl App {
     pub fn on_clock(&mut self) {
         // A server that never connects shouldn't hold the split back.
         self.restore_split();
+        self.clock_ticks += 1;
+        if self.clock_ticks.is_multiple_of(30) {
+            self.watch_install();
+        }
         let (effects, mut errors) = self.scripts.refresh_status();
         self.apply_effects(effects, None);
         let (effects, timer_errors) = self.scripts.run_timers();
@@ -4287,6 +4341,7 @@ impl App {
                 true => Ok(()),
                 false => Err("/detach is for Textrix in the background: start it with textrix --daemon".into()),
             },
+            "restart" => self.cmd_restart(),
             "quit" => {
                 self.quit = true;
                 Ok(())
@@ -5492,6 +5547,7 @@ impl App {
     /// Last session's split, once its windows are open (or their servers
     /// have said which rooms they have: a room you've left is skipped).
     fn restore_split(&mut self) {
+        self.resume();
         let Some(saved) = &self.pending_split else { return };
         let waiting = saved.panes.iter().chain(&saved.focus).any(|r| match r {
             WinRef::Room(key) => {
@@ -5506,6 +5562,91 @@ impl App {
         }
         if let Some(saved) = self.pending_split.take() {
             self.apply_layout(&saved);
+        }
+    }
+
+    /// After `/restart`: back to the window you were in, with what you were
+    /// typing, once that window's there (or its server has said it isn't).
+    fn resume(&mut self) {
+        let Some(mut resume) = self.pending_resume.take() else { return };
+        let open = |app: &Self, r: &WinRef| app.windows.iter().position(|w| w.id() == *r);
+        // A room whose server hasn't said what rooms it has may still come.
+        let coming = |app: &Self, r: &WinRef| {
+            matches!(r, WinRef::Room(key)
+                if !app.rooms_loaded.contains(&key.account)
+                    && app.accounts.get(key.account.as_str()).is_some_and(|s| s.status != ConnStatus::Offline))
+        };
+        // The window first: switching saves the input line into the window
+        // left, which would cover a draft put back there.
+        if let Some(window) = resume.window.take() {
+            match open(self, &window) {
+                Some(idx) => self.switch_to(idx),
+                None if coming(self, &window) => resume.window = Some(window),
+                None => {}
+            }
+        }
+        let mut later = Vec::new();
+        for (window, text) in std::mem::take(&mut resume.drafts) {
+            match open(self, &window) {
+                // The window you're in has its draft in the input line.
+                Some(idx) if idx == self.active => self.input.restore(crate::input::Draft::from_text(&text)),
+                Some(idx) => {
+                    let draft = Some(crate::input::Draft::from_text(&text));
+                    self.windows[idx].unsent = Some(Unsent { text: draft, compose: None });
+                }
+                None if coming(self, &window) => later.push((window, text)),
+                None => {}
+            }
+        }
+        resume.drafts = later;
+        if resume.window.is_some() || !resume.drafts.is_empty() {
+            self.pending_resume = Some(resume);
+        }
+    }
+
+    /// Every half minute: has the textrix on disk changed (`brew upgrade`,
+    /// `cargo build`)? Then ask it its version.
+    fn watch_install(&mut self) {
+        let Some(install) = self.install.clone().filter(|i| i.replaced()) else { return };
+        if std::mem::replace(&mut self.probing, true) {
+            return;
+        }
+        // From now on, changes are measured from this one.
+        self.install = crate::install::Install::at(install.path.clone()).or(Some(install.clone()));
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let version = install.version().await;
+            let _ = tx.send(AppEvent::Installed { version });
+        });
+    }
+
+    /// `/restart`: save everything as on quitting, and become the textrix
+    /// on disk (a newer one, if it's been upgraded), back where you were.
+    fn cmd_restart(&mut self) -> Result<(), String> {
+        if self.install.is_none() {
+            return Err("can't find the textrix this was started as, to start it again".into());
+        }
+        let mut drafts: Vec<(WinRef, String)> =
+            self.windows.iter().filter_map(|w| Some((w.id(), w.unsent.as_ref()?.text.as_ref()?.text()))).collect();
+        if !self.input.is_empty() {
+            drafts.push((self.windows[self.active].id(), self.input.text()));
+        }
+        let resume = crate::install::Resume { window: Some(self.windows[self.active].id()), drafts };
+        let json = serde_json::to_vec(&resume).map_err(|e| e.to_string())?;
+        crate::config::write_private(&crate::install::resume_file(&self.paths.base), &json)
+            .map_err(|e| format!("{e:#}"))?;
+        (self.restart, self.quit) = (true, true);
+        Ok(())
+    }
+
+    /// What the status bar says about upgrades: one installed under you,
+    /// or one released.
+    pub fn upgrade_note(&self) -> Option<String> {
+        match (&self.installed, &self.released) {
+            (Some(v), _) if v.is_empty() => Some("new build: /restart".into()),
+            (Some(v), _) => Some(format!("{v} installed: /restart")),
+            (None, Some(v)) => Some(format!("{v} is out")),
+            _ => None,
         }
     }
 
@@ -6216,7 +6357,7 @@ pub async fn run<B>(
     mut app: App,
     mut rx: UnboundedReceiver<AppEvent>,
     mut keys: impl Stream<Item = std::io::Result<Event>> + Unpin,
-) -> Result<()>
+) -> Result<bool>
 where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -6289,8 +6430,9 @@ where
             _ = flash_end(app.flash_until) => app.flash_until = None,
         }
     }
+    let restart = app.restart;
     app.shutdown();
-    Ok(())
+    Ok(restart)
 }
 
 #[cfg(test)]
@@ -7004,6 +7146,53 @@ mod tests {
         assert_eq!(app.cmd_play("jo_bloggs"), Err("no audio or video from jo_bloggs here".into()));
         // Found; with no server connected here it stops short of playing.
         assert!(app.cmd_play("sam").unwrap_err().contains("not connected"), "found sam's");
+    }
+
+    #[test]
+    fn restart_comes_back_where_you_were() {
+        let dir = std::env::temp_dir().join(format!("textrix-restart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { base: dir.clone(), env_file: dir.join("none") };
+        let start = || {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(
+                Config::default(),
+                paths.clone(),
+                EnvFile::new(paths.env_file.clone()),
+                Servers::default(),
+                tx,
+            );
+            let a = room_window(&mut app, "!a:x.org", "Night Owls");
+            (app, a)
+        };
+        let (mut app, a) = start();
+        assert!(app.cmd_restart().is_err(), "nowhere to restart from");
+        app.install = crate::install::Install::at(std::env::current_exe().unwrap());
+        app.switch_to(a);
+        app.input.set_text("half a thought");
+        app.switch_to(0);
+        app.input.set_text("status draft");
+        app.switch_to(a);
+        app.cmd_restart().unwrap();
+        assert!(app.restart && app.quit);
+
+        let (mut next, a) = start();
+        assert!(next.pending_resume.is_some());
+        next.restore_split();
+        assert_eq!((next.active, next.input.text()), (a, "half a thought".to_owned()), "back, draft and all");
+        next.switch_to(0);
+        assert_eq!(next.input.text(), "status draft", "and the other windows' drafts");
+        assert!(next.pending_resume.is_none());
+
+        // The status bar's upgrade note.
+        assert_eq!(next.upgrade_note(), None);
+        next.released = Some("9.9.9".into());
+        assert_eq!(next.upgrade_note().as_deref(), Some("9.9.9 is out"));
+        next.on_event(AppEvent::Installed { version: Some("9.9.9".into()) });
+        assert_eq!(next.upgrade_note().as_deref(), Some("9.9.9 installed: /restart"));
+        next.on_event(AppEvent::Installed { version: Some(env!("CARGO_PKG_VERSION").into()) });
+        assert_eq!(next.upgrade_note().as_deref(), Some("new build: /restart"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -47,6 +47,19 @@ pub struct Draft {
     pasted: bool,
 }
 
+impl Draft {
+    pub fn text(&self) -> String {
+        self.buf.iter().collect()
+    }
+
+    /// A draft of plain text (as kept over a `/restart`), the cursor at
+    /// its end.
+    pub fn from_text(text: &str) -> Self {
+        let buf: Vec<char> = text.chars().collect();
+        Self { cursor: buf.len(), buf, mentions: Vec::new(), pasted: false }
+    }
+}
+
 impl Input {
     pub fn text(&self) -> String {
         self.buf.iter().collect()

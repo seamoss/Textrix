@@ -7,6 +7,26 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.8.0] - 2026-10-19
+
+### Added
+- A running Textrix notices when the `textrix` it was started as is
+  replaced (`brew upgrade`, `cargo build`) and says so in the status bar:
+  `[0.8.1 installed: /restart]`. Nothing goes over the network for this.
+- `/restart` becomes the newly installed version in place: the same
+  terminal, back in the window you were in, every window's unsent text
+  kept. In the background it restarts itself, and the attached terminal
+  follows it to the new version.
+
+### Changed
+- With `check_updates = true`, Textrix asks GitHub for new releases once
+  an hour (it was once a day) and shows `[0.8.1 is out]` in the status bar
+  until you have it. It's still off unless you turn it on.
+
+### Fixed
+- Background mode works with a `--home` too long for a Unix socket's path:
+  the socket goes in your temp folder instead.
+
 ## [0.7.1] - 2026-10-19
 
 ### Added

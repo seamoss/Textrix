@@ -219,6 +219,10 @@ pub enum AppEvent {
     Detached,
     /// Asked to quit from outside (`textrix --stop`).
     Quit,
+    /// The textrix on disk changed: its version, if it said.
+    Installed {
+        version: Option<String>,
+    },
     /// Audio finished playing (or couldn't play).
     Played {
         event_id: OwnedEventId,

@@ -1,4 +1,4 @@
-//! The opt-in update notice (`check_updates = true`): at most once a day,
+//! The opt-in update notice (`check_updates = true`): at most once an hour,
 //! ask GitHub for the latest release and say if it's newer. Nothing is sent
 //! but the request itself (with a "textrix/<version>" user agent).
 
@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 const LATEST: &str = "https://api.github.com/repos/seamoss/Textrix/releases/latest";
-pub const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+pub const EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// The latest release: (version without the "v", its page).
 pub async fn latest() -> Result<(String, String)> {

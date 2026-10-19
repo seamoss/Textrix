@@ -41,6 +41,18 @@ open (`~/.textrix/daemon.sock`). Only one Textrix runs per home at a time:
 a second one is refused, since two would share one store and can scramble
 its encryption keys.
 
+### Upgrading while it runs
+
+A running Textrix notices when the `textrix` it was started as changes
+(`brew upgrade`, a new `cargo build`) and says so in the status bar,
+`[0.8.1 installed: /restart]`. `/restart` saves everything as quitting
+would and becomes the new one in place: the same terminal, back in the
+window you were in, every window's unsent text kept. In the background it
+restarts itself, and the attached terminal follows. With
+`check_updates = true`, it also asks GitHub once an hour for new releases
+and shows `[0.8.1 is out]` until you have it; that's off unless you turn
+it on.
+
 ## Setup
 
 Connections come only from a private dotfile. No file, no connections.
@@ -178,7 +190,7 @@ bindings.
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
 | Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Drag the line between two panes (or the upper one's title bar) to resize them, or `/resize +5`, `/resize -5` (rows, or columns side by side), `/resize =` to even them up. The split you quit with is back next time, sizes and all. `/layout save <name>` keeps the panes (and whether the window and member lists show) to bring back with `/layout load <name>` or `/layout <name>`; `/layout` lists them, `/layout delete <name>` removes one |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Scripts | `/script` lists them, `/script load\|unload\|reload <name>`, `/script exec <code>`; see [Scripts](#scripts) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
@@ -438,7 +450,7 @@ theme = "default"          # light, mono, green, blue, red, amber (+ -deep, -tro
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
-check_updates = false      # once a day, ask GitHub whether a newer release is out
+check_updates = false      # hourly, ask GitHub whether a newer release is out
 search_index = true        # encrypted local index of messages for /search
 scripts = true             # load ~/.textrix/scripts/*.rhai at startup
 scrollback = 5000

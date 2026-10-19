@@ -61,6 +61,8 @@ pub enum ToClient {
     Raw(Vec<u8>),
     /// The end of this attachment, and why.
     Bye(String),
+    /// The background Textrix is restarting (`/restart`): come back to it.
+    Restart,
 }
 
 /// What the attached terminal can draw images with.
@@ -118,7 +120,16 @@ async fn recv<T: DeserializeOwned>(input: &mut (impl AsyncRead + Unpin)) -> Resu
 }
 
 pub fn socket_path(base: &Path) -> PathBuf {
-    base.join("daemon.sock")
+    let path = base.join("daemon.sock");
+    // Unix sockets' paths are short (104 bytes on macOS): a long home gets
+    // one in the temp folder (which is yours alone), named after the home.
+    if path.as_os_str().len() < 100 {
+        return path;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut hasher);
+    std::env::temp_dir().join(format!("textrix-{:016x}.sock", hasher.finish()))
 }
 
 /// Whether a background Textrix answers on `socket`.
@@ -287,6 +298,16 @@ async fn attachment(stream: UnixStream, screen: Screen, input: UnboundedSender<E
     }
 }
 
+/// Tell the attached terminal the background Textrix is restarting, so it
+/// comes back to the new one.
+pub fn restarting() {
+    if let Some(client) = term::remote_client() {
+        ATTACHMENT.fetch_add(1, Ordering::SeqCst);
+        let _ = client.send(ToClient::Restart);
+        term::set_remote(None, None);
+    }
+}
+
 /// Let the attached terminal go, saying why (`/detach`, or quitting).
 pub fn detach(why: &str) -> bool {
     let Some(client) = term::remote_client() else { return false };
@@ -333,8 +354,10 @@ pub fn start(base: &Path, args: Vec<std::ffi::OsString>) -> Result<()> {
 
 // ---- the terminal side -------------------------------------------------------
 
-/// Show the background Textrix in this terminal until it lets go (or quits).
-pub async fn attach(socket: &Path, previews: bool) -> Result<()> {
+/// Show the background Textrix in this terminal until it lets go (or
+/// quits). `true` when it restarted (`/restart`) and is back: this terminal
+/// should start again too, to attach to it as the same version.
+pub async fn attach(socket: &Path, previews: bool) -> Result<bool> {
     let stream = UnixStream::connect(socket)
         .await
         .context("Textrix isn't running in the background (textrix --daemon starts it)")?;
@@ -385,9 +408,19 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<()> {
         loop {
             tokio::select! {
                 event = events.next() => match event {
-                    Some(Ok(event)) => send(&mut to, &ToDaemon::Event(event)).await?,
+                    Some(Ok(event)) => {
+                        if send(&mut to, &ToDaemon::Event(event)).await.is_err() {
+                            // It's going: its last word says why (a restart, say).
+                            let last = tokio::time::timeout(Duration::from_secs(1), messages.recv()).await;
+                            return Ok(match last {
+                                Ok(Some(Ok(Some(ToClient::Restart)))) => None,
+                                Ok(Some(Ok(Some(ToClient::Bye(why))))) => Some(why),
+                                _ => Some("the background Textrix went away".to_owned()),
+                            });
+                        }
+                    }
                     Some(Err(e)) => return Err(e.into()),
-                    None => return Ok("the terminal closed".to_owned()),
+                    None => return Ok(Some("the terminal closed".to_owned())),
                 },
                 message = messages.recv() => match message {
                     Some(Ok(Some(ToClient::Draw(cells)))) => backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))?,
@@ -407,17 +440,36 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<()> {
                         out.write_all(&bytes)?;
                         out.flush()?;
                     }
-                    Some(Ok(Some(ToClient::Bye(why)))) => return Ok(why),
+                    Some(Ok(Some(ToClient::Bye(why)))) => return Ok(Some(why)),
+                    Some(Ok(Some(ToClient::Restart))) => return Ok(None),
                     Some(Err(e)) => return Err(e),
-                    Some(Ok(None)) | None => return Ok("the background Textrix went away".to_owned()),
+                    Some(Ok(None)) | None => return Ok(Some("the background Textrix went away".to_owned())),
                 },
             }
         }
     }
     .await;
     restore(enhanced_keys);
-    println!("{}", result?);
-    Ok(())
+    match result? {
+        Some(why) => {
+            println!("{why}");
+            Ok(false)
+        }
+        None => {
+            println!("Textrix is restarting…");
+            // The old one gone, then the new one there.
+            let mut gone = false;
+            for _ in 0..600 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let up = alive(socket);
+                gone |= !up;
+                if gone && up {
+                    return Ok(true);
+                }
+            }
+            bail!("the background Textrix didn't come back; textrix --daemon starts it")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -443,6 +495,16 @@ mod tests {
         assert!(matches!(recv::<ToClient>(&mut b).await.unwrap(), Some(ToClient::Raw(raw)) if raw.ends_with(b"\x07")));
         assert!(matches!(recv::<ToDaemon>(&mut b).await.unwrap(), Some(ToDaemon::Event(e)) if e == key));
         assert!(recv::<ToClient>(&mut b).await.unwrap().is_none(), "the end is None, not an error");
+    }
+
+    #[test]
+    fn long_homes_get_a_short_socket() {
+        assert_eq!(socket_path(Path::new("/Users/sam/.textrix")), Path::new("/Users/sam/.textrix/daemon.sock"));
+        let long = Path::new("/a").join("very-long-directory-name".repeat(5));
+        let socket = socket_path(&long);
+        assert!(socket.as_os_str().len() < 104 && socket.starts_with(std::env::temp_dir()), "{socket:?}");
+        assert_eq!(socket, socket_path(&long), "the same home, the same socket");
+        assert_ne!(socket, socket_path(&long.join("other")));
     }
 
     #[test]

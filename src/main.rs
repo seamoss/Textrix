@@ -12,6 +12,7 @@ mod highlight;
 mod hyperlinks;
 mod index;
 mod input;
+mod install;
 mod links;
 mod matrix;
 mod model;
@@ -163,6 +164,7 @@ async fn run_daemon(
     rx: tokio::sync::mpsc::UnboundedReceiver<matrix::AppEvent>,
     tx: matrix::Tx,
     base: &std::path::Path,
+    install: Option<install::Install>,
 ) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
     let socket = remote::socket_path(base);
@@ -194,11 +196,22 @@ async fn run_daemon(
     remote::serve(listener, screen, input, tx);
     let keys = futures_util::stream::poll_fn(move |cx| input_rx.poll_recv(cx).map(|event| event.map(Ok)));
     let result = app::run(&mut terminal, app, rx, keys).await;
-    remote::detach("Textrix has quit");
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let restart = matches!(result, Ok(true));
+    // Gone from the socket first, so nothing attaches to this one again.
     let _ = std::fs::remove_file(&socket);
+    if restart {
+        remote::restarting();
+    } else {
+        remote::detach("Textrix has quit");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let _ = std::fs::remove_file(base.join("daemon.pid"));
-    result
+    if restart && let Some(install) = install {
+        // The same arguments (--daemon-run and the rest), the new binary.
+        let error = install::exec(&install.path, std::env::args_os().skip(1).collect());
+        anyhow::bail!("restarting {}: {error}", install.path.display());
+    }
+    result.map(|_| ())
 }
 
 /// `--stop`: ask the background Textrix to quit, and wait until it has.
@@ -281,7 +294,14 @@ async fn run() -> Result<()> {
     }
     if cli.attach || (!cli.daemon_run && remote::alive(&socket)) {
         let previews = Config::load(&paths.config_file()).map_or(true, |cfg| cfg.image_previews);
-        return remote::attach(&socket, previews).await;
+        if remote::attach(&socket, previews).await?
+            && let Some(install) = install::Install::current()
+        {
+            // The background Textrix restarted as a new version: so does this.
+            let error = install::exec(&install.path, std::env::args_os().skip(1).collect());
+            anyhow::bail!("restarting {}: {error}", install.path.display());
+        }
+        return Ok(());
     }
     let _lock = lock_instance(&paths.base)?;
     let env = EnvFile::new(paths.env_file.clone());
@@ -305,9 +325,11 @@ async fn run() -> Result<()> {
     let mouse = cfg.mouse;
     highlight::warm_up();
     let base = paths.base.clone();
+    let install = install::Install::current();
     let mut app = App::new(cfg, paths, env, servers, tx.clone());
+    app.install = install.clone();
     if cli.daemon_run {
-        return run_daemon(app, rx, tx, &base).await;
+        return run_daemon(app, rx, tx, &base, install).await;
     }
 
     let mut terminal = ratatui::try_init().map_err(|e| anyhow::anyhow!("Textrix needs a terminal ({e})"))?;
@@ -353,5 +375,11 @@ async fn run() -> Result<()> {
     }
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
     ratatui::restore();
-    result
+    if matches!(result, Ok(true))
+        && let Some(install) = install
+    {
+        let error = install::exec(&install.path, std::env::args_os().skip(1).collect());
+        anyhow::bail!("restarting {}: {error}", install.path.display());
+    }
+    result.map(|_| ())
 }
