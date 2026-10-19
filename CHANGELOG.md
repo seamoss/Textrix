@@ -7,6 +7,14 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.5.2] - 2026-10-18
+
+### Added
+- Drag and drop to upload: drop files of any kind (one or several) on the
+  terminal and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n".
+  `n` leaves the paths in the input line, to send as text. It works
+  whether the terminal pastes a dropped file's path or types it.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

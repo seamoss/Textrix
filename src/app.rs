@@ -692,6 +692,10 @@ pub struct App {
     pub confirm_delete: Option<OwnedEventId>,
     /// A long paste waiting for y/n before it's sent: its line count.
     pub confirm_paste: Option<usize>,
+    /// Files dropped into the input line, waiting for y/n to upload.
+    pub confirm_upload: Option<Vec<PathBuf>>,
+    /// Text whose upload was declined, so Enter then sends it as it is.
+    upload_declined: Option<String>,
     /// The edit to go back to if a delete started from it is declined.
     resume_edit: Option<EditSession>,
     editing: Option<EditSession>,
@@ -1107,6 +1111,8 @@ impl App {
             select: None,
             confirm_delete: None,
             confirm_paste: None,
+            confirm_upload: None,
+            upload_declined: None,
             resume_edit: None,
             editing: None,
             compose: None,
@@ -2615,8 +2621,13 @@ impl App {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
             Event::Paste(text) => {
+                let empty = self.input.is_empty();
                 self.input.paste(&text);
                 self.typed();
+                // A dropped file arrives as its path.
+                if empty {
+                    self.offer_upload();
+                }
             }
             Event::FocusGained => self.focused = true,
             Event::FocusLost => self.focused = false,
@@ -2678,7 +2689,11 @@ impl App {
             }
             return;
         }
-        if self.help.is_some() || self.confirm_delete.is_some() || self.confirm_paste.is_some() {
+        if self.help.is_some()
+            || self.confirm_delete.is_some()
+            || self.confirm_paste.is_some()
+            || self.confirm_upload.is_some()
+        {
             return;
         }
         if let Some(&(_, idx)) = self.hits.sidebar.iter().find(|(r, _)| r.contains(at)) {
@@ -2823,6 +2838,20 @@ impl App {
             }
         } else {
             self.konami = 0;
+        }
+        if let Some(files) = self.confirm_upload.take() {
+            if matches!(key.code, Char('y' | 'Y')) {
+                self.input.take();
+                for path in files {
+                    if let Err(e) = self.upload_file(path) {
+                        self.error(e);
+                    }
+                }
+            } else {
+                // Declined: it stays as text, and Enter sends it as text.
+                self.upload_declined = Some(self.input.text());
+            }
+            return;
         }
         if self.confirm_paste.take().is_some() {
             // Declining leaves the text in the input line to edit.
@@ -3691,7 +3720,36 @@ impl App {
 
     // ---- commands --------------------------------------------------------
 
+    /// Ask whether to upload what's in the input line, if it's nothing but
+    /// paths to files (as dropping files on the terminal leaves it).
+    fn offer_upload(&mut self) {
+        let text = self.input.text();
+        if self.win().room.is_none() || self.upload_declined.as_ref() == Some(&text) {
+            return;
+        }
+        if let Some(files) = dropped_files(&text) {
+            self.confirm_upload = Some(files);
+        }
+    }
+
+    /// What the upload prompt asks about: "notes.pdf (1.2 MB)" or "3 files
+    /// (4.5 MB)".
+    pub fn upload_summary(&self) -> Option<String> {
+        let files = self.confirm_upload.as_ref()?;
+        let size: u64 = files.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
+        let what = match files.as_slice() {
+            [one] => one.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            many => format!("{} files", many.len()),
+        };
+        Some(format!("{what} ({})", matrix::human_size(size)))
+    }
+
     fn submit(&mut self) {
+        // Terminals that type a dropped path rather than paste it.
+        self.offer_upload();
+        if self.confirm_upload.is_some() {
+            return;
+        }
         let limit = self.cfg.paste_confirm_lines;
         if let Some(lines) = self.input.pasted_lines()
             && limit > 0
@@ -4278,11 +4336,14 @@ impl App {
     }
 
     fn cmd_upload(&mut self, args: &str) -> Result<(), String> {
-        let (acct, room_id) = self.room_ctx()?;
         if args.trim().is_empty() {
             return Err("usage: /upload <path>".into());
         }
-        let path = parse_path(args);
+        self.upload_file(parse_path(args))
+    }
+
+    fn upload_file(&mut self, path: PathBuf) -> Result<(), String> {
+        let (acct, room_id) = self.room_ctx()?;
         let meta = std::fs::metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         if !meta.is_file() {
             return Err(format!("{} is not a file", path.display()));
@@ -5641,6 +5702,62 @@ fn parse_path(arg: &str) -> PathBuf {
     expand_tilde(&raw)
 }
 
+/// Files dropped (or pasted) on the terminal: `text` is nothing but
+/// absolute paths to files that exist, as terminals write them (quoted or
+/// backslash-escaped, or `file://` URLs; separated by spaces or lines).
+fn dropped_files(text: &str) -> Option<Vec<PathBuf>> {
+    let words = split_unescaped(text);
+    if words.is_empty() || words.len() > 20 {
+        return None;
+    }
+    words
+        .iter()
+        .map(|word| {
+            let bare = word.trim_start_matches(['\'', '"']);
+            let absolute = bare.starts_with('/') || bare.starts_with("~/") || bare.starts_with("file://");
+            let path = parse_path(word);
+            (absolute && std::fs::metadata(&path).is_ok_and(|m| m.is_file())).then_some(path)
+        })
+        .collect()
+}
+
+/// Split at whitespace that isn't backslash-escaped or quoted, keeping
+/// each piece as written.
+fn split_unescaped(text: &str) -> Vec<String> {
+    let (mut words, mut word, mut quote, mut escaped) = (Vec::new(), String::new(), None::<char>, false);
+    for c in text.chars() {
+        if escaped {
+            word.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if quote != Some('\'') => {
+                word.push(c);
+                escaped = true;
+            }
+            '"' | '\'' if quote.is_none() => {
+                quote = Some(c);
+                word.push(c);
+            }
+            c if Some(c) == quote => {
+                quote = None;
+                word.push(c);
+            }
+            c if c.is_whitespace() && quote.is_none() => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
 fn expand_tilde(p: &str) -> PathBuf {
     match (p.strip_prefix('~'), dirs::home_dir()) {
         (Some(""), Some(home)) => home,
@@ -5884,6 +6001,49 @@ mod tests {
         let (target, rest) = w.answer_target("sure thing");
         assert_eq!(target.unwrap().body, "from alice", "defaults to the last message");
         assert_eq!(rest, "sure thing");
+    }
+
+    #[test]
+    fn dropped_files_are_offered_for_upload() {
+        let dir = std::env::temp_dir().join(format!("textrix-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("My Notes.pdf"), dir.join("song.flac"));
+        std::fs::write(&a, b"%PDF").unwrap();
+        std::fs::write(&b, vec![0u8; 2048]).unwrap();
+        let escaped = |p: &std::path::Path| p.display().to_string().replace(' ', "\\ ");
+        let both = format!("{} '{}'", escaped(&a), b.display());
+        assert_eq!(dropped_files(&both), Some(vec![a.clone(), b.clone()]), "escaped and quoted, any kind of file");
+        let urls = format!("file://{}\nfile://{}", a.display().to_string().replace(' ', "%20"), b.display());
+        assert_eq!(dropped_files(&urls), Some(vec![a.clone(), b.clone()]), "file:// URLs, one per line");
+        assert_eq!(dropped_files(&format!("see {}", escaped(&a))), None, "text with a path in it is text");
+        assert_eq!(dropped_files(&dir.display().to_string()), None, "folders aren't uploaded");
+        assert_eq!(dropped_files("Cargo.toml"), None, "only absolute paths, as terminals drop them");
+
+        let mut app = test_app();
+        let room = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(room);
+        app.on_terminal(Event::Paste(both.clone()));
+        assert_eq!(app.confirm_upload.as_deref(), Some(&[a.clone(), b.clone()][..]));
+        assert_eq!(app.upload_summary().as_deref(), Some("2 files (2.0 KB)"));
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(app.confirm_upload.is_none());
+        assert_eq!(app.input.text(), both, "declined: the paths stay, as text");
+        app.submit();
+        assert!(app.confirm_upload.is_none(), "and Enter doesn't ask again");
+
+        app.input.take();
+        app.input.set_text(&escaped(&a));
+        app.submit();
+        assert!(app.confirm_upload.is_some(), "a typed path asks on Enter instead of running /Users…");
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(app.input.is_empty() && app.confirm_upload.is_none());
+        let last = &app.windows[room].lines.back().unwrap().body;
+        assert!(last.contains("not connected"), "it tried to upload: {last}");
+
+        app.switch_to(0);
+        app.on_terminal(Event::Paste(escaped(&a)));
+        assert!(app.confirm_upload.is_none(), "not outside a room");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

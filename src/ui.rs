@@ -1275,6 +1275,9 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     if let Some(lines) = app.confirm_paste {
         let prompt = format!("send {lines} pasted lines to {}? y/n", win.title());
         item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+    } else if let Some(what) = app.upload_summary() {
+        let prompt = format!("upload {what} to {}? y/n", win.title());
+        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         let prompt = format!("delete {what}? y/n");
