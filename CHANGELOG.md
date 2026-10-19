@@ -7,6 +7,16 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.7.1] - 2026-10-19
+
+### Added
+- `/close` shuts a room you own down for everyone. It first says what it
+  will do (or what your power level doesn't allow); `/close confirm` makes
+  the room invite-only, takes it off the directory, removes its addresses,
+  withdraws invites, removes every member less powerful than you, then
+  leaves and forgets it. If you're an admin on your Synapse homeserver, the
+  server also deletes the room and blocks it from coming back.
+
 ## [0.7.0] - 2026-10-18
 
 ### Added

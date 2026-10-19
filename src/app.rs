@@ -855,6 +855,11 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "publish", args: "<on|off>", help: "List the room in the server's room directory" },
     Cmd { name: "upgrade", args: "[version] [confirm]", help: "Show room versions, or move the room to a new version" },
+    Cmd {
+        name: "close",
+        args: "[confirm]",
+        help: "As its owner, shut the room down for everyone (says what it'll do first; confirm does it)",
+    },
     Cmd { name: "rooms", args: "", help: "List every joined room, including closed windows" },
     Cmd { name: "invites", args: "", help: "List pending invitations" },
     Cmd { name: "decline", args: "<!room:server>", help: "Reject an invitation" },
@@ -4176,6 +4181,7 @@ impl App {
                 acct.set_published(room_id, on_off(args, "usage: /publish <on|off>")?);
                 Ok(())
             }),
+            "close" => self.room_ctx().map(|(acct, room_id)| acct.close_room(room_id, args.trim() == "confirm")),
             "upgrade" => self.room_ctx().map(|(acct, room_id)| {
                 let (version, rest) = split_first(args);
                 let version = Some(version).filter(|v| !v.is_empty()).map(str::to_owned);

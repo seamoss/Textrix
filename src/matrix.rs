@@ -2539,6 +2539,170 @@ impl Account {
         });
     }
 
+    /// `/close`: shut a room down as its owner. Unconfirmed, it says what
+    /// it would do (or what your power level doesn't allow); confirmed, it
+    /// makes the room invite-only, takes it off the directory, removes its
+    /// addresses, withdraws invites, removes every other member it can,
+    /// then leaves and forgets it. When you're an admin on a Synapse
+    /// homeserver, that server also deletes it and blocks it.
+    pub fn close_room(&self, room_id: OwnedRoomId, confirmed: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let name = room.display_name().await.map(|n| n.to_string()).unwrap_or_else(|_| room_id.to_string());
+            let me = room.get_member(&acct.user_id).await?.context("you aren't in this room")?;
+            let level = |p: UserPowerLevel| match p {
+                UserPowerLevel::Infinite => i64::MAX,
+                UserPowerLevel::Int(n) => n.into(),
+                _ => 0,
+            };
+            let mine = level(me.power_level());
+            let everyone = RoomMemberships::JOIN | RoomMemberships::INVITE | RoomMemberships::KNOCK;
+            let others: Vec<_> = room.members(everyone).await?.into_iter().filter(|m| m.user_id() != acct.user_id).collect();
+            // Only members less powerful than you can be removed.
+            let (removable, staying): (Vec<_>, Vec<_>) = others.iter().partition(|m| level(m.power_level()) < mine);
+            let invited = removable.iter().filter(|m| *m.membership() == matrix_sdk::ruma::events::room::member::MembershipState::Invite).count();
+            let aliases: Vec<matrix_sdk::ruma::OwnedRoomAliasId> = room.canonical_alias().into_iter().chain(room.alt_aliases()).collect();
+            let mut missing = Vec::new();
+            if !me.can_send_state(StateEventType::RoomJoinRules) {
+                missing.push("change who can join");
+            }
+            if !removable.is_empty() && !me.can_kick() {
+                missing.push("remove members");
+            }
+            if !aliases.is_empty() && !me.can_send_state(StateEventType::RoomCanonicalAlias) {
+                missing.push("change its addresses");
+            }
+            if !missing.is_empty() {
+                bail!("you can't close {name}: your power level doesn't let you {}", missing.join(" or "));
+            }
+            let admin = acct.synapse_admin().await;
+            let server = acct.user_id.server_name().to_owned();
+            let line = |text: String| acct.notify.line(Some(room_id.clone()), Line::info(text));
+
+            if !confirmed {
+                let mut steps = vec!["make it invite-only".to_owned(), "take it off the room directory".to_owned()];
+                if !aliases.is_empty() {
+                    let list: Vec<String> = aliases.iter().map(ToString::to_string).collect();
+                    steps.push(format!("remove its address{} {}", if list.len() == 1 { "" } else { "es" }, list.join(", ")));
+                }
+                if invited > 0 {
+                    steps.push(format!("withdraw {invited} invite{}", if invited == 1 { "" } else { "s" }));
+                }
+                let members = removable.len() - invited;
+                if members > 0 {
+                    steps.push(format!("remove {members} member{}", if members == 1 { "" } else { "s" }));
+                }
+                steps.push("leave and forget it".to_owned());
+                if admin {
+                    steps.push(format!("then, as an admin on {server}, delete it there and block it from coming back"));
+                }
+                line(format!("closing {name} will {}. /close confirm does it.", steps.join(", ")));
+                if !staying.is_empty() {
+                    let names: Vec<String> = staying.iter().map(|m| m.name().to_owned()).collect();
+                    line(format!("{} {} as powerful as you, so can't be removed and will keep it", names.join(", "), if names.len() == 1 { "is" } else { "are" }));
+                }
+                if !admin {
+                    line("servers keep their copy of a room until their members leave; only a server's admin can delete it there".to_owned());
+                }
+                return Ok(());
+            }
+
+            line(format!("closing {name}…"));
+            room.privacy_settings().update_join_rule(JoinRule::Invite).await?;
+            let mut problems = Vec::new();
+            if let Err(e) = room.privacy_settings().update_room_visibility(DirectoryVisibility::Private).await {
+                problems.push(format!("taking it off the directory: {e}"));
+            }
+            if !aliases.is_empty() {
+                room.privacy_settings().update_canonical_alias(None, Vec::new()).await?;
+                // Free the names on your server for other rooms.
+                for alias in aliases.iter().filter(|a| a.server_name() == server) {
+                    if let Err(e) = room.privacy_settings().remove_room_alias_from_room_directory(alias).await {
+                        problems.push(format!("removing {alias}: {e}"));
+                    }
+                }
+            }
+            for member in &removable {
+                if let Err(e) = room.kick_user(member.user_id(), Some("This room has been closed")).await {
+                    problems.push(format!("removing {}: {e}", member.name()));
+                }
+            }
+            room.leave().await?;
+            room.forget().await?;
+            acct.notify.send(AppEvent::RoomGone { account: acct.name.clone(), room_id: room_id.clone() });
+            let purged = if admin {
+                match acct.synapse_delete_room(&room_id).await {
+                    Ok(()) => format!("; {server} deleted it and blocks it"),
+                    Err(e) => {
+                        problems.push(format!("deleting it from {server}: {e:#}"));
+                        String::new()
+                    }
+                }
+            } else {
+                String::new()
+            };
+            acct.notify.info(format!("closed {name}{purged}"));
+            for problem in problems {
+                acct.notify.error(format!("closing {name}: {problem}"));
+            }
+            Ok(())
+        });
+    }
+
+    /// The homeserver's Synapse admin API, as you (with your sign-in).
+    fn admin_request(
+        &self,
+        method: matrix_sdk::reqwest::Method,
+        path: &str,
+    ) -> Option<matrix_sdk::reqwest::RequestBuilder> {
+        let token = self.client.access_token()?;
+        let base = self.client.homeserver().to_string();
+        let client = matrix_sdk::reqwest::Client::builder().timeout(Duration::from_secs(30)).build().ok()?;
+        Some(client.request(method, format!("{}/_synapse/admin/{path}", base.trim_end_matches('/'))).bearer_auth(token))
+    }
+
+    /// Whether you're an admin on your homeserver (Synapse's admin API
+    /// answers you; anyone else is turned away).
+    async fn synapse_admin(&self) -> bool {
+        let path = format!("v1/users/{}/admin", encode_path(self.user_id.as_str()));
+        let Some(request) = self.admin_request(matrix_sdk::reqwest::Method::GET, &path) else { return false };
+        let Ok(response) = request.send().await else { return false };
+        if !response.status().is_success() {
+            return false;
+        }
+        let body = response.text().await.unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&body).is_ok_and(|v| v["admin"] == serde_json::Value::Bool(true))
+    }
+
+    /// Have the homeserver delete a room (its history purged, rejoining
+    /// blocked), and wait until it says it's done.
+    async fn synapse_delete_room(&self, room_id: &matrix_sdk::ruma::RoomId) -> Result<()> {
+        use matrix_sdk::reqwest::Method;
+        let path = format!("v2/rooms/{}", encode_path(room_id.as_str()));
+        let body = serde_json::json!({ "block": true, "purge": true, "message": "This room has been closed." });
+        let request = self.admin_request(Method::DELETE, &path).context("not signed in")?;
+        let response = request.body(body.to_string()).header("Content-Type", "application/json").send().await?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        anyhow::ensure!(status.is_success(), "{status}: {text}");
+        let delete_id = serde_json::from_str::<serde_json::Value>(&text)?["delete_id"].as_str().map(ToOwned::to_owned);
+        let Some(delete_id) = delete_id else { return Ok(()) };
+        for _ in 0..60 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let path = format!("v2/rooms/delete_status/{}", encode_path(&delete_id));
+            let Some(request) = self.admin_request(Method::GET, &path) else { break };
+            let text = request.send().await?.text().await.unwrap_or_default();
+            let status = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+            match status["status"].as_str() {
+                Some("complete") => return Ok(()),
+                Some("failed") => bail!("{}", status["error"].as_str().unwrap_or("it failed")),
+                _ => {}
+            }
+        }
+        bail!("it's still being deleted; the server carries on with it")
+    }
+
     /// `/upgrade`: show versions, or (confirmed) move the room to a new
     /// version and switch to the replacement room.
     pub fn upgrade(&self, room_id: OwnedRoomId, version: Option<String>, confirmed: bool) {
@@ -3093,6 +3257,17 @@ impl Account {
     }
 }
 
+/// A Matrix ID or other value as one URL path segment.
+fn encode_path(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            b => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Decode an untrusted image (capped in size and memory, off the UI
 /// thread) and encode it for the terminal to fit `cells`.
 async fn encode_image(bytes: Vec<u8>, painter: Painter, cells: Size) -> Result<Picture> {
@@ -3234,6 +3409,13 @@ mod link_title_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_go_into_paths_encoded() {
+        assert_eq!(encode_path("@sam:x.org"), "%40sam%3Ax.org");
+        assert_eq!(encode_path("!abc/def:x.org"), "%21abc%2Fdef%3Ax.org");
+        assert_eq!(encode_path("delete-id_1.2~"), "delete-id_1.2~");
+    }
 
     #[test]
     fn remote_filenames_cannot_escape_downloads() {
