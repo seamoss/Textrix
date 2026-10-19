@@ -1,0 +1,9 @@
+# Credentials never go into an image (scripts/linux.sh mounts the dotfile
+# read-only when it runs one instead).
+.textrix
+.env
+*.env
+!.env.example
+
+/target
+/.git

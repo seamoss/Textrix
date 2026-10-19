@@ -449,12 +449,19 @@ They're not in `/help`.
 (release builds read `~/.textrix/.env`). CI runs `cargo fmt --check`, clippy
 and the tests on every push to `master`.
 
+`scripts/linux.sh` tries Textrix on Linux in Docker: `test` builds it and
+runs the tests there, `run` runs it (with your dotfile mounted read-only,
+never copied into the image, and its state in a `textrix-linux` volume),
+and `shell` opens a shell beside it. The container has what a Linux
+desktop would: the Secret Service (GNOME Keyring) for the store key,
+`notify-send`, and the audio players Textrix looks for.
+
 Releases come from `master`: bump `version` in `Cargo.toml` and push. CI
-then builds macOS (Apple silicon and Intel) and Linux x86_64 archives, tags
-`vX.Y.Z`, and publishes a GitHub release with them and a filled-in
-Homebrew formula (`textrix.rb`, from `packaging/homebrew/`). Running the
-Release workflow by hand releases the current version if it isn't out yet.
-For the tap, copy `textrix.rb` into the `Formula/` directory of
-`seamoss/homebrew-textrix`.
+then builds macOS (one universal build, and Apple silicon and Intel) and
+Linux (x86_64 and ARM) archives, tags `vX.Y.Z`, and publishes a GitHub
+release with them and a filled-in Homebrew formula (`textrix.rb`, from
+`packaging/homebrew/`), which the tap `seamoss/homebrew-textrix` picks up
+by itself. Running the Release workflow by hand releases the current
+version if it isn't out yet.
 
 Textrix is MIT licensed; see `LICENSE`.

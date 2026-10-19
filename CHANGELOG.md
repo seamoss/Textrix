@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.2] - 2026-10-18
+
+### Fixed
+- Dropping a file and pressing Enter uploads it: Enter (or `y`) answers
+  the upload question; `n` keeps the path, which Enter then sends as a
+  message rather than running it as a command. File names with unusual
+  spaces (macOS screenshots put a narrow one before "PM") and paths a
+  terminal types without escaping its spaces are recognised, and a path
+  that still ends up as a command says how to upload instead of "unknown
+  command".
+
+### Added
+- `scripts/linux.sh` tries Textrix on Linux in Docker: the tests, or
+  Textrix itself with a Linux keychain, notifications and audio players.
+
 ## [0.6.1] - 2026-10-18
 
 ### Fixed

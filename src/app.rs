@@ -2871,7 +2871,8 @@ impl App {
             self.konami = 0;
         }
         if let Some(files) = self.confirm_upload.take() {
-            if matches!(key.code, Char('y' | 'Y')) {
+            // Dropping files and pressing Enter uploads them.
+            if matches!(key.code, Char('y' | 'Y') | Enter) {
                 self.input.take();
                 for path in files {
                     if let Err(e) = self.upload_file(path) {
@@ -3795,6 +3796,11 @@ impl App {
         if text.trim().is_empty() {
             return;
         }
+        // Paths you chose not to upload go as a message, not a command.
+        if self.upload_declined.take().is_some_and(|declined| declined == text) {
+            self.say(&text, Say::Text);
+            return;
+        }
         if let Some((key, target)) = self.compose.take()
             && self.win().room.as_ref() == Some(&key)
             && !text.starts_with('/')
@@ -4095,9 +4101,16 @@ impl App {
                             Ok(())
                         }
                         Some(Err(e)) => Err(format!("script {e}")),
-                        None => self
-                            .egg_command(&other, args)
-                            .unwrap_or_else(|| Err(format!("unknown command /{other}; try /help"))),
+                        None => self.egg_command(&other, args).unwrap_or_else(|| {
+                            Err(if other.contains('/') {
+                                format!(
+                                    "/{other} isn't a command, and not a file here either: drop files on an empty \
+                                     input line, or /upload <path>"
+                                )
+                            } else {
+                                format!("unknown command /{other}; try /help")
+                            })
+                        }),
                     }
                 }
             },
@@ -5741,19 +5754,18 @@ fn parse_path(arg: &str) -> PathBuf {
 /// absolute paths to files that exist, as terminals write them (quoted or
 /// backslash-escaped, or `file://` URLs; separated by spaces or lines).
 fn dropped_files(text: &str) -> Option<Vec<PathBuf>> {
+    let file = |word: &str| {
+        let bare = word.trim_start_matches(['\'', '"']);
+        let absolute = bare.starts_with('/') || bare.starts_with("~/") || bare.starts_with("file://");
+        let path = parse_path(word);
+        (absolute && std::fs::metadata(&path).is_ok_and(|m| m.is_file())).then_some(path)
+    };
     let words = split_unescaped(text);
     if words.is_empty() || words.len() > 20 {
         return None;
     }
-    words
-        .iter()
-        .map(|word| {
-            let bare = word.trim_start_matches(['\'', '"']);
-            let absolute = bare.starts_with('/') || bare.starts_with("~/") || bare.starts_with("file://");
-            let path = parse_path(word);
-            (absolute && std::fs::metadata(&path).is_ok_and(|m| m.is_file())).then_some(path)
-        })
-        .collect()
+    // Some terminals type one path with its spaces unescaped.
+    words.iter().map(|word| file(word)).collect::<Option<Vec<_>>>().or_else(|| Some(vec![file(text.trim())?]))
 }
 
 /// Split at whitespace that isn't backslash-escaped or quoted, keeping
@@ -5779,7 +5791,9 @@ fn split_unescaped(text: &str) -> Vec<String> {
                 quote = None;
                 word.push(c);
             }
-            c if c.is_whitespace() && quote.is_none() => {
+            // Only plain spaces and line breaks: file names can hold others
+            // (macOS puts a narrow no-break space before "PM" in screenshots).
+            ' ' | '\t' | '\n' | '\r' if quote.is_none() => {
                 if !word.is_empty() {
                     words.push(std::mem::take(&mut word));
                 }
@@ -6071,6 +6085,15 @@ mod tests {
         assert_eq!(dropped_files(&format!("see {}", escaped(&a))), None, "text with a path in it is text");
         assert_eq!(dropped_files(&dir.display().to_string()), None, "folders aren't uploaded");
         assert_eq!(dropped_files("Cargo.toml"), None, "only absolute paths, as terminals drop them");
+        let shot = dir.join("Screenshot 2026-10-18 at 9.31.02\u{202f}PM.png");
+        std::fs::write(&shot, b"png").unwrap();
+        assert_eq!(dropped_files(&escaped(&shot)), Some(vec![shot.clone()]), "a narrow space isn't a separator");
+        assert_eq!(
+            dropped_files(&shot.display().to_string()),
+            Some(vec![shot.clone()]),
+            "nor are unescaped spaces in one path"
+        );
+        app_hint_for_paths(&dir);
 
         let mut app = test_app();
         let room = room_window(&mut app, "!a:x.org", "Night Owls");
@@ -6083,12 +6106,14 @@ mod tests {
         assert_eq!(app.input.text(), both, "declined: the paths stay, as text");
         app.submit();
         assert!(app.confirm_upload.is_none(), "and Enter doesn't ask again");
+        let last = &app.windows[room].lines.back().unwrap().body;
+        assert!(!last.contains("command"), "it's sent as a message, not run as a command: {last}");
 
         app.input.take();
         app.input.set_text(&escaped(&a));
         app.submit();
         assert!(app.confirm_upload.is_some(), "a typed path asks on Enter instead of running /Users…");
-        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.input.is_empty() && app.confirm_upload.is_none());
         let last = &app.windows[room].lines.back().unwrap().body;
         assert!(last.contains("not connected"), "it tried to upload: {last}");
@@ -6097,6 +6122,14 @@ mod tests {
         app.on_terminal(Event::Paste(escaped(&a)));
         assert!(app.confirm_upload.is_none(), "not outside a room");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A path that isn't a file, typed as if a command, says so.
+    fn app_hint_for_paths(dir: &std::path::Path) {
+        let mut app = test_app();
+        app.command(format!("{}/nothing.pdf", dir.display()).trim_start_matches('/'));
+        let last = &app.windows[0].lines.back().unwrap().body;
+        assert!(last.contains("isn't a command, and not a file here"), "{last}");
     }
 
     #[test]
