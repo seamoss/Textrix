@@ -138,6 +138,8 @@ pub struct Media {
     pub filename: String,
     /// Images get inline previews.
     pub is_image: bool,
+    /// Audio (and voice messages) can be played.
+    pub is_audio: bool,
     /// A sender-provided thumbnail (the only kind encrypted images have).
     pub thumbnail: Option<MediaSource>,
     pub size: Option<u64>,

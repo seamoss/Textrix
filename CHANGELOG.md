@@ -7,6 +7,23 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.3.0] - 2026-10-18
+
+### Added
+- Syntax colouring in code blocks that name their language (```` ```rust ````,
+  `python`, `shell`, TOML, TypeScript and about 200 more, or a `#!` line),
+  in colours that follow the theme: monochrome themes use shades of their
+  one colour, `mono` uses bold and dim. `[colors]` takes `code_keyword`,
+  `code_string`, `code_comment`, `code_number`, `code_function` and
+  `code_type`.
+- Voice messages show their length and waveform (`[voice] 0:12 ▁▃▅▇▅▃▁`),
+  other audio its length. `z` or Space in selection mode plays one (again
+  stops it), as do `/play [nick]` and `/play stop`. Element's Ogg Opus is
+  decoded by Textrix, so the system's own player can play it (`afplay` on
+  macOS; `pw-play`, `paplay`, `mpv`, `ffplay` or `aplay` on Linux;
+  `audio_player` picks another). The decrypted audio is in a private file
+  only while it plays.
+
 ## [0.2.0] - 2026-10-18
 
 ### Added

@@ -122,6 +122,9 @@ pub struct Config {
     pub image_previews: bool,
     /// Maximum height of an inline image, in rows.
     pub image_rows: u16,
+    /// The command that plays audio, the file on the end ("" picks the
+    /// system's own: afplay on macOS, pw-play, paplay… on Linux).
+    pub audio_player: String,
     /// Write irssi-style daily logs of what arrives while connected. They
     /// hold decrypted messages in plaintext, so this is off by default.
     pub log: bool,
@@ -192,6 +195,7 @@ impl Default for Config {
             sync: SyncMode::Auto,
             image_previews: true,
             image_rows: 10,
+            audio_player: String::new(),
             sidebar: true,
             nicklist: true,
             sidebar_avatars: true,

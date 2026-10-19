@@ -6,6 +6,7 @@
 //! tags simply contribute their text; reply fallbacks and non-content tags
 //! (scripts, styles) are dropped.
 
+use crate::highlight::{self, Syntax};
 use ruma_html::{
     Html, NodeData, NodeRef,
     matrix::{AnchorUri, MatrixElement},
@@ -24,6 +25,8 @@ pub struct Marks {
     /// Structure the renderer adds (quote bars, bullets, link targets).
     pub dim: bool,
     pub color: Option<(u8, u8, u8)>,
+    /// What a piece of a code block is, for syntax colouring.
+    pub syntax: Option<Syntax>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,7 +119,7 @@ impl Writer {
 
     fn text(&mut self, raw: &str, marks: Marks) {
         let text = if self.pre > 0 { raw.to_owned() } else { collapse_whitespace(raw) };
-        let text = if self.line_start || !self.started || self.pending_break {
+        let text = if self.pre == 0 && (self.line_start || !self.started || self.pending_break) {
             text.trim_start_matches(' ').to_owned()
         } else {
             text
@@ -230,7 +233,16 @@ impl Writer {
                 self.block_break();
                 self.pre += 1;
                 let code = node_text(node);
-                self.text(code.trim_end_matches('\n'), Marks { code: true, ..m });
+                let code = code.trim_end_matches('\n');
+                let m = Marks { code: true, ..m };
+                match highlight::highlight(code, code_language(node).as_deref()) {
+                    Some(runs) => {
+                        for (syntax, run) in runs {
+                            self.text(&run, Marks { syntax, ..m });
+                        }
+                    }
+                    None => self.text(code, m),
+                }
                 self.pre -= 1;
                 return self.block_break();
             }
@@ -292,6 +304,17 @@ fn node_text(node: &NodeRef) -> String {
         }
     }
     out
+}
+
+/// The language of a `<pre><code class="language-…">` block.
+fn code_language(pre: &NodeRef) -> Option<String> {
+    pre.children().find_map(|child| match child.data() {
+        NodeData::Element(element) => match element.to_matrix().element {
+            MatrixElement::Code(code) => code.language.map(|l| l.to_string()),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 fn collapse_whitespace(s: &str) -> String {
@@ -364,6 +387,13 @@ mod tests {
         let html = "<pre><code class=\"language-rust\">fn main() {\n    println!();\n}\n</code></pre>";
         assert_eq!(text_of(html), "  fn main() {\n      println!();\n  }");
         assert!(render(html).unwrap().iter().filter(|s| !s.text.trim().is_empty()).all(|s| s.marks.code));
+        let keyword = |s: &Span| s.marks.syntax == Some(Syntax::Keyword);
+        assert_eq!(
+            render(html).unwrap().iter().filter(|s| keyword(s)).map(|s| s.text.trim()).collect::<Vec<_>>(),
+            ["fn"]
+        );
+        let plain = "<pre><code>fn main() {}\n</code></pre>";
+        assert!(render(plain).unwrap().iter().all(|s| s.marks.syntax.is_none()), "no language, no colours");
     }
 
     #[test]

@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
+    audio,
     chatlog::ChatLog,
     compose::{Say, compose},
     config::{BellKind, BellMode, BellStyle, Config, NotifyMode, Paths},
@@ -675,6 +676,8 @@ pub struct App {
     pub help: Option<HelpView>,
     /// The full-screen image viewer.
     pub viewer: Option<Viewer>,
+    /// The audio playing, and how to stop it.
+    pub playing: Option<(OwnedEventId, tokio::task::AbortHandle)>,
     pub split: Option<Split>,
     /// Loaded scripts (~/.textrix/scripts).
     scripts: Scripts,
@@ -797,6 +800,11 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "upload", args: "<path>", help: "Send a file or image (Tab completes paths)" },
     Cmd { name: "download", args: "[nick]", help: "Save the last attachment (from nick) to Downloads" },
+    Cmd {
+        name: "play",
+        args: "[nick | stop]",
+        help: "Play the last voice message or audio (from nick); stop stops it",
+    },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
     Cmd {
         name: "search",
@@ -946,6 +954,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("p", "pin or unpin it for everyone in the room (if allowed)"),
     ("f", "forward a copy to another room (pick it like the switcher)"),
     ("z", "view the image full screen: + / - zoom, arrows move, 0 fits, Esc closes"),
+    ("z or Space", "play a voice message or audio; again stops it"),
     ("s", "save the attachment"),
     ("o", "open the link"),
     ("v", "show spoilers"),
@@ -1071,6 +1080,7 @@ impl App {
             clipboard: None,
             help: None,
             viewer: None,
+            playing: None,
             split: None,
             scripts: Scripts::new(),
             script_messages: Vec::new(),
@@ -1125,6 +1135,8 @@ impl App {
         if self.cfg.check_updates {
             self.watch_for_updates();
         }
+        // Audio left over from a crash; anything playing deletes its own.
+        let _ = std::fs::remove_dir_all(self.paths.base.join("tmp"));
         if self.cfg.scripts {
             for path in Scripts::available(&self.scripts_dir()) {
                 self.load_script(&path);
@@ -1515,6 +1527,14 @@ impl App {
                         "{account}: the server doesn't offer link previews, so links won't show page titles \
                          (Synapse: url_preview_enabled)"
                     )));
+                }
+            }
+            AppEvent::Played { event_id, result } => {
+                if self.playing.as_ref().is_some_and(|(playing, _)| *playing == event_id) {
+                    self.playing = None;
+                }
+                if let Err(e) = result {
+                    self.error(e);
                 }
             }
             AppEvent::FullImage { event_id, image } => {
@@ -3261,6 +3281,11 @@ impl App {
                     self.error(e);
                 }
             }
+            Char('z' | ' ') if line.media.as_ref().is_some_and(|m| m.is_audio) => {
+                if let Err(e) = self.play(&line) {
+                    self.error(e);
+                }
+            }
             Char('z') => {
                 if let Err(e) = self.open_viewer(&line) {
                     self.error(e);
@@ -3740,6 +3765,7 @@ impl App {
                 Ok(())
             }),
             "download" => self.cmd_download(args),
+            "play" => self.cmd_play(args),
             "join" => self.pick_account(args).and_then(|(acct, target)| {
                 let target = target.trim();
                 if target.is_empty() {
@@ -4199,6 +4225,57 @@ impl App {
         self.echo(&acct, line, &txn_id);
         self.info(format!("uploading {name} ({})", matrix::human_size(meta.len())));
         acct.upload(room_id, path, txn_id);
+        Ok(())
+    }
+
+    /// `/play [nick | stop]`: the latest audio here (from nick).
+    fn cmd_play(&mut self, args: &str) -> Result<(), String> {
+        let arg = args.trim();
+        if arg == "stop" {
+            let (_, playing) = self.playing.take().ok_or("nothing is playing")?;
+            playing.abort();
+            self.info("stopped");
+            return Ok(());
+        }
+        let nick = Some(arg).filter(|n| !n.is_empty());
+        let line = self
+            .win()
+            .lines
+            .iter()
+            .rev()
+            .find(|l| {
+                l.media.as_ref().is_some_and(|m| m.is_audio)
+                    && !l.redacted
+                    && nick.is_none_or(|n| l.nick.eq_ignore_ascii_case(n))
+            })
+            .cloned()
+            .ok_or_else(|| match nick {
+                Some(nick) => format!("no audio from {nick} here"),
+                None => "no audio here".to_owned(),
+            })?;
+        self.play(&line)
+    }
+
+    /// Play a voice message or other audio; the one already playing stops.
+    fn play(&mut self, line: &Line) -> Result<(), String> {
+        let (media, event) = match (&line.media, &line.event_id) {
+            (Some(media), Some(event)) if media.is_audio && !line.redacted => (media.clone(), event.clone()),
+            _ => return Err("that message isn't audio".into()),
+        };
+        if let Some((playing, handle)) = self.playing.take() {
+            handle.abort();
+            if playing == event {
+                self.info("stopped");
+                return Ok(());
+            }
+        }
+        let (acct, _) = self.room_ctx()?;
+        let player = audio::player(&self.cfg.audio_player)
+            .ok_or("no audio player found; set audio_player in config.toml (e.g. \"mpv --no-video\")")?;
+        let what = if line.body.starts_with("[voice]") { "voice message".to_owned() } else { media.filename.clone() };
+        let nick = self.display_name(line.sender.as_deref(), &line.nick).to_owned();
+        self.playing = Some((event.clone(), acct.play_audio(event, media, player, self.paths.base.join("tmp"))));
+        self.info(format!("playing {nick}'s {what}; /play stop stops it"));
         Ok(())
     }
 
@@ -5467,6 +5544,7 @@ mod tests {
             source: matrix_sdk::ruma::events::room::MediaSource::Plain("mxc://x/y".into()),
             filename: "notes.txt".into(),
             is_image: false,
+            is_audio: false,
             thumbnail: None,
             size: None,
         });
@@ -5887,6 +5965,29 @@ mod tests {
         app.cmd_script(r#"exec send("Night", "hi")"#).unwrap();
         let last = &app.windows[a].lines.back().unwrap().body;
         assert!(last.contains("send to Night, which isn't a room here"), "send() needs a whole name: {last}");
+    }
+
+    #[test]
+    fn play_finds_the_latest_audio() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        assert_eq!(app.cmd_play(""), Err("no audio here".into()));
+        assert_eq!(app.cmd_play("stop"), Err("nothing is playing".into()));
+        let mut voice = msg("$v", "[voice] 0:03 ▁▄█");
+        voice.nick = "sam".into();
+        voice.media = Some(Media {
+            source: matrix_sdk::ruma::events::room::MediaSource::Plain("mxc://x/v".into()),
+            filename: "Voice message.ogg".into(),
+            is_image: false,
+            is_audio: true,
+            thumbnail: None,
+            size: None,
+        });
+        app.windows[a].push(voice, 100);
+        assert_eq!(app.cmd_play("jo_bloggs"), Err("no audio from jo_bloggs here".into()));
+        // Found; with no server connected here it stops short of playing.
+        assert!(app.cmd_play("sam").unwrap_err().contains("not connected"), "found sam's");
     }
 
     #[test]

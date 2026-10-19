@@ -204,6 +204,11 @@ pub enum AppEvent {
     LinkTitlesOff {
         account: AccountName,
     },
+    /// Audio finished playing (or couldn't play).
+    Played {
+        event_id: OwnedEventId,
+        result: Result<(), String>,
+    },
     /// An image decoded for the viewer.
     FullImage {
         event_id: OwnedEventId,
@@ -1589,6 +1594,63 @@ impl Account {
             .map_err(|e| format!("{e:#}"));
             acct.notify.send(AppEvent::FullImage { event_id, image });
         });
+    }
+
+    /// Play an attachment through `player` (the file goes on the end of the
+    /// command). The decrypted audio is on disk, in a private file in `dir`,
+    /// only while it plays: aborting the task stops the player and deletes it.
+    pub fn play_audio(
+        &self,
+        event_id: OwnedEventId,
+        media: Media,
+        player: Vec<String>,
+        dir: PathBuf,
+    ) -> tokio::task::AbortHandle {
+        const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                if media.size.is_some_and(|s| s > MAX_DOWNLOAD) {
+                    bail!("{} is over 50 MB", media.filename);
+                }
+                let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
+                let data = acct.client.media().get_media_content(&request, true).await?;
+                let (data, ext) = if crate::audio::is_ogg_opus(&data) {
+                    let wav = tokio::task::spawn_blocking(move || crate::audio::ogg_opus_to_wav(&data)).await??;
+                    (wav, "wav".to_owned())
+                } else {
+                    // Players go by the extension.
+                    let ext = media.filename.rsplit_once('.').map(|(_, ext)| ext.to_lowercase());
+                    let ext = ext.filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()));
+                    (data, ext.unwrap_or_else(|| "audio".to_owned()))
+                };
+                create_private_dir(&dir)?;
+                let stamp =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+                let file = crate::audio::TempFile(dir.join(format!("play-{stamp}.{ext}")));
+                use std::io::Write;
+                create_private_file(&file.0)?.write_all(&data)?;
+                let (program, args) = player.split_first().context("no audio player")?;
+                let status = tokio::process::Command::new(program)
+                    .args(args)
+                    .arg(&file.0)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .status()
+                    .await
+                    .with_context(|| format!("running {program}"))?;
+                if !status.success() {
+                    bail!("{program} couldn't play {} ({status})", media.filename);
+                }
+                anyhow::Ok(())
+            }
+            .await
+            .map_err(|e| format!("{e:#}"));
+            acct.notify.send(AppEvent::Played { event_id, result });
+        })
+        .abort_handle()
     }
 
     /// A link's page title (and site), from the homeserver's preview of it.

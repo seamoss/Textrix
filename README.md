@@ -104,7 +104,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
@@ -186,7 +186,9 @@ Formatted messages render as styled text: bold, italic, strikethrough,
 inline code and code blocks, quotes (`▎`), bullet and numbered lists,
 headings, coloured text, links (with the address when the text differs),
 mention pills, and spoilers (hidden until you press `v` in selection mode).
-What you send is Markdown (`markdown = true`) and shows formatted right away.
+Code blocks are syntax-coloured when they say their language (```` ```rust ````,
+or a `#!` line), in colours that follow the theme: a monochrome theme
+uses shades of its one colour. What you send is Markdown (`markdown = true`) and shows formatted right away.
 Emoji shortcodes (`:fire:`, `:+1:`, GitHub/Slack names) turn into emoji when
 you send, react or edit, except inside backticks; `:thu` + Tab completes
 them, showing which shortcode you're on as you cycle.
@@ -246,6 +248,17 @@ written to disk. `+`/`-` or the mouse wheel zoom (up to 16×), the arrow
 keys (or `hjkl`) move around, `0` fits it again, and Esc closes. With
 kitty, iTerm2 or sixel graphics it's sharp; with half-blocks, zooming in is
 how you see the detail.
+
+### Voice messages
+
+Voice messages show their length and waveform, `[voice] 0:12 ▁▃▅▇▅▃▁`, and
+other audio its length. `z` (or Space) on one in selection mode plays it,
+and again stops it; `/play [nick]` plays the latest here, `/play stop`
+stops. The status bar shows `▶ playing` meanwhile. Textrix fetches and
+decrypts it, decodes Element's Ogg Opus itself, and hands it to the
+system's player (`afplay` on macOS; `pw-play`, `paplay`, `mpv`, `ffplay`
+or `aplay` on Linux, or whatever `audio_player` says) from a private file
+that's deleted as soon as it stops.
 
 ### Reading state
 
@@ -325,7 +338,9 @@ nicks = "red, 214, #00aa88, blue"   # the colours nicks are picked from
 The keys: `bar_fg`, `bar_bg`, `bar_accent`, `bar_alert` (the topic and
 status bars), `pane_fg`, `pane_bg` (unfocused split panes), `dim`,
 `accent`, `frame`, `own_nick`, `highlight`, `highlight_text`, `error`,
-`divider`, `link`, `mention`, `code`, `badge` (reply counts), `pinned`,
+`divider`, `link`, `mention`, `code`, `code_comment`, `code_keyword`,
+`code_string`, `code_number`, `code_function`, `code_type` (syntax colours
+in code blocks), `badge` (reply counts), `pinned`,
 `receipts`, `matched`, `current_fg`, `current_bg`, `shown`, `inactive`,
 `activity_event`, `activity` (the window list), `op`, `voice`, `online`,
 `away`, `offline` (the member list), and `nicks`. A typo stops Textrix
@@ -378,6 +393,7 @@ log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
+audio_player = ""          # e.g. "mpv --no-video"; "" uses the system's player
 sidebar = true             # window list (F2)
 sidebar_avatars = true     # room avatars there (coloured initials without graphics)
 nicklist = true            # member list (F3)

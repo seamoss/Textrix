@@ -1,12 +1,14 @@
 //! Textrix: an irssi-style terminal client for Matrix.
 
 mod app;
+mod audio;
 mod chatlog;
 mod compose;
 mod config;
 mod convert;
 mod eggs;
 mod emoji;
+mod highlight;
 mod input;
 mod links;
 mod matrix;
@@ -173,6 +175,7 @@ async fn run() -> Result<()> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let previews = cfg.image_previews;
     let mouse = cfg.mouse;
+    highlight::warm_up();
     let mut app = App::new(cfg, paths, env, servers, tx);
 
     let mut terminal = ratatui::init();

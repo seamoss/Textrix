@@ -12,7 +12,7 @@ use matrix_sdk::{
             AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent, SyncMessageLikeEvent, SyncStateEvent,
             room::{
                 member::MembershipChange,
-                message::{MessageFormat, MessageType, Relation},
+                message::{AudioMessageEventContent, MessageFormat, MessageType, Relation},
                 redaction::SyncRoomRedactionEvent,
             },
         },
@@ -258,7 +258,7 @@ fn render_msgtype(msgtype: &MessageType) -> (LineKind, String) {
         MessageType::ServerNotice(c) => (LineKind::Notice, c.body.clone()),
         MessageType::Image(c) => (LineKind::Message, attachment("image", c.filename.as_deref(), &c.body)),
         MessageType::Video(c) => (LineKind::Message, attachment("video", c.filename.as_deref(), &c.body)),
-        MessageType::Audio(c) => (LineKind::Message, attachment("audio", c.filename.as_deref(), &c.body)),
+        MessageType::Audio(c) => (LineKind::Message, audio_text(c)),
         MessageType::File(c) => (LineKind::Message, attachment("file", c.filename.as_deref(), &c.body)),
         MessageType::Location(c) => (LineKind::Message, format!("[location] {} ({})", c.body, c.geo_uri)),
         MessageType::VerificationRequest(_) => (LineKind::Event, "requested key verification".into()),
@@ -272,6 +272,23 @@ pub fn attachment(kind: &str, filename: Option<&str>, body: &str) -> String {
     match filename {
         Some(name) if name != body => format!("[{kind}] {name} — {body}"),
         _ => format!("[{kind}] {body}"),
+    }
+}
+
+/// `[voice] 0:12 ▁▃▅▇▅▃▁` for a voice message, `[audio] song.mp3 (3:05)`
+/// for other audio.
+fn audio_text(c: &AudioMessageEventContent) -> String {
+    let length = c.audio.as_ref().map(|a| a.duration).or_else(|| c.info.as_ref()?.duration);
+    if c.voice.is_some() {
+        let amplitudes: Vec<u64> =
+            c.audio.iter().flat_map(|a| &a.waveform).map(|amplitude| u64::from(amplitude.get())).collect();
+        let parts = [length.map(crate::audio::duration).unwrap_or_default(), crate::audio::waveform(&amplitudes, 24)];
+        return format!("[voice] {}", parts.join(" ").trim()).trim_end().to_owned();
+    }
+    let text = attachment("audio", c.filename.as_deref(), &c.body);
+    match length {
+        Some(length) if !length.is_zero() => format!("{text} ({})", crate::audio::duration(length)),
+        _ => text,
     }
 }
 
@@ -294,6 +311,7 @@ fn media_of(msgtype: &MessageType) -> Option<Media> {
         source: source.clone(),
         filename: filename.clone().unwrap_or_else(|| body.clone()),
         is_image,
+        is_audio: matches!(msgtype, MessageType::Audio(_)),
         thumbnail,
         size,
     })
@@ -322,6 +340,34 @@ pub fn to_local(ts: MilliSecondsSinceUnixEpoch) -> DateTime<Local> {
 #[cfg(test)]
 mod tests {
     use super::strip_reply_fallback;
+
+    #[test]
+    fn voice_messages_show_length_and_waveform() {
+        use std::time::Duration;
+
+        use matrix_sdk::ruma::events::room::{
+            MediaSource,
+            message::{
+                AudioInfo, AudioMessageEventContent, MessageType, UnstableAmplitude, UnstableAudioDetailsContentBlock,
+                UnstableVoiceContentBlock,
+            },
+        };
+        let source = MediaSource::Plain("mxc://x.org/a".into());
+        let mut voice = AudioMessageEventContent::new("Voice message".into(), source.clone());
+        let waveform = [0, 256, 512, 1024, 512, 256, 0].map(UnstableAmplitude::new).to_vec();
+        voice.audio = Some(UnstableAudioDetailsContentBlock::new(Duration::from_millis(11_600), waveform));
+        voice.voice = Some(UnstableVoiceContentBlock::new());
+        let (_, text) = super::render_msgtype(&MessageType::Audio(voice));
+        assert_eq!(text, "[voice] 0:12 ▁▂▄█▄▂▁");
+        let media = super::media_of(&MessageType::Audio(AudioMessageEventContent::new("x".into(), source.clone())));
+        assert!(media.is_some_and(|m| m.is_audio && !m.is_image));
+
+        let mut song = AudioMessageEventContent::new("song.mp3".into(), source);
+        let mut info = AudioInfo::new();
+        info.duration = Some(Duration::from_secs(185));
+        song.info = Some(Box::new(info));
+        assert_eq!(super::render_msgtype(&MessageType::Audio(song)).1, "[audio] song.mp3 (3:05)");
+    }
 
     #[test]
     fn shrugs_from_element_get_their_arm_back() {

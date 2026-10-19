@@ -4,6 +4,8 @@
 use std::{collections::BTreeMap, str::FromStr};
 
 use anyhow::{Result, bail};
+
+use crate::highlight::Syntax;
 use ratatui::{
     style::{Color, Modifier, Style},
     widgets::BorderType,
@@ -116,6 +118,8 @@ pub struct Theme {
     pub link: Style,
     pub mention: Style,
     pub code: Style,
+    /// Syntax colours in code blocks, by [`Syntax`] (laid over `code`).
+    pub syntax: [Style; 6],
     /// "[N replies]".
     pub badge: Style,
     pub pinned: Style,
@@ -200,6 +204,14 @@ impl Default for Theme {
             link: Style::new().fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
             mention: Style::new().fg(Color::LightBlue).add_modifier(bold),
             code: Style::new().fg(Color::LightYellow),
+            syntax: syntax_styles(|kind| match kind {
+                Syntax::Comment => Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Syntax::Keyword => Style::new().fg(Color::LightMagenta),
+                Syntax::String => Style::new().fg(Color::LightGreen),
+                Syntax::Number => Style::new().fg(Color::LightRed),
+                Syntax::Function => Style::new().fg(Color::LightBlue),
+                Syntax::Type => Style::new().fg(Color::LightCyan),
+            }),
             badge: Style::new().fg(Color::Cyan),
             pinned: Style::new().fg(Color::Yellow),
             receipts: Style::new().fg(Color::Green).add_modifier(Modifier::DIM),
@@ -232,6 +244,11 @@ impl Default for Theme {
             border_focus: Style::new().fg(Color::Cyan),
         }
     }
+}
+
+/// A style for each kind of code, in [`Syntax::ALL`] order.
+fn syntax_styles(style: impl Fn(Syntax) -> Style) -> [Style; 6] {
+    Syntax::ALL.map(style)
 }
 
 impl Theme {
@@ -267,6 +284,14 @@ impl Theme {
             highlight_text: Style::new().fg(Color::Indexed(130)),
             mention: Style::new().fg(Color::Blue).add_modifier(bold),
             code: Style::new().fg(Color::Indexed(125)),
+            syntax: syntax_styles(|kind| match kind {
+                Syntax::Comment => Style::new().fg(Color::Indexed(244)).add_modifier(Modifier::ITALIC),
+                Syntax::Keyword => Style::new().fg(Color::Indexed(90)),
+                Syntax::String => Style::new().fg(Color::Indexed(28)),
+                Syntax::Number => Style::new().fg(Color::Indexed(124)),
+                Syntax::Function => Style::new().fg(Color::Indexed(25)),
+                Syntax::Type => Style::new().fg(Color::Indexed(30)),
+            }),
             pinned: Style::new().fg(Color::Indexed(130)),
             receipts: Style::new().fg(Color::Indexed(28)),
             matched: Style::new().fg(Color::Indexed(130)).add_modifier(bold),
@@ -310,6 +335,11 @@ impl Theme {
             link: plain.add_modifier(Modifier::UNDERLINED),
             mention: bold,
             code: plain.add_modifier(Modifier::ITALIC),
+            syntax: syntax_styles(|kind| match kind {
+                Syntax::Comment => plain.add_modifier(Modifier::DIM),
+                Syntax::Keyword => bold,
+                _ => plain,
+            }),
             badge: plain,
             pinned: plain,
             receipts: plain.add_modifier(Modifier::DIM),
@@ -363,6 +393,14 @@ impl Theme {
             link: g.add_modifier(Modifier::UNDERLINED),
             mention: Style::new().fg(hot).add_modifier(bold),
             code: Style::new().fg(Color::Indexed(hue.code)),
+            // Shades of the one colour: brighter for what matters.
+            syntax: syntax_styles(|kind| match kind {
+                Syntax::Comment => Style::new().fg(dim).add_modifier(Modifier::ITALIC),
+                Syntax::Keyword => g.add_modifier(bold),
+                Syntax::String => Style::new().fg(mid),
+                Syntax::Number | Syntax::Type => Style::new().fg(hot),
+                Syntax::Function => g,
+            }),
             badge: Style::new().fg(dim),
             pinned: g,
             receipts: Style::new().fg(dim),
@@ -425,6 +463,10 @@ impl Theme {
             "link" => self.link = self.link.fg(c),
             "mention" => self.mention = self.mention.fg(c),
             "code" => self.code = self.code.fg(c),
+            _ if let Some(kind) = Syntax::ALL.into_iter().find(|k| key.strip_prefix("code_") == Some(k.name())) => {
+                let style = &mut self.syntax[kind as usize];
+                *style = style.fg(c);
+            }
             "badge" => self.badge = self.badge.fg(c),
             "pinned" => self.pinned = self.pinned.fg(c),
             "receipts" => self.receipts = self.receipts.fg(c),
@@ -470,6 +512,12 @@ const KEYS: &[&str] = &[
     "link",
     "mention",
     "code",
+    "code_comment",
+    "code_keyword",
+    "code_string",
+    "code_number",
+    "code_function",
+    "code_type",
     "badge",
     "pinned",
     "receipts",
@@ -498,6 +546,7 @@ mod tests {
             ("bar_bg".to_owned(), "#202040".to_owned()),
             ("link".to_owned(), "lightcyan".to_owned()),
             ("nicks".to_owned(), "red, 214 ,#00ff00".to_owned()),
+            ("code_keyword".to_owned(), "214".to_owned()),
         ]);
         let theme = Theme::build(ThemeName::Default, &colors).unwrap();
         assert_eq!(theme.bar.bg, Some(Color::Rgb(0x20, 0x20, 0x40)));
@@ -505,6 +554,8 @@ mod tests {
         assert_eq!(theme.link.fg, Some(Color::LightCyan));
         assert!(theme.link.add_modifier.contains(Modifier::UNDERLINED), "attributes are kept");
         assert_eq!(theme.nicks, [Color::Red, Color::Indexed(214), Color::Rgb(0, 255, 0)]);
+        assert_eq!(theme.syntax[Syntax::Keyword as usize].fg, Some(Color::Indexed(214)));
+        assert_eq!(theme.syntax[Syntax::String as usize], Theme::default().syntax[Syntax::String as usize]);
 
         let typo = BTreeMap::from([("lnk".to_owned(), "red".to_owned())]);
         assert!(Theme::build(ThemeName::Default, &typo).unwrap_err().to_string().contains("link"));
@@ -542,6 +593,11 @@ mod tests {
             let theme = Theme::build(name, &BTreeMap::new()).unwrap();
             assert_eq!(theme.base, Style::new().fg(Color::Indexed(bright)).bg(Color::Black));
             assert!(!theme.message_colors, "senders' colours would break the look");
+            let hue = [GREEN, BLUE, RED].into_iter().find(|h| h.shades[0] == bright).unwrap();
+            for style in theme.syntax {
+                let Some(Color::Indexed(n)) = style.fg else { panic!("{style:?}") };
+                assert!(hue.shades.contains(&n) || n == hue.hot, "{text}: code in {n} isn't one of its shades");
+            }
         }
     }
 
@@ -569,7 +625,9 @@ mod tests {
     #[test]
     fn mono_uses_no_colours() {
         let theme = Theme::build(ThemeName::Mono, &BTreeMap::new()).unwrap();
-        for style in [theme.bar, theme.highlight, theme.link, theme.current, theme.activity] {
+        for style in
+            [theme.bar, theme.highlight, theme.link, theme.current, theme.activity].into_iter().chain(theme.syntax)
+        {
             assert!(style.fg.is_none() && style.bg.is_none());
         }
         assert_eq!(theme.nick_color("@a:x.org"), Color::Reset);

@@ -1104,6 +1104,9 @@ fn rich_style(t: &Theme, base: Style, marks: Marks, highlight: bool) -> Style {
     }
     if marks.code {
         style = style.patch(t.code);
+        if let Some(kind) = marks.syntax {
+            style = style.patch(t.syntax[kind as usize]);
+        }
     }
     if marks.link {
         style = style.patch(t.link);
@@ -1239,6 +1242,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
     }
 
+    if app.playing.is_some() {
+        item(&mut spans, vec![Span::styled("▶ playing", t.bar.add_modifier(Modifier::BOLD))]);
+    }
+
     for (name, state) in &app.accounts {
         if state.away.is_some() {
             item(&mut spans, vec![Span::styled(format!("{name}: away"), t.bar_alert)]);
@@ -1271,7 +1278,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     } else if app.select.is_some() && win.is_mentions {
         item(&mut spans, vec![Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert)]);
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom/play  s save  o open  v spoiler  c copy  i info  Esc";
         item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
     } else if app.is_editing() {
         let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
@@ -1356,6 +1363,16 @@ mod tests {
 
     fn text(rows: &[TLine]) -> Vec<String> {
         rows.iter().map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn code_takes_the_themes_syntax_colours() {
+        use crate::{highlight::Syntax, richtext::Marks};
+        let t = Theme::default();
+        let keyword = Marks { code: true, syntax: Some(Syntax::Keyword), ..Marks::default() };
+        assert_eq!(rich_style(&t, Style::new(), keyword, false).fg, t.syntax[Syntax::Keyword as usize].fg);
+        let plain = Marks { code: true, ..Marks::default() };
+        assert_eq!(rich_style(&t, Style::new(), plain, false).fg, t.code.fg);
     }
 
     #[test]
