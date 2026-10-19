@@ -13,6 +13,7 @@ mod matrix;
 mod model;
 mod notify;
 mod richtext;
+mod script;
 mod servers;
 mod switcher;
 mod theme;

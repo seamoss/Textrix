@@ -1,6 +1,6 @@
 [package]
 name = "textrix"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 description = "An irssi-style terminal client for Matrix"
@@ -43,6 +43,8 @@ ruma-events = { version = "0.35", features = ["html"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4.6"
 clap_mangen = "0.3"
+rhai = "1.26"
+regex = "1.13.1"
 
 [profile.release]
 # Whole-program optimisation: about a third smaller (66 → 43 MB), slower to

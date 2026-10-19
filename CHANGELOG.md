@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.2.0] - 2026-10-18
+
+### Added
+- Scripts, irssi-style, in [Rhai](https://rhai.rs): every `.rhai` file in
+  `~/.textrix/scripts/` loads at startup and can add commands (`command`)
+  and react to new messages (`on_message`) by printing, saying, sending to
+  other rooms, running commands, ringing the bell or notifying.
+  `/script` lists, loads, unloads and reloads them; `/script exec` runs a
+  line once. Scripts are sandboxed (no files, network or programs, and
+  long-running code is stopped), can send at most 5 things in 10 seconds,
+  and never hear your own messages. `scripts = false` stops them loading.
+  [SCRIPTING.md](https://github.com/seamoss/Textrix/blob/master/SCRIPTING.md) has the API, and `examples/scripts` has
+  `/shout`, `/roll` dice, `/seen` and watch words.
+
 ## [0.1.4] - 2026-10-18
 
 ### Added

@@ -162,6 +162,7 @@ bindings.
 | Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
+| Scripts | `/script` lists them, `/script load\|unload\|reload <name>`, `/script exec <code>`; see [Scripts](#scripts) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
@@ -330,6 +331,26 @@ status bars), `pane_fg`, `pane_bg` (unfocused split panes), `dim`,
 `away`, `offline` (the member list), and `nicks`. A typo stops Textrix
 with the list of keys rather than being ignored.
 
+### Scripts
+
+Like irssi's Perl scripts, but in [Rhai](https://rhai.rs): each `.rhai`
+file in `~/.textrix/scripts/` loads at startup and can add commands and
+react to messages.
+
+```rhai
+command("shout", "Say it in capitals", |args, ctx| say(args.to_upper() + "!"));
+
+on_message(|msg| {
+    if matches(msg.body, "(?i)\\bpizza\\b") { bell(); }
+});
+```
+
+Scripts are sandboxed (no files, network or programs, and a runaway loop
+is stopped) and rate-limited to 5 messages per 10 seconds.
+[SCRIPTING.md](SCRIPTING.md) has the whole API, and
+[examples/scripts](examples/scripts) has dice, `/seen` and watch words to
+start from.
+
 ## Optional preferences
 
 `~/.textrix/config.toml` holds your preferences (all keys optional).
@@ -367,6 +388,7 @@ title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it 
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
 check_updates = false      # once a day, ask GitHub whether a newer release is out
+scripts = true             # load ~/.textrix/scripts/*.rhai at startup
 scrollback = 5000
 history_page = 50
 completion_char = ":"

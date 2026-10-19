@@ -50,6 +50,7 @@ use crate::{
         SpaceInfo, ago,
     },
     notify,
+    script::{self, Scripts},
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
     theme::{Theme, ThemeName},
@@ -675,6 +676,10 @@ pub struct App {
     /// The full-screen image viewer.
     pub viewer: Option<Viewer>,
     pub split: Option<Split>,
+    /// Loaded scripts (~/.textrix/scripts).
+    scripts: Scripts,
+    /// Messages to hand to scripts after this event.
+    script_messages: Vec<(WinKey, Line)>,
     /// Servers whose connection dropped, and since when (netsplits).
     splits: HashMap<String, Instant>,
     /// People whose away status you've been told about (irssi's "is
@@ -887,6 +892,11 @@ const COMMANDS: &[Cmd] = &[
         help: "List your sessions, rename one, or sign one out (asks to confirm)",
     },
     Cmd { name: "version", args: "[check]", help: "Show the version; check asks GitHub for a newer one" },
+    Cmd {
+        name: "script",
+        args: "[list|load <name>|unload <name>|reload [name]|exec <code>]",
+        help: "Manage scripts (.rhai files in ~/.textrix/scripts)",
+    },
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
@@ -1062,6 +1072,8 @@ impl App {
             help: None,
             viewer: None,
             split: None,
+            scripts: Scripts::new(),
+            script_messages: Vec::new(),
             splits: HashMap::new(),
             away_noted: HashMap::new(),
             mention_origins: HashMap::new(),
@@ -1113,6 +1125,176 @@ impl App {
         if self.cfg.check_updates {
             self.watch_for_updates();
         }
+        if self.cfg.scripts {
+            for path in Scripts::available(&self.scripts_dir()) {
+                self.load_script(&path);
+            }
+        }
+    }
+
+    fn scripts_dir(&self) -> PathBuf {
+        self.paths.base.join("scripts")
+    }
+
+    fn load_script(&mut self, path: &Path) {
+        match self.scripts.load_file(path) {
+            Ok(effects) => {
+                let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                self.status(Line::info(format!("script {name} loaded")));
+                self.apply_effects(effects, None);
+            }
+            Err(e) => self.status(Line::error(format!("script {e}"))),
+        }
+    }
+
+    /// The room a script is working in, for its handlers.
+    fn script_context(&self, key: Option<&WinKey>) -> script::Context {
+        let idx = key.and_then(|k| self.windows.iter().position(|w| w.room.as_ref() == Some(k)));
+        let w = &self.windows[idx.unwrap_or(self.active)];
+        script::Context {
+            server: w.account().unwrap_or_default().to_owned(),
+            room: w.title().to_owned(),
+            room_id: w.room.as_ref().map(|k| k.room_id.to_string()).unwrap_or_default(),
+        }
+    }
+
+    /// Send text to a room's window (echoed when it's the one you're in).
+    fn send_text_to(&mut self, key: WinKey, text: &str) {
+        if self.win().room.as_ref() == Some(&key) {
+            return self.say(text, Say::Text);
+        }
+        match self.connected(&key.account) {
+            Some(acct) => {
+                acct.send(key.room_id, compose(text, Say::Text, &[], self.cfg.markdown), TransactionId::new())
+            }
+            None => self.error(format!("{} is not connected", key.account)),
+        }
+    }
+
+    /// Carry out what a script asked for, in the room it was working in
+    /// (`None`: the window you're in).
+    fn apply_effects(&mut self, effects: Vec<script::Effect>, room: Option<WinKey>) {
+        let idx = room
+            .as_ref()
+            .and_then(|k| self.windows.iter().position(|w| w.room.as_ref() == Some(k)))
+            .unwrap_or(self.active);
+        let cap = self.cfg.scrollback;
+        for effect in effects {
+            match effect {
+                script::Effect::Print(text) => {
+                    self.windows[idx].push(Line::info(text), cap);
+                }
+                script::Effect::Say(text) => match self.windows[idx].room.clone() {
+                    Some(key) => self.send_text_to(key, &text),
+                    None => self.error("a script tried to say something outside a room"),
+                },
+                script::Effect::SendTo { room, text } => {
+                    if room.starts_with(['!', '#', '@']) {
+                        let account = self.windows[idx].account().map(ToOwned::to_owned);
+                        match account.and_then(|a| self.connected(&a)) {
+                            Some(acct) => acct.send_to(room, compose(&text, Say::Text, &[], self.cfg.markdown)),
+                            None => self.error("a script's send() needs a connected server"),
+                        }
+                    } else {
+                        // Exact names only: a partial match could send to the wrong room.
+                        let wanted = room.to_lowercase();
+                        let found = self.windows.iter().find(|w| w.names().any(|n| n.to_lowercase() == wanted));
+                        match found.and_then(|w| w.room.clone()) {
+                            Some(key) => self.send_text_to(key, &text),
+                            None => self.error(format!("a script tried to send to {room}, which isn't a room here")),
+                        }
+                    }
+                }
+                script::Effect::Run(command) => {
+                    if self.alias_depth >= 8 {
+                        self.error("scripts and aliases call each other too deeply");
+                        continue;
+                    }
+                    self.alias_depth += 1;
+                    self.command(command.trim_start_matches('/'));
+                    self.alias_depth -= 1;
+                }
+                script::Effect::Bell => self.ring(BellKind::Mentions),
+                script::Effect::Notify { title, body } => {
+                    if self.notify_mode != NotifyMode::Off {
+                        self.notifications.push((title, body));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hand new messages from others to the scripts' hooks.
+    fn run_message_scripts(&mut self) {
+        for (key, line) in std::mem::take(&mut self.script_messages) {
+            let context = self.script_context(Some(&key));
+            let dm = self.window_idx(&key.account, &key.room_id).is_some_and(|i| self.windows[i].is_dm);
+            let message = script::Message {
+                context,
+                sender: line.sender.as_ref().map(ToString::to_string).unwrap_or_default(),
+                nick: self.display_name(line.sender.as_deref(), &line.nick).to_owned(),
+                body: line.text(),
+                highlight: line.highlight,
+                dm,
+            };
+            let (effects, errors) = self.scripts.on_message(&message);
+            for e in errors {
+                self.status(Line::error(format!("script {e}")));
+            }
+            self.apply_effects(effects, Some(key));
+        }
+    }
+
+    /// `/script [list|load <name>|unload <name>|reload [name]|exec <code>]`.
+    fn cmd_script(&mut self, args: &str) -> Result<(), String> {
+        let (sub, rest) = split_first(args.trim());
+        let rest = rest.trim();
+        match sub {
+            "" | "list" => {
+                let scripts = self.scripts.list();
+                if scripts.is_empty() {
+                    self.info(format!("no scripts loaded; put .rhai files in {}", self.scripts_dir().display()));
+                }
+                for (name, path, commands, hooks) in scripts {
+                    let commands: Vec<String> = commands.iter().map(|c| format!("/{c}")).collect();
+                    let commands = if commands.is_empty() { "no commands".to_owned() } else { commands.join(" ") };
+                    let hooks = if hooks > 0 { format!(", {hooks} message hook(s)") } else { String::new() };
+                    let from = path.map(|p| format!(" ({})", p.display())).unwrap_or_default();
+                    self.info(format!("  {name}: {commands}{hooks}{from}"));
+                }
+            }
+            "load" if !rest.is_empty() => {
+                let path = if rest.contains('/') || rest.ends_with(".rhai") {
+                    parse_path(rest)
+                } else {
+                    self.scripts_dir().join(format!("{rest}.rhai"))
+                };
+                self.load_script(&path);
+            }
+            "unload" if !rest.is_empty() => {
+                if !self.scripts.unload(rest) {
+                    return Err(format!("no script {rest} loaded"));
+                }
+                self.info(format!("script {rest} unloaded"));
+            }
+            "reload" => {
+                let paths: Vec<PathBuf> = if rest.is_empty() {
+                    Scripts::available(&self.scripts_dir())
+                } else {
+                    vec![self.scripts.path_of(rest).ok_or_else(|| format!("no script {rest} loaded from a file"))?]
+                };
+                for path in paths {
+                    self.load_script(&path);
+                }
+            }
+            "exec" if !rest.is_empty() => {
+                let effects = self.scripts.exec(rest).map_err(|e| format!("script: {e}"))?;
+                let here = self.win().room.clone();
+                self.apply_effects(effects, here);
+            }
+            _ => return Err("usage: /script [list | load <name> | unload <name> | reload [name] | exec <code>]".into()),
+        }
+        Ok(())
     }
 
     /// `check_updates`: once a day (remembered across restarts), ask GitHub
@@ -1799,6 +1981,12 @@ impl App {
             if is_mention(&line) {
                 mentions.push(line.clone());
             }
+            if live && !line.own && line.is_message() && !line.redacted {
+                let key = self.windows[idx].room.clone().map(|k| WinKey { thread: None, ..k });
+                if let Some(key) = key {
+                    self.script_messages.push((key, line.clone()));
+                }
+            }
             let w = &mut self.windows[idx];
             if w.scroll > 0 {
                 w.scroll += ui::line_height(&line, width, &self.cfg);
@@ -1853,6 +2041,7 @@ impl App {
         if ring {
             self.ring(BellKind::Mentions);
         }
+        self.run_message_scripts();
     }
 
     /// Ring the bell for `kind`, as `bell`, `bell_style` and `bell_for` say.
@@ -3281,6 +3470,11 @@ impl App {
             (Some(_), Some(_)) => None,
             (Some(cmd), None) => Some(format!(" {} — {}", cmd.args, cmd.help)),
             (None, _) if let Some(expansion) = self.cfg.aliases.get(&word) => Some(format!("  → {expansion}")),
+            (None, _)
+                if let Some((_, help, script)) = self.scripts.commands().into_iter().find(|(n, _, _)| *n == word) =>
+            {
+                Some(format!("  {help} ({script}.rhai)"))
+            }
             (None, None) => {
                 let names: Vec<&str> =
                     COMMANDS.iter().map(|c| c.name).filter(|n| n.starts_with(word.as_str())).collect();
@@ -3314,12 +3508,14 @@ impl App {
         let lower = word.to_lowercase();
 
         if at_start && let Some(prefix) = lower.strip_prefix('/') {
+            let script_names: Vec<String> = self.scripts.commands().into_iter().map(|(n, _, _)| n).collect();
             let mut names: Vec<&str> = COMMANDS
                 .iter()
                 .map(|c| c.name)
                 .chain(ALIASES.iter().map(|a| a.0))
                 .chain(["wc", "wl"])
                 .chain(self.cfg.aliases.keys().map(String::as_str))
+                .chain(script_names.iter().map(String::as_str))
                 .collect();
             names.sort_unstable();
             return names
@@ -3483,6 +3679,7 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "script" => self.cmd_script(args),
             "version" => {
                 self.info(format!("Textrix {}", env!("CARGO_PKG_VERSION")));
                 match args.trim() {
@@ -3698,8 +3895,18 @@ impl App {
                 Some(template) => self.run_alias(&template, args),
                 None => {
                     let other = other.to_owned();
-                    self.egg_command(&other, args)
-                        .unwrap_or_else(|| Err(format!("unknown command /{other}; try /help")))
+                    let here = self.win().room.clone();
+                    let context = self.script_context(here.as_ref());
+                    match self.scripts.run_command(&other, args, &context) {
+                        Some(Ok(effects)) => {
+                            self.apply_effects(effects, here);
+                            Ok(())
+                        }
+                        Some(Err(e)) => Err(format!("script {e}")),
+                        None => self
+                            .egg_command(&other, args)
+                            .unwrap_or_else(|| Err(format!("unknown command /{other}; try /help"))),
+                    }
                 }
             },
         };
@@ -4948,6 +5155,13 @@ impl App {
                     self.info(format!("  {key:<34} {what}"));
                 }
             }
+            let scripted = self.scripts.commands();
+            if !scripted.is_empty() {
+                self.info("Script commands:");
+                for (name, help, script) in scripted {
+                    self.info(format!("  /{name:<10} {help} ({script}.rhai)"));
+                }
+            }
             self.info("F1 shows all of this full-screen, with a filter");
             return;
         }
@@ -5634,6 +5848,45 @@ mod tests {
         assert!(over.starts_with("Netsplit over after 0s, joins: Night Owls, Book Club"), "{over}");
         assert_eq!(short_duration(Duration::from_secs(133)), "2m 13s");
         assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
+    }
+
+    #[test]
+    fn scripts_add_commands_and_react_to_messages() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let source = r#"
+            command("shout", "Say it louder", |args, ctx| print(args.to_upper() + " in " + ctx.room));
+            command("join", "Can't replace built-ins", |args, ctx| print("hijacked"));
+            on_message(|msg| if msg.body.contains("ping") { print("pong for " + msg.nick); bell(); });
+        "#;
+        app.scripts.load("demo", None, source).unwrap();
+        app.command("shout hello");
+        assert_eq!(app.windows[a].lines.back().unwrap().body, "HELLO in Night Owls");
+        app.command("join #x:y.org");
+        assert!(!app.windows[a].lines.iter().any(|l| l.body == "hijacked"), "built-ins win");
+
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let mut line = msg("$9", "anyone? ping");
+        (line.nick, line.sender) = ("sam".into(), Some("@sam:x.org".try_into().unwrap()));
+        app.on_timeline("t", &room, vec![Item::Line(line)], true);
+        assert_eq!(app.windows[a].lines.back().unwrap().body, "pong for sam");
+        assert!(app.bell);
+
+        let mut own = msg("$10", "ping myself");
+        own.own = true;
+        app.on_timeline("t", &room, vec![Item::Line(own)], true);
+        assert_ne!(app.windows[a].lines.back().unwrap().body, "pong for sam", "scripts don't hear your own messages");
+
+        app.input.set_text("/sho");
+        assert_eq!(app.candidates()[0].text, "/shout ");
+        app.input.set_text("/shout");
+        assert!(app.input_hint().unwrap().contains("Say it louder (demo.rhai)"));
+        app.cmd_script("exec 6 * 7").unwrap();
+        assert_eq!(app.windows[a].lines.back().unwrap().body, "42");
+        app.cmd_script(r#"exec send("Night", "hi")"#).unwrap();
+        let last = &app.windows[a].lines.back().unwrap().body;
+        assert!(last.contains("send to Night, which isn't a room here"), "send() needs a whole name: {last}");
     }
 
     #[test]
