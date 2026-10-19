@@ -45,6 +45,8 @@ pub struct Hits {
     pub input: Option<(Rect, u16, usize)>,
     /// The quick switcher's box, and its rows: (row, entry index).
     pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// The theme picker's box, and its rows: (row, theme index).
+    pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// Split panes as drawn, in order: (their whole area, their place in
     /// the split's panes).
     pub splits: Vec<(Rect, usize)>,
@@ -101,6 +103,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.switcher.is_some() {
         app.hits.switcher = Some(draw_switcher(f, app));
     }
+    app.hits.theme_picker = app.theme_picker.is_some().then(|| draw_theme_picker(f, app));
     if app.viewer.is_some() {
         draw_viewer(f, app);
     }
@@ -144,6 +147,7 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     let height = (entries.len().clamp(1, 12) as u16 + 3).min(screen.height.saturating_sub(2));
     let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
     let block = Block::bordered()
+        .style(t.base)
         .border_style(t.frame)
         .title(Span::styled(
             if matches!(sw.purpose, switcher::Purpose::Forward { .. }) { " Forward to " } else { " Go to " },
@@ -171,6 +175,70 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     for (row, (n, entry)) in entries.iter().enumerate().skip(start).take(rows).enumerate() {
         let rect = Rect { y: list.y + row as u16, height: 1, ..list };
         f.render_widget(Paragraph::new(switcher_row(&t, entry, list.width as usize, n == sw.selected)), rect);
+        hits.push((rect, n));
+    }
+    (area, hits)
+}
+
+/// `/themes`: a column at the right, so most of the screen it recolours
+/// stays in view; themes under their shelves, and what the chosen one is
+/// at the bottom.
+fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    let t = app.cfg.palette.clone();
+    let screen = f.area();
+    let Some(p) = app.theme_picker.as_ref() else { return (Rect::default(), Vec::new()) };
+    let shown = p.shown();
+    // Each shelf gets a heading: (theme index, or None for a heading).
+    let mut rows: Vec<(Option<usize>, &str)> = Vec::new();
+    for (n, entry) in shown.iter().enumerate() {
+        if n == 0 || shown[n - 1].shelf != entry.shelf {
+            rows.push((None, entry.shelf));
+        }
+        rows.push((Some(n), entry.id.name()));
+    }
+    let width = screen.width.saturating_sub(2).min(34);
+    let height = (rows.len().max(1) as u16 + 4).min(screen.height.saturating_sub(2));
+    let area = Rect { x: screen.right().saturating_sub(width), y: screen.y + 1, width, height };
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(" Themes ", t.accent))
+        .title_bottom(TLine::from(" ↑↓ try · Enter keep · Esc undo ").right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let query: String = p.query.chars().filter(|c| !c.is_control()).collect();
+    let prompt = TLine::from(vec![Span::styled("› ", t.accent), Span::raw(query.clone())]);
+    f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
+    let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
+    f.set_cursor_position(Position::new(cursor_x, inner.y));
+
+    // What the chosen theme is (or why it can't be shown), on the last row.
+    let about = match (&p.error, shown.get(p.selected)) {
+        (Some(error), _) => Span::styled(error.clone(), t.error),
+        (None, Some(entry)) => Span::styled(entry.about.clone(), t.dim),
+        (None, None) => Span::styled("nothing matches", t.dim),
+    };
+    let bottom = Rect { y: inner.bottom().saturating_sub(1), height: 1, ..inner };
+    f.render_widget(Paragraph::new(about), bottom);
+
+    let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(2), ..inner };
+    let at = rows.iter().position(|(n, _)| *n == Some(p.selected)).unwrap_or(0);
+    let start = (at + 1).saturating_sub(list.height as usize);
+    let mut hits = Vec::new();
+    for (row, &(n, name)) in rows.iter().skip(start).take(list.height as usize).enumerate() {
+        let rect = Rect { y: list.y + row as u16, height: 1, ..list };
+        let Some(n) = n else {
+            let shelf = format!("{}{}", name[..1].to_uppercase(), &name[1..]);
+            f.render_widget(Paragraph::new(Span::styled(shelf, t.dim.add_modifier(Modifier::BOLD))), rect);
+            continue;
+        };
+        let mark = if shown[n].id == *p.had() { "•" } else { " " };
+        let text = format!(" {mark} {name}");
+        let style = if n == p.selected { Style::new().add_modifier(Modifier::REVERSED) } else { t.inactive };
+        let pad = (list.width as usize).saturating_sub(display_len(&text));
+        f.render_widget(Paragraph::new(Span::styled(format!("{text}{}", " ".repeat(pad)), style)), rect);
         hits.push((rect, n));
     }
     (area, hits)
@@ -256,6 +324,7 @@ fn draw_help(f: &mut Frame, app: &mut App) {
     let filter =
         if help.filter.is_empty() { " type to filter ".to_owned() } else { format!(" filter: {} ", help.filter) };
     let block = Block::bordered()
+        .style(t.base)
         .border_style(t.frame)
         .title(Span::styled(" Textrix help ", t.accent))
         .title_bottom(TLine::from(format!("{filter}· ↑↓ PgUp/PgDn scroll · Esc closes ")).right_aligned());

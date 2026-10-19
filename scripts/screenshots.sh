@@ -5,4 +5,4 @@
 set -e
 cd "$(dirname "$0")/.."
 rm -f site/screenshots/*.svg site/screenshots/themes/*.svg
-cargo test --locked -q -- --ignored --exact app::shots::screenshots --nocapture 2>&1 | grep -E '^wrote|panicked|error'
+COLORTERM=truecolor cargo test --locked -q -- --ignored --exact app::shots::screenshots --nocapture 2>&1 | grep -E '^wrote|panicked|error'

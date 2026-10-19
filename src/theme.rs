@@ -126,6 +126,37 @@ impl ThemeName {
         ThemeName::ALL.iter().find(|(_, t)| *t == self).map_or("default", |(n, _)| n)
     }
 
+    /// A few words about it, for `/themes`.
+    pub fn about(self) -> &'static str {
+        use ThemeName::*;
+        match self {
+            Default => "for dark terminals, in their own colours",
+            Light => "for light terminals",
+            Mono => "no colour: bold, underline and reverse video",
+            Green => "green phosphor on black",
+            Blue => "blue on black",
+            Red => "red on black, like a Virtual Boy",
+            Amber => "amber on black",
+            GreenDeep | BlueDeep | RedDeep | AmberDeep => "on deep blue in double lines: an 80s airport",
+            GreenTron | BlueTron | RedTron | AmberTron => "neon outlines on pure black",
+            MonoTron => "Tron in greys, on pure black",
+            Ibm5151 => "IBM's green monochrome display, framed in ASCII",
+            Turbo => "Turbo Pascal: yellow on DOS blue",
+            Procomm => "a DOS terminal program dialling a BBS",
+            C64 => "Commodore 64 blues",
+            Amiga => "Workbench 1.3: white and orange on blue",
+            Delphi => "Delphi 7's editor, in Windows grey",
+            Mirc => "mIRC's colours on white",
+            SolarizedDark => "Solarized, dark",
+            SolarizedLight => "Solarized, light",
+            Monokai => "Monokai",
+            Dracula => "Dracula",
+            Nord => "Nord",
+            Gruvbox => "Gruvbox, dark",
+            Catppuccin => "Catppuccin Mocha",
+        }
+    }
+
     /// Which shelf `/theme` lists it on.
     pub fn group(self) -> &'static str {
         use ThemeName::*;

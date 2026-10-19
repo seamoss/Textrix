@@ -560,6 +560,44 @@ pub enum LinkTitle {
     None,
 }
 
+/// `/themes`: every theme in a list, each tried on the whole screen as
+/// you move to it.
+pub struct ThemePicker {
+    pub entries: Vec<ThemeChoice>,
+    /// What's typed, narrowing the list.
+    pub query: String,
+    /// Which of [`ThemePicker::shown`] is chosen.
+    pub selected: usize,
+    /// Why the chosen theme can't be shown (a broken theme file).
+    pub error: Option<String>,
+    /// The theme you had, and its colours, for Esc.
+    before: (ThemeId, Theme),
+}
+
+pub struct ThemeChoice {
+    pub id: ThemeId,
+    /// "classic", "yours"…
+    pub shelf: &'static str,
+    pub about: String,
+}
+
+impl ThemePicker {
+    /// The themes that match what's typed (in their names or what they're
+    /// about).
+    pub fn shown(&self) -> Vec<&ThemeChoice> {
+        let query = self.query.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| e.id.name().contains(&query) || e.about.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// The theme you had when it opened.
+    pub fn had(&self) -> &ThemeId {
+        &self.before.0
+    }
+}
+
 pub enum Preview {
     Loading,
     Ready(Picture),
@@ -795,6 +833,7 @@ pub struct App {
     /// How much of the Konami code has been typed.
     konami: usize,
     pub switcher: Option<Switcher>,
+    pub theme_picker: Option<ThemePicker>,
     /// Windows you were in, most recent first (for the switcher).
     recent: Vec<WinRef>,
     /// Rooms with their own notification mode, per server.
@@ -983,6 +1022,11 @@ const COMMANDS: &[Cmd] = &[
         name: "theme",
         args: "[name | save <name> | import <file>]",
         help: "Colours for this session (no name lists them); save writes this look to a theme file, import adds one",
+    },
+    Cmd {
+        name: "themes",
+        args: "",
+        help: "Pick a theme from a list, each shown as you move to it; Enter keeps it for the session (/save for good)",
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
@@ -1244,6 +1288,7 @@ impl App {
             alias_depth: 0,
             konami: 0,
             switcher: None,
+            theme_picker: None,
             recent: Vec::new(),
             push_modes: HashMap::new(),
             hits: ui::Hits::default(),
@@ -2928,6 +2973,10 @@ impl App {
             sw.selected = if up { sw.selected.saturating_sub(1) } else { sw.selected + 1 };
             return;
         }
+        if let Some(p) = self.theme_picker.as_mut() {
+            p.selected = if up { p.selected.saturating_sub(1) } else { p.selected + 1 };
+            return self.try_picked_theme();
+        }
         if let Some(help) = self.help.as_mut() {
             help.scroll =
                 if up { help.scroll.saturating_sub(WHEEL_ROWS) } else { help.scroll.saturating_add(WHEEL_ROWS) };
@@ -2946,6 +2995,23 @@ impl App {
     /// name is added to your message; the input line moves the cursor.
     fn on_click(&mut self, at: Position) {
         if self.viewer.is_some() {
+            return;
+        }
+        if self.theme_picker.is_some() {
+            // A theme shows it, again keeps it; a click outside puts back
+            // the one you had.
+            let hits = self.hits.theme_picker.as_ref();
+            let row = hits.and_then(|(_, rows)| rows.iter().find(|(r, _)| r.contains(at))).map(|&(_, n)| n);
+            let inside = hits.is_some_and(|(area, _)| area.contains(at));
+            match (row, self.theme_picker.as_mut()) {
+                (Some(n), Some(p)) if p.selected == n => self.close_theme_picker(true),
+                (Some(n), Some(p)) => {
+                    p.selected = n;
+                    self.try_picked_theme();
+                }
+                _ if !inside => self.close_theme_picker(false),
+                _ => {}
+            }
             return;
         }
         if self.switcher.is_some() {
@@ -3107,6 +3173,9 @@ impl App {
         }
         if self.switcher.is_some() {
             return self.on_switcher_key(key);
+        }
+        if self.theme_picker.is_some() {
+            return self.on_theme_picker_key(key);
         }
         if self.select.is_none() && (key.modifiers - KeyModifiers::SHIFT).is_empty() {
             self.konami = eggs::konami_step(self.konami, key.code);
@@ -4187,6 +4256,11 @@ impl App {
             "forward" => self.cmd_forward(args),
             "markread" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
+            "themes" if args.trim().is_empty() => {
+                self.open_theme_picker();
+                Ok(())
+            }
+            "themes" => self.cmd_theme(args),
             "devices" => self.cmd_devices(args),
             "hilight" => self.pick_account(args).map(|(acct, word)| match word.trim() {
                 "" => acct.list_highlights(self.here()),
@@ -5396,6 +5470,89 @@ impl App {
         Ok(())
     }
 
+    /// `/themes`: the list, at the theme you have.
+    fn open_theme_picker(&mut self) {
+        let dir = self.paths.themes_dir();
+        let mut entries: Vec<ThemeChoice> = ThemeName::ALL
+            .iter()
+            .map(|&(_, name)| ThemeChoice { id: name.into(), shelf: name.group(), about: name.about().to_owned() })
+            .collect();
+        for name in crate::theme::files(&dir) {
+            let about = match ThemeFile::read(&ThemeFile::path(&dir, &name)) {
+                Ok(file) => file.description.unwrap_or_else(|| "one of yours".into()),
+                Err(_) => "can't be used (/theme says why)".into(),
+            };
+            entries.push(ThemeChoice { id: ThemeId::File(name), shelf: "yours", about });
+        }
+        let selected = entries.iter().position(|e| e.id == self.cfg.theme).unwrap_or(0);
+        let before = (self.cfg.theme.clone(), self.cfg.palette.clone());
+        self.theme_picker = Some(ThemePicker { entries, query: String::new(), selected, error: None, before });
+    }
+
+    fn on_theme_picker_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(p) = self.theme_picker.as_mut() else { return };
+        let last = p.shown().len().saturating_sub(1);
+        let was = p.shown().get(p.selected).map(|e| e.id.clone());
+        let typed = |p: &mut ThemePicker, edit: &dyn Fn(&mut String)| {
+            edit(&mut p.query);
+            // Stay on the same theme if it still matches.
+            p.selected = p.shown().iter().position(|e| Some(&e.id) == was.as_ref()).unwrap_or(0);
+        };
+        match key.code {
+            Esc => return self.close_theme_picker(false),
+            Char('c') if ctrl => return self.close_theme_picker(false),
+            Enter => return self.close_theme_picker(true),
+            Up | BackTab => p.selected = p.selected.saturating_sub(1),
+            Char('p') if ctrl => p.selected = p.selected.saturating_sub(1),
+            Down | Tab => p.selected = (p.selected + 1).min(last),
+            Char('n') if ctrl => p.selected = (p.selected + 1).min(last),
+            PageUp => p.selected = p.selected.saturating_sub(10),
+            PageDown => p.selected = (p.selected + 10).min(last),
+            Home => p.selected = 0,
+            End => p.selected = last,
+            Backspace => typed(p, &|q| {
+                q.pop();
+            }),
+            Char('u') if ctrl => typed(p, &|q| q.clear()),
+            Char(c) if !ctrl && !alt => typed(p, &|q| q.push(c)),
+            _ => return,
+        }
+        self.try_picked_theme();
+    }
+
+    /// Show the chosen theme on the whole screen.
+    fn try_picked_theme(&mut self) {
+        let Some(p) = self.theme_picker.as_mut() else { return };
+        p.selected = p.selected.min(p.shown().len().saturating_sub(1));
+        let Some(id) = p.shown().get(p.selected).map(|e| e.id.clone()) else { return };
+        match Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()) {
+            Ok(palette) => {
+                (self.cfg.palette, self.cfg.theme, p.error) = (palette, id, None);
+                self.redraw_all = true;
+            }
+            Err(e) => p.error = Some(format!("{e:#}")),
+        }
+    }
+
+    /// Enter keeps the theme on screen for the session; Esc puts back the
+    /// one you had.
+    fn close_theme_picker(&mut self, keep: bool) {
+        let Some(p) = self.theme_picker.take() else { return };
+        if keep && p.error.is_none() {
+            let changed = if *p.had() == self.cfg.theme { "" } else { " for this session; /save keeps it" };
+            self.info(format!("theme: {}{changed}", self.cfg.theme));
+        } else {
+            if let Some(error) = &p.error {
+                self.error(error.clone());
+            }
+            (self.cfg.theme, self.cfg.palette) = p.before;
+        }
+        self.redraw_all = true;
+    }
+
     fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
         let args = args.trim();
         let (sub, rest) = args.split_once(' ').map_or((args, ""), |(a, b)| (a, b.trim()));
@@ -5442,8 +5599,8 @@ impl App {
             self.info(format!("    {name}{about}"));
         }
         self.info(
-            "/theme <name> tries one (theme = \"<name>\" in config.toml keeps it); /theme save <name> writes \
-             this look to a theme file to share, /theme import <file> adds one",
+            "/themes picks one with a preview; /theme <name> tries one (theme = \"<name>\" in config.toml keeps \
+             it); /theme save <name> writes this look to a theme file to share, /theme import <file> adds one",
         );
     }
 
@@ -6761,6 +6918,67 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn the_theme_picker_shows_each_theme_as_you_move() {
+        use crate::theme::ThemeName;
+        let dir = std::env::temp_dir().join(format!("textrix-picker-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("themes")).unwrap();
+        std::fs::write(dir.join("themes/broken.toml"), "base = \"plaid\"").unwrap();
+        let mut app = test_app();
+        app.paths.base = dir.clone();
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let draw = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..buf.area.height)
+                .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        app.command("themes");
+        assert!(app.theme_picker.is_some());
+        let screen = draw(&mut app);
+        assert!(screen.contains("Themes") && screen.contains("• default") && screen.contains("Classic"), "{screen}");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.cfg.theme, ThemeName::Light.into(), "moving to a theme shows it");
+        assert_eq!(app.cfg.palette.pane, Theme::build(ThemeName::Light, &BTreeMap::new()).unwrap().pane);
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.theme_picker.is_none());
+        assert_eq!(app.cfg.theme, ThemeName::Default.into(), "Esc puts back the one you had");
+
+        app.command("themes");
+        for c in "drac".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.cfg.theme, ThemeName::Dracula.into(), "typing narrows the list to it");
+        app.on_key(key(KeyCode::Enter));
+        assert!(app.theme_picker.is_none());
+        assert_eq!(app.cfg.theme, ThemeName::Dracula.into(), "Enter keeps it");
+        assert!(app.windows[0].lines.back().unwrap().body.contains("/save keeps it"));
+
+        // Your files are on the list; a broken one says why and isn't kept.
+        app.command("themes");
+        app.on_key(key(KeyCode::End));
+        assert!(app.theme_picker.as_ref().unwrap().error.as_ref().is_some_and(|e| e.contains("plaid")));
+        assert_eq!(app.cfg.theme, ThemeName::Dracula.into());
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.cfg.theme, ThemeName::Dracula.into());
+
+        // A click shows a theme, a second click keeps it.
+        app.command("themes");
+        draw(&mut app);
+        let (_, rows) = app.hits.theme_picker.clone().unwrap();
+        let (rect, n) = rows.iter().find(|(_, n)| *n == 3).copied().unwrap();
+        let click = |app: &mut App| app.on_click(Position::new(rect.x + 2, rect.y));
+        click(&mut app);
+        assert_eq!((app.theme_picker.as_ref().unwrap().selected, &app.cfg.theme), (n, &ThemeName::Green.into()));
+        click(&mut app);
+        assert!(app.theme_picker.is_none() && app.cfg.theme == ThemeName::Green.into());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

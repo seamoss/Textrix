@@ -706,6 +706,14 @@ fn screenshots() {
     panes.app.cmd_split("Book Club", true).unwrap();
     save(&dir, "panes", &mut panes, (124, 30));
 
+    // /themes, trying turbo.
+    let mut picking = night_owls(ThemeName::Default, true);
+    picking.app.open_theme_picker();
+    let picker = picking.app.theme_picker.as_mut().unwrap();
+    picker.selected = picker.shown().iter().position(|e| e.id == ThemeName::Turbo.into()).unwrap();
+    picking.app.try_picked_theme();
+    save(&dir, "picker", &mut picking, (124, 33));
+
     for (name, theme) in ThemeName::ALL {
         save(&dir.join("themes"), name, &mut night_owls(theme, true), (100, 32));
     }

@@ -205,7 +205,7 @@ bindings.
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is |
 | Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| save <name> \| import <file>]` (see [Themes](#themes)) |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/themes`, `/theme [name \| save <name> \| import <file>]` (see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
@@ -215,6 +215,8 @@ bindings.
 | Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
 | Scripts | `/script` lists them, `/script load\|unload\|reload <name>`, `/script exec <code>`; see [Scripts](#scripts) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
+
+![Two rooms side by side (/vsplit Book Club) in blue-tron, every panel framed in thin neon lines on pure black](site/screenshots/panes.svg)
 
 Editing follows Matrix's rules: only your own text messages, and only where
 your power level lets you post. Deleting someone else's message needs
@@ -380,10 +382,14 @@ synced, so your other clients notify on it too); `/hilight` lists them and
 
 ### Themes
 
-![Two rooms side by side in blue-tron, every panel framed in thin neon lines on pure black](site/screenshots/panes.svg)
+![The /themes list at the right, trying turbo: the whole screen in yellow on DOS blue](site/screenshots/picker.svg)
 
-`/theme` lists them, `/theme <name>` tries one for the session, and
-`theme = "<name>"` in config.toml keeps it (`--theme <name>` for one run).
+`/themes` opens the list. Moving through it with ↑/↓ (or the mouse) shows
+each theme on the whole screen, typing narrows the list, Enter keeps the
+one you're on for the session and Esc puts back the one you had. `/save`
+keeps it for good, like `theme = "<name>"` in config.toml. `/theme
+<name>` goes straight to one, `/theme` lists them in the status window,
+and `--theme <name>` picks one for a run.
 
 | Shelf | Themes |
 |---|---|

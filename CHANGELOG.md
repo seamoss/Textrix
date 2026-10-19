@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.1] - 2026-10-19
+
+### Added
+- `/themes` opens a list of every theme (yours too) at the right of the
+  screen. Moving through it with ↑/↓, PgUp/PgDn or the mouse shows each
+  one on the whole screen as you go, with a line about it; typing narrows
+  the list. Enter keeps the one you're on for this session (`/save` keeps
+  it for good) and Esc puts back the one you had.
+
+### Fixed
+- The quick switcher and the help screen take the theme's background,
+  instead of the terminal's, in themes that bring their own (Delphi's
+  white, Turbo's blue).
+
 ## [0.9.0] - 2026-10-19
 
 ### Added
