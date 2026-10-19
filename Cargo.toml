@@ -1,6 +1,6 @@
 [package]
 name = "textrix"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.96"
 description = "An irssi-style terminal client for Matrix"
@@ -14,7 +14,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-crossterm = { version = "0.29", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream", "serde"] }
 dirs = "7"
 eyeball = "0.8"
 futures-util = "0.3"
@@ -23,14 +23,14 @@ imagesize = "0.15"
 matrix-sdk = { version = "0.19.1", features = ["bundled-sqlite", "markdown"] }
 mime = "0.3"
 mime_guess = "2"
-ratatui = "0.30"
+ratatui = { version = "0.30", features = ["serde"] }
 ruma-html = { version = "0.9", features = ["matrix"] }
 # Pure Rust: the default `chafa-dyn` feature would link the C libchafa.
 ratatui-image = { version = "12.0.0-rc.2", default-features = false, features = ["crossterm", "image-defaults"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "process", "net", "io-util", "signal"] }
 toml = "1"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -50,6 +50,7 @@ two-face = { version = "0.5", default-features = false, features = ["syntect-fan
 opus-decoder = "0.1"
 ogg = "0.9"
 matrix-sdk-store-encryption = "0.19.1"
+rmp-serde = "1.3"
 
 [profile.release]
 # Whole-program optimisation: about a third smaller (66 → 43 MB), slower to

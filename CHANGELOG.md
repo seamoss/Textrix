@@ -7,6 +7,24 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.0] - 2026-10-18
+
+### Added
+- Background mode, like irssi in screen: `textrix --daemon` runs Textrix
+  with no terminal, staying connected, logging, and notifying through the
+  system's notifications while none is attached. `textrix --attach` (or
+  plain `textrix` while it runs) shows it in this terminal as you left it;
+  `/detach` leaves it running, as does closing the terminal; attaching
+  from another terminal takes it over; `/quit` or `textrix --stop` stops
+  it. The terminal and the background Textrix talk over a socket only you
+  can open.
+
+### Changed
+- Only one Textrix runs per home at a time: a second is refused, since two
+  would share one store and can scramble its encryption keys.
+- 0.5.2 (drag and drop to upload) wasn't built as a release of its own;
+  this release includes it.
+
 ## [0.5.2] - 2026-10-18
 
 ### Added

@@ -1,26 +1,50 @@
 //! Desktop notifications through the terminal itself (no helper programs):
 //! OSC 9 (iTerm2, Ghostty, WezTerm), OSC 777 (Ghostty, WezTerm, urxvt) and
 //! OSC 99 (kitty). Inside tmux the sequence is wrapped for passthrough,
-//! which needs `set -g allow-passthrough on`.
+//! which needs `set -g allow-passthrough on`. In the background with no
+//! terminal attached, the system shows them instead.
 
-use std::io::Write;
+use crate::{config::NotifyMode, term};
 
-use crate::config::NotifyMode;
-
-/// Pick a protocol for `Auto` from the environment.
+/// Pick a protocol for `Auto` from the terminal Textrix shows in.
 pub fn resolve(mode: NotifyMode) -> NotifyMode {
     if mode != NotifyMode::Auto {
         return mode;
     }
-    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    let term = std::env::var("TERM").unwrap_or_default();
-    match program.as_str() {
+    let info = term::info();
+    match info.term_program.as_str() {
         "iTerm.app" => NotifyMode::Osc9,
         "ghostty" | "WezTerm" => NotifyMode::Osc777,
         "Apple_Terminal" | "vscode" => NotifyMode::Off,
-        _ if term.contains("kitty") || std::env::var_os("KITTY_WINDOW_ID").is_some() => NotifyMode::Osc99,
-        _ if term.contains("ghostty") => NotifyMode::Osc777,
+        _ if info.term.contains("kitty") || info.kitty => NotifyMode::Osc99,
+        _ if info.term.contains("ghostty") => NotifyMode::Osc777,
         _ => NotifyMode::Osc9,
+    }
+}
+
+/// A notification from the system (`osascript` on macOS, `notify-send`
+/// elsewhere), for when no terminal is attached to show one. The text goes
+/// as arguments, never as script.
+pub fn send_system(title: &str, body: &str) {
+    let (title, body) = (clean(title, 80), clean(body, 240));
+    let mut command = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("/usr/bin/osascript");
+        c.args(["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)"]);
+        c.args(["-e", "end run", &title, &body]);
+        c
+    } else {
+        let mut c = std::process::Command::new("notify-send");
+        c.args(["--app-name=Textrix", "--", &title, &body]);
+        c
+    };
+    let spawned = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    // Reap it without waiting here.
+    if let Ok(mut child) = spawned {
+        std::thread::spawn(move || child.wait());
     }
 }
 
@@ -38,10 +62,8 @@ pub fn sequence(mode: NotifyMode, title: &str, body: &str, in_tmux: bool) -> Opt
 }
 
 pub fn send(mode: NotifyMode, title: &str, body: &str) {
-    let in_tmux = std::env::var_os("TMUX").is_some();
-    if let Some(seq) = sequence(mode, title, body, in_tmux) {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(seq.as_bytes()).and_then(|()| out.flush());
+    if let Some(seq) = sequence(mode, title, body, term::info().tmux) {
+        term::write(seq.as_bytes());
     }
 }
 
@@ -66,15 +88,13 @@ pub fn pop_title() {
 }
 
 fn write(seq: &str) {
-    let mut out = std::io::stdout();
-    let _ = out.write_all(seq.as_bytes()).and_then(|()| out.flush());
+    term::write(seq.as_bytes());
 }
 
 /// Put text on the system clipboard with OSC 52 (tmux forwards it when
 /// `set-clipboard` is on).
 pub fn copy_to_clipboard(text: &str) {
-    let mut out = std::io::stdout();
-    let _ = out.write_all(format!("\x1b]52;c;{}\x07", base64(text.as_bytes())).as_bytes()).and_then(|()| out.flush());
+    write(&format!("\x1b]52;c;{}\x07", base64(text.as_bytes())));
 }
 
 fn base64(data: &[u8]) -> String {

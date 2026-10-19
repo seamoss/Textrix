@@ -208,6 +208,15 @@ pub enum AppEvent {
     LinkTitlesOff {
         account: AccountName,
     },
+    /// A terminal attached to the background Textrix, drawing images
+    /// with this (if it can).
+    Attached {
+        picker: Option<ratatui_image::picker::Picker>,
+    },
+    /// The attached terminal left.
+    Detached,
+    /// Asked to quit from outside (`textrix --stop`).
+    Quit,
     /// Audio finished playing (or couldn't play).
     Played {
         event_id: OwnedEventId,

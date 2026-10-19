@@ -18,12 +18,28 @@ you whether everything's in place.
 
 ```text
 textrix [--env FILE] [--home DIR] [--theme NAME]
+textrix --daemon | --attach | --stop
 textrix --check | --completions SHELL | --man | --version
 ```
 
 `--check` reads the dotfile (not its secrets), config.toml and the
 keychain and reports, without connecting. `--theme` picks colours for one
 run. `--env` and `--home` work like `TEXTRIX_ENV` and `TEXTRIX_HOME`.
+
+### In the background
+
+Like irssi in screen, Textrix can keep running with no terminal:
+`textrix --daemon` starts it in the background, where it stays connected,
+logs and notifies (through the system's notifications while no terminal
+is attached). `textrix --attach`, or plain `textrix` while it runs, shows
+it in this terminal, as you left it; `/detach` leaves it running again,
+and so does closing the terminal. Attaching from another terminal takes it
+over. `/quit` in it, or `textrix --stop`, stops it.
+
+The terminal and the background Textrix talk over a socket only you can
+open (`~/.textrix/daemon.sock`). Only one Textrix runs per home at a time:
+a second one is refused, since two would share one store and can scramble
+its encryption keys.
 
 ## Setup
 

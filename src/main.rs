@@ -15,10 +15,12 @@ mod links;
 mod matrix;
 mod model;
 mod notify;
+mod remote;
 mod richtext;
 mod script;
 mod servers;
 mod switcher;
+mod term;
 mod theme;
 mod ui;
 mod update;
@@ -113,6 +115,105 @@ struct Cli {
     /// Print the man page
     #[arg(long)]
     man: bool,
+    /// Run in the background, with no terminal (like irssi in screen):
+    /// textrix --attach shows it, /detach leaves it running
+    #[arg(long, conflicts_with_all = ["attach", "check"])]
+    daemon: bool,
+    /// Show the Textrix running in the background in this terminal (plain
+    /// textrix does too, while one runs)
+    #[arg(long)]
+    attach: bool,
+    /// Stop the Textrix running in the background
+    #[arg(long, conflicts_with_all = ["daemon", "attach", "check"])]
+    stop: bool,
+    /// The background process itself (what --daemon starts)
+    #[arg(long, hide = true)]
+    daemon_run: bool,
+}
+
+/// One Textrix per home: two would share one store and can scramble its
+/// encryption keys. Held until the process ends.
+fn lock_instance(base: &std::path::Path) -> Result<std::fs::File> {
+    let path = base.join("textrix.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(
+            "Textrix is already running with {} in another terminal; quit it first (two at once would share one \
+             store and can scramble its encryption keys)",
+            base.display()
+        ),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// The background Textrix: no terminal of its own, drawing for whichever
+/// one attaches.
+async fn run_daemon(
+    app: App,
+    rx: tokio::sync::mpsc::UnboundedReceiver<matrix::AppEvent>,
+    tx: matrix::Tx,
+    base: &std::path::Path,
+) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let socket = remote::socket_path(base);
+    // Holding the lock means no other Textrix answers there: a leftover.
+    let _ = std::fs::remove_file(&socket);
+    let listener = tokio::net::UnixListener::bind(&socket)
+        .map_err(|e| anyhow::anyhow!("listening on {}: {e}", socket.display()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+    }
+    // Closing the terminal it was started from doesn't stop it; being asked
+    // to (textrix --stop) quits as /quit does, saving what it should.
+    let mut hangups = signal(SignalKind::hangup())?;
+    tokio::spawn(async move { while hangups.recv().await.is_some() {} });
+    let mut stops = signal(SignalKind::terminate())?;
+    let quit = tx.clone();
+    tokio::spawn(async move {
+        if stops.recv().await.is_some() {
+            let _ = quit.send(matrix::AppEvent::Quit);
+        }
+    });
+    config::write_private(&base.join("daemon.pid"), std::process::id().to_string().as_bytes())?;
+
+    term::set_remote(None, None);
+    let screen = remote::Screen::new();
+    let mut terminal = ratatui::Terminal::new(remote::RemoteBackend::new(screen.clone()))?;
+    let (input, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+    remote::serve(listener, screen, input, tx);
+    let keys = futures_util::stream::poll_fn(move |cx| input_rx.poll_recv(cx).map(|event| event.map(Ok)));
+    let result = app::run(&mut terminal, app, rx, keys).await;
+    remote::detach("Textrix has quit");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let _ = std::fs::remove_file(&socket);
+    let _ = std::fs::remove_file(base.join("daemon.pid"));
+    result
+}
+
+/// `--stop`: ask the background Textrix to quit, and wait until it has.
+fn stop_daemon(base: &std::path::Path) -> Result<()> {
+    let socket = remote::socket_path(base);
+    if !remote::alive(&socket) {
+        anyhow::bail!("Textrix isn't running in the background");
+    }
+    let pid = std::fs::read_to_string(base.join("daemon.pid"))?.trim().parse::<u32>()?;
+    let status = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).status()?;
+    anyhow::ensure!(status.success(), "couldn't stop process {pid}");
+    for _ in 0..100 {
+        if !remote::alive(&socket) {
+            println!("stopped the Textrix running in the background");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    anyhow::bail!("it's still running (process {pid})")
 }
 
 const LONG_ABOUT: &str = "\
@@ -157,6 +258,28 @@ async fn run() -> Result<()> {
         return check(&paths);
     }
     create_private_dir(&paths.base)?;
+    let socket = remote::socket_path(&paths.base);
+    if cli.stop {
+        return stop_daemon(&paths.base);
+    }
+    if cli.daemon {
+        if remote::alive(&socket) {
+            anyhow::bail!("Textrix is already running in the background; textrix --attach shows it");
+        }
+        // Refuse here, not in the background, if another Textrix runs.
+        drop(lock_instance(&paths.base)?);
+        let mut args: Vec<std::ffi::OsString> =
+            vec!["--home".into(), paths.base.clone().into(), "--env".into(), paths.env_file.clone().into()];
+        if let Some(theme) = &cli.theme {
+            args.extend(["--theme".into(), theme.into()]);
+        }
+        return remote::start(&paths.base, args);
+    }
+    if cli.attach || (!cli.daemon_run && remote::alive(&socket)) {
+        let previews = Config::load(&paths.config_file()).map_or(true, |cfg| cfg.image_previews);
+        return remote::attach(&socket, previews).await;
+    }
+    let _lock = lock_instance(&paths.base)?;
     let env = EnvFile::new(paths.env_file.clone());
     let servers = env.servers().map_err(|e| anyhow::anyhow!("{e:#}\n(see .env.example for the format)"))?;
     let mut cfg = Config::load(&paths.config_file())?;
@@ -177,7 +300,11 @@ async fn run() -> Result<()> {
     let previews = cfg.image_previews;
     let mouse = cfg.mouse;
     highlight::warm_up();
-    let mut app = App::new(cfg, paths, env, servers, tx);
+    let base = paths.base.clone();
+    let mut app = App::new(cfg, paths, env, servers, tx.clone());
+    if cli.daemon_run {
+        return run_daemon(app, rx, tx, &base).await;
+    }
 
     let mut terminal = ratatui::init();
     // Ask the terminal about graphics and key reporting before anything
@@ -206,7 +333,7 @@ async fn run() -> Result<()> {
         notify::pop_title();
         restore(info);
     }));
-    let result = app::run(&mut terminal, app, rx).await;
+    let result = app::run(&mut terminal, app, rx, crossterm::event::EventStream::new()).await;
     app::set_mouse_capture(false);
     notify::pop_title();
     if enhanced_keys {

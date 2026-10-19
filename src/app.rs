@@ -2,17 +2,14 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
-    io::Write,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use chrono::Local;
-use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
-use futures_util::StreamExt;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use futures_util::{Stream, StreamExt};
 use matrix_sdk::notification_settings::RoomNotificationMode;
 use matrix_sdk::ruma::{
     EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedUserId, RoomId, TransactionId, UserId,
@@ -26,7 +23,8 @@ use matrix_sdk::ruma::{
     room::{AllowRule, JoinRule, Restricted},
 };
 use ratatui::{
-    DefaultTerminal,
+    Terminal,
+    backend::Backend,
     layout::{Position, Size},
 };
 use ratatui_image::{
@@ -940,6 +938,11 @@ const COMMANDS: &[Cmd] = &[
         args: "[list|load <name>|unload <name>|reload [name]|exec <code>]",
         help: "Manage scripts (.rhai files in ~/.textrix/scripts)",
     },
+    Cmd {
+        name: "detach",
+        args: "",
+        help: "Leave Textrix running in the background (started with textrix --daemon); textrix --attach comes back",
+    },
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
@@ -1269,7 +1272,7 @@ impl App {
                 }
                 script::Effect::Bell => self.ring(BellKind::Mentions),
                 script::Effect::Notify { title, body } => {
-                    if self.notify_mode != NotifyMode::Off {
+                    if self.notifying() {
                         self.notifications.push((title, body));
                     }
                 }
@@ -1573,6 +1576,22 @@ impl App {
                          (Synapse: url_preview_enabled)"
                     )));
                 }
+            }
+            AppEvent::Attached { picker } => {
+                // Images are drawn afresh for this terminal.
+                self.picker = picker.filter(|_| self.cfg.image_previews);
+                self.previews.clear();
+                self.avatars.clear();
+                self.viewer = None;
+                self.notify_mode = notify::resolve(self.cfg.notifications);
+                (self.redraw_all, self.last_title) = (true, None);
+                if self.cfg.mouse {
+                    set_mouse_capture(true);
+                }
+            }
+            AppEvent::Quit => self.quit = true,
+            AppEvent::Detached => {
+                self.status(Line::info("detached: Textrix carries on in the background (textrix --attach)"));
             }
             AppEvent::Played { event_id, result } => {
                 if self.playing.as_ref().is_some_and(|(playing, _)| *playing == event_id) {
@@ -2010,6 +2029,7 @@ impl App {
         let quiet = muted || mode == Some(RoomNotificationMode::MentionsAndKeywordsOnly);
         let mut ring = false;
         let mut mentions = Vec::new();
+        let notifying = self.notifying();
 
         if live && let Some(log) = self.log.as_mut() {
             let name = self.windows[idx].name.clone();
@@ -2103,7 +2123,7 @@ impl App {
                 continue;
             }
             ring = true;
-            if self.notify_mode != NotifyMode::Off {
+            if notifying {
                 let nick = line.sender.as_ref().and_then(|u| self.layout.nicknames.get(u)).unwrap_or(&line.nick);
                 let title = if w.is_dm { nick.clone() } else { format!("{nick} in {}", w.title()) };
                 let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
@@ -2508,6 +2528,17 @@ impl App {
 
     /// Called after every draw: lazy history, member lists, read markers,
     /// image previews, avatars.
+    /// Whether to notify: as the terminal allows, or, in the background
+    /// with no terminal attached, through the system (unless notifications
+    /// are off altogether).
+    fn notifying(&self) -> bool {
+        if crate::term::attached() {
+            self.notify_mode != NotifyMode::Off
+        } else {
+            self.cfg.notifications != NotifyMode::Off
+        }
+    }
+
     /// Once a second: last session's split if it's waiting, scripts' live
     /// status items, and their stores saved if they changed.
     pub fn on_clock(&mut self) {
@@ -4042,6 +4073,10 @@ impl App {
             "logout" => self.server_arg(args).map(|acct| acct.logout()),
             "recover" => self.server_arg(args).map(|acct| acct.recover()),
             "verify" => self.cmd_verify(args),
+            "detach" => match crate::remote::detach("detached; textrix --attach comes back to it") {
+                true => Ok(()),
+                false => Err("/detach is for Textrix in the background: start it with textrix --daemon".into()),
+            },
             "quit" => {
                 self.quit = true;
                 Ok(())
@@ -5812,11 +5847,12 @@ fn path_candidates(word: &str) -> Vec<Candidate> {
 /// Turn the terminal's mouse reporting on or off.
 pub fn set_mouse_capture(on: bool) {
     use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-    let mut out = std::io::stdout();
+    let mut out = Vec::new();
     let result =
-        if on { crossterm::execute!(out, EnableMouseCapture) } else { crossterm::execute!(out, DisableMouseCapture) };
-    if let Err(e) = result {
-        tracing::warn!("mouse capture: {e}");
+        if on { crossterm::queue!(out, EnableMouseCapture) } else { crossterm::queue!(out, DisableMouseCapture) };
+    match result {
+        Ok(()) => crate::term::write(&out),
+        Err(e) => tracing::warn!("mouse capture: {e}"),
     }
 }
 
@@ -5827,33 +5863,50 @@ async fn flash_end(until: Option<Instant>) {
     }
 }
 
-pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: UnboundedReceiver<AppEvent>) -> Result<()> {
-    let mut keys = EventStream::new();
+/// `keys` is the terminal's input: this terminal's, or in the background,
+/// the attached one's.
+pub async fn run<B>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+    mut rx: UnboundedReceiver<AppEvent>,
+    mut keys: impl Stream<Item = std::io::Result<Event>> + Unpin,
+) -> Result<()>
+where
+    B: Backend,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     let mut clock = tokio::time::interval(Duration::from_secs(1));
     app.start();
     loop {
-        if std::mem::take(&mut app.redraw_all) {
-            terminal.clear()?;
-        }
-        terminal.draw(|f| ui::draw(f, &mut app))?;
-        let title = app.terminal_title();
-        if title != app.last_title {
-            match &title {
-                Some(title) => notify::set_title(title),
-                // Turned off (by /reload): back to the terminal's own title.
-                None => {
-                    notify::pop_title();
-                    notify::push_title();
-                }
+        // In the background with no terminal attached, nothing is drawn.
+        let shown = crate::term::attached();
+        if shown {
+            if std::mem::take(&mut app.redraw_all) {
+                terminal.clear()?;
             }
-            app.last_title = title;
+            terminal.draw(|f| ui::draw(f, &mut app))?;
+            let title = app.terminal_title();
+            if title != app.last_title {
+                match &title {
+                    Some(title) => notify::set_title(title),
+                    // Turned off (by /reload): back to the terminal's own title.
+                    None => {
+                        notify::pop_title();
+                        notify::push_title();
+                    }
+                }
+                app.last_title = title;
+            }
         }
         if std::mem::take(&mut app.bell) {
-            let mut out = std::io::stdout();
-            let _ = out.write_all(b"\x07").and_then(|()| out.flush());
+            crate::term::write(b"\x07");
         }
         for (title, body) in std::mem::take(&mut app.notifications) {
-            notify::send(app.notify_mode, &title, &body);
+            if shown {
+                notify::send(app.notify_mode, &title, &body);
+            } else {
+                notify::send_system(&title, &body);
+            }
         }
         if let Some(text) = app.clipboard.take() {
             notify::copy_to_clipboard(&text);
