@@ -99,7 +99,7 @@ enum History {
 
 /// Which window this is, independent of its position: stays valid while
 /// windows open, close and move.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WinRef {
     Status,
     Mentions,
@@ -593,6 +593,22 @@ struct EditSession {
     draft: String,
 }
 
+/// Panes and panels to put back: the split you had (restored at startup)
+/// or one saved with `/layout save`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct SavedLayout {
+    /// Empty: one window, no split.
+    #[serde(default)]
+    panes: Vec<WinRef>,
+    #[serde(default)]
+    side_by_side: bool,
+    focus: Option<WinRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sidebar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nicklist: Option<bool>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Layout {
     windows: Vec<WinKey>,
@@ -603,6 +619,12 @@ struct Layout {
     /// Your own names for people (`/nickname`), seen only by you.
     #[serde(default)]
     nicknames: BTreeMap<OwnedUserId, String>,
+    /// The split on screen when Textrix last closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    split: Option<SavedLayout>,
+    /// `/layout save <name>`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    layouts: BTreeMap<String, SavedLayout>,
 }
 
 /// Several windows on screen at once, like irssi's split windows. Panes
@@ -652,6 +674,10 @@ pub struct App {
     pub view_width: u16,
     pub view_height: u16,
     layout: Layout,
+    /// Last session's split, waiting for its windows to open.
+    pending_split: Option<SavedLayout>,
+    /// Servers that have said which rooms they have.
+    rooms_loaded: HashSet<String>,
     typing_since: Option<(WinKey, Instant)>,
     /// Mentions captured from the input line being submitted.
     mentions: Vec<(String, OwnedUserId)>,
@@ -847,6 +873,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "split", args: "<window>", help: "Show another window in a pane below (F6 moves between panes)" },
     Cmd { name: "vsplit", args: "<window>", help: "Show another window in a pane beside this one" },
     Cmd { name: "unsplit", args: "[all]", help: "Close this pane (the window stays open), or all but this one" },
+    Cmd {
+        name: "layout",
+        args: "[save <name> | load <name> | delete <name>]",
+        help: "Saved arrangements of split panes and panels; /layout lists them",
+    },
     Cmd { name: "markread", args: "[all]", help: "Mark this room read (all: every room), for your other clients too" },
     Cmd {
         name: "alias",
@@ -1023,7 +1054,7 @@ const SERVER_COMMANDS: &[&str] = &["connect", "disconnect", "logout", "recover"]
 impl App {
     pub fn new(cfg: Config, paths: Paths, env: EnvFile, servers: Servers, tx: Tx) -> Self {
         let (bell_mode, bell_style) = (cfg.bell, cfg.bell_style);
-        let layout = std::fs::read(paths.layout_file())
+        let layout: Layout = std::fs::read(paths.layout_file())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
@@ -1065,6 +1096,8 @@ impl App {
             show_nicklist,
             view_width: 80,
             view_height: 24,
+            pending_split: layout.split.clone(),
+            rooms_loaded: HashSet::new(),
             layout,
             typing_since: None,
             mentions: Vec::new(),
@@ -1341,6 +1374,7 @@ impl App {
             sync_mode: self.cfg.sync,
             history_cache: self.cfg.history_cache,
             encrypt_store: self.cfg.encrypt_store,
+            search_index: self.cfg.search_index,
         };
         let homeserver = def.homeserver_or_server_name().unwrap_or("?").to_owned();
         self.status(Line::info(format!("{name}: connecting to {homeserver} as {}", def.user)));
@@ -1614,6 +1648,8 @@ impl App {
                 for meta in rooms {
                     self.upsert_room(&account, meta);
                 }
+                self.rooms_loaded.insert(account.to_string());
+                self.restore_split();
             }
             AppEvent::RoomGone { account, room_id } => {
                 let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
@@ -1631,6 +1667,9 @@ impl App {
                 if limited && let Some(idx) = self.window_idx(&account, &room_id) {
                     self.windows[idx].lines.retain(|l| !l.cached);
                 }
+                if let Some(acct) = self.connected(&account) {
+                    acct.index_items(&room_id, &items);
+                }
                 self.on_timeline(&account, &room_id, items, live)
             }
             AppEvent::Cached { account, room_id, items } => {
@@ -1640,6 +1679,9 @@ impl App {
                 }
             }
             AppEvent::History { account, room_id, items, end, failed } => {
+                if let Some(acct) = self.connected(&account) {
+                    acct.index_items(&room_id, &items);
+                }
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
                 if failed {
@@ -1677,6 +1719,9 @@ impl App {
                 }
             }
             AppEvent::SearchResults { account, room_id, hits } => {
+                if let Some(acct) = self.connected(&account) {
+                    acct.index_items(&room_id, &hits.iter().cloned().map(Item::Line).collect::<Vec<_>>());
+                }
                 self.search_pending = self.search_pending.saturating_sub(1);
                 let key = WinKey { account: account.to_string(), room_id: room_id.clone(), thread: None };
                 let room = self
@@ -2386,11 +2431,18 @@ impl App {
                 windows.push(key.clone());
             }
         }
+        let split = match &self.pending_split {
+            // Never restored (its server didn't connect): keep it for next time.
+            Some(pending) => Some(pending.clone()),
+            None => self.split.is_some().then(|| self.current_layout(false)),
+        };
         let layout = Layout {
             windows,
             closed: self.layout.closed.clone(),
             names: self.layout.names.clone(),
             nicknames: self.layout.nicknames.clone(),
+            split,
+            layouts: self.layout.layouts.clone(),
         };
         if let Ok(json) = serde_json::to_vec_pretty(&layout)
             && let Err(e) = std::fs::write(self.paths.layout_file(), json)
@@ -2448,9 +2500,11 @@ impl App {
 
     /// Called after every draw: lazy history, member lists, read markers,
     /// image previews, avatars.
-    /// Once a second: scripts' live status items, and their stores saved
-    /// if they changed.
+    /// Once a second: last session's split if it's waiting, scripts' live
+    /// status items, and their stores saved if they changed.
     pub fn on_clock(&mut self) {
+        // A server that never connects shouldn't hold the split back.
+        self.restore_split();
         let (effects, mut errors) = self.scripts.refresh_status();
         self.apply_effects(effects, None);
         errors.extend(self.scripts.save_stores());
@@ -3876,6 +3930,7 @@ impl App {
             "split" => self.cmd_split(args, false),
             "vsplit" => self.cmd_split(args, true),
             "unsplit" => self.cmd_unsplit(args),
+            "layout" => self.cmd_layout(args),
             "wc" => self.cmd_window("close"),
             "wl" => self.cmd_window("list"),
             "clear" => {
@@ -4453,10 +4508,18 @@ impl App {
                     .map(move |l| (key.clone(), w.title().to_owned(), l.clone()))
             })
             .collect();
+        let (indexed, reading) = self.search_indexes(&needle, &mut found);
         found.sort_by_key(|(_, _, line)| std::cmp::Reverse(line.ts));
+        let more = found.len().saturating_sub(50);
         found.truncate(50);
+        let searched = match (indexed, reading) {
+            (0, _) => String::new(),
+            (n, false) => format!(" (searched {n} indexed messages)"),
+            (n, true) => format!(" (searched {n} indexed messages; older history is still being indexed)"),
+        };
         if found.is_empty() {
-            self.info(format!("no loaded messages match \"{needle}\"; try /search -deep"));
+            let hint = if indexed == 0 { "; try /search -deep" } else { "" };
+            self.info(format!("no messages match \"{needle}\"{searched}{hint}"));
             return Ok(());
         }
         let rows: Vec<String> = found
@@ -4470,8 +4533,46 @@ impl App {
         for row in rows {
             self.info(row);
         }
-        self.info("/jump N goes to a result");
+        let more = if more > 0 { format!("{more} more not shown; ") } else { String::new() };
+        self.info(format!("{more}/jump N goes to a result{searched}"));
         Ok(())
+    }
+
+    /// Add each connected server's search index hits to `found` (the ones
+    /// not already there). Returns how many messages the indexes hold, and
+    /// whether any is still reading older history.
+    fn search_indexes(&self, needle: &str, found: &mut Vec<(WinKey, String, Line)>) -> (usize, bool) {
+        let (mut indexed, mut reading) = (0, false);
+        let have: HashSet<OwnedEventId> = found.iter().filter_map(|(_, _, l)| l.event_id.clone()).collect();
+        for (name, state) in &self.accounts {
+            let Some((hits, len, more)) = state.account.as_ref().and_then(|a| a.search_index(needle, 200)) else {
+                continue;
+            };
+            (indexed, reading) = (indexed + len, reading || more);
+            for entry in hits {
+                let (Ok(room_id), Ok(event)) = (OwnedRoomId::try_from(entry.room), OwnedEventId::try_from(entry.event))
+                else {
+                    continue;
+                };
+                if have.contains(&event) {
+                    continue;
+                }
+                let room = self
+                    .window_idx(name, &room_id)
+                    .map(|i| self.windows[i].title().to_owned())
+                    .or_else(|| state.account.as_ref()?.quick_meta(&room_id).map(|m| m.name))
+                    .unwrap_or_else(|| room_id.to_string());
+                let mut line = Line::new(LineKind::Message, entry.body);
+                line.event_id = Some(event);
+                line.nick = entry.nick;
+                line.sender = OwnedUserId::try_from(entry.sender).ok();
+                if let Some(ts) = chrono::TimeZone::timestamp_millis_opt(&Local, entry.ts).single() {
+                    line.ts = ts;
+                }
+                found.push((WinKey { account: name.to_string(), room_id, thread: None }, room, line));
+            }
+        }
+        (indexed, reading)
     }
 
     fn cmd_jump(&mut self, args: &str) -> Result<(), String> {
@@ -4974,6 +5075,122 @@ impl App {
         split.panes.insert(slot, self.windows[idx].id());
         self.windows[idx].activity = Activity::None;
         Ok(())
+    }
+
+    /// What's on screen, as a layout to save.
+    fn current_layout(&self, panels: bool) -> SavedLayout {
+        SavedLayout {
+            panes: self.split.as_ref().map(|s| s.panes.clone()).unwrap_or_default(),
+            side_by_side: self.split.as_ref().is_some_and(|s| s.side_by_side),
+            focus: Some(self.windows[self.active].id()),
+            sidebar: panels.then_some(self.show_sidebar),
+            nicklist: panels.then_some(self.show_nicklist),
+        }
+    }
+
+    /// Put a layout on screen: its panes whose windows are open, its focus
+    /// and its panels. Returns how many panes couldn't be shown.
+    fn apply_layout(&mut self, saved: &SavedLayout) -> usize {
+        let open = |app: &Self, r: &WinRef| app.windows.iter().position(|w| w.id() == *r);
+        let present: Vec<WinRef> = saved.panes.iter().filter(|r| open(self, r).is_some()).cloned().collect();
+        let missing = saved.panes.len() - present.len();
+        self.show_sidebar = saved.sidebar.unwrap_or(self.show_sidebar);
+        self.show_nicklist = saved.nicklist.unwrap_or(self.show_nicklist);
+        self.split = None;
+        if let Some(idx) = saved.focus.as_ref().and_then(|f| open(self, f)) {
+            self.switch_to(idx);
+        }
+        if present.len() >= 2 {
+            let first = present[0].clone();
+            self.split = Some(Split { panes: present, side_by_side: saved.side_by_side });
+            // The focus is always one of the panes.
+            if !self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[self.active].id()))
+                && let Some(idx) = open(self, &first)
+            {
+                self.switch_to(idx);
+            }
+        } else if let Some(idx) = present.first().and_then(|r| open(self, r)) {
+            self.switch_to(idx);
+        }
+        missing
+    }
+
+    /// Last session's split, once its windows are open (or their servers
+    /// have said which rooms they have: a room you've left is skipped).
+    fn restore_split(&mut self) {
+        let Some(saved) = &self.pending_split else { return };
+        let waiting = saved.panes.iter().chain(&saved.focus).any(|r| match r {
+            WinRef::Room(key) => {
+                !self.windows.iter().any(|w| w.id() == *r)
+                    && !self.rooms_loaded.contains(&key.account)
+                    && self.accounts.get(key.account.as_str()).is_some_and(|s| s.status != ConnStatus::Offline)
+            }
+            _ => false,
+        });
+        if waiting {
+            return;
+        }
+        if let Some(saved) = self.pending_split.take() {
+            self.apply_layout(&saved);
+        }
+    }
+
+    /// `/layout [save|load|delete <name>]`: named arrangements of split
+    /// panes and panels.
+    fn cmd_layout(&mut self, args: &str) -> Result<(), String> {
+        let (sub, name) = split_first(args.trim());
+        let name = name.trim();
+        match (sub, name) {
+            ("" | "list", _) => {
+                if self.layout.layouts.is_empty() {
+                    self.info("no saved layouts; /layout save <name> keeps the panes and panels you have now");
+                }
+                let rows: Vec<String> = self
+                    .layout
+                    .layouts
+                    .iter()
+                    .map(|(name, l)| {
+                        let panes: Vec<String> = l.panes.iter().map(|r| self.ref_title(r)).collect();
+                        let panes = if panes.is_empty() { "one window".to_owned() } else { panes.join(" | ") };
+                        format!("  {name}: {panes}{}", if l.side_by_side { " (side by side)" } else { "" })
+                    })
+                    .collect();
+                rows.into_iter().for_each(|row| self.info(row));
+            }
+            ("save", name) if !name.is_empty() => {
+                self.layout.layouts.insert(name.to_owned(), self.current_layout(true));
+                self.save_layout();
+                self.info(format!("layout {name} saved; /layout load {name} brings it back"));
+            }
+            ("load", name) if !name.is_empty() => {
+                let saved = self.layout.layouts.get(name).cloned().ok_or_else(|| format!("no layout {name}"))?;
+                self.pending_split = None;
+                match self.apply_layout(&saved) {
+                    0 => {}
+                    n => self.info(format!("{n} of its windows aren't open, so they were left out")),
+                }
+            }
+            ("delete", name) if !name.is_empty() => {
+                self.layout.layouts.remove(name).ok_or_else(|| format!("no layout {name}"))?;
+                self.save_layout();
+                self.info(format!("layout {name} deleted"));
+            }
+            (name, "") if self.layout.layouts.contains_key(name) => return self.cmd_layout(&format!("load {name}")),
+            _ => return Err("usage: /layout [save <name> | load <name> | delete <name>]".into()),
+        }
+        Ok(())
+    }
+
+    /// A window's name, by identity.
+    fn ref_title(&self, r: &WinRef) -> String {
+        match self.windows.iter().find(|w| w.id() == *r) {
+            Some(w) => w.title().to_owned(),
+            None => match r {
+                WinRef::Status => "status".into(),
+                WinRef::Mentions => "mentions".into(),
+                WinRef::Room(key) => key.room_id.to_string(),
+            },
+        }
     }
 
     fn cmd_unsplit(&mut self, args: &str) -> Result<(), String> {
@@ -5672,6 +5889,54 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn layouts_are_saved_and_come_back() {
+        let dir = std::env::temp_dir().join(format!("textrix-layouts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { base: dir.clone(), env_file: dir.join("none") };
+        let start = || {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(
+                Config::default(),
+                paths.clone(),
+                EnvFile::new(paths.env_file.clone()),
+                Servers::default(),
+                tx,
+            );
+            let a = room_window(&mut app, "!a:x.org", "Night Owls");
+            let b = room_window(&mut app, "!b:x.org", "Book Club");
+            (app, a, b)
+        };
+        let (mut app, a, b) = start();
+        app.switch_to(a);
+        app.cmd_split("Book Club", true).unwrap();
+        app.cmd_layout("save reading").unwrap();
+        app.cmd_unsplit("all").unwrap();
+        app.show_sidebar = false;
+        app.cmd_layout("load reading").unwrap();
+        let split = app.split.as_ref().unwrap();
+        assert!(split.side_by_side && split.panes.len() == 2);
+        assert!(app.show_sidebar, "the panels come back too");
+        assert_eq!(app.active, a, "and the focus");
+        app.cmd_unsplit("all").unwrap();
+        app.cmd_layout("reading").unwrap();
+        assert!(app.split.is_some(), "/layout <name> loads it");
+        assert!(app.cmd_layout("load nope").is_err());
+
+        // The split you quit with is back next time, once its rooms are.
+        app.switch_to(b);
+        app.save_layout();
+        let (mut next, _, b) = start();
+        assert!(next.split.is_none() && next.pending_split.is_some());
+        next.restore_split();
+        assert_eq!(next.split.as_ref().map(|s| s.panes.len()), Some(2));
+        assert_eq!(next.active, b);
+        assert!(next.layout.layouts.contains_key("reading"));
+        next.cmd_layout("delete reading").unwrap();
+        assert!(next.layout.layouts.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

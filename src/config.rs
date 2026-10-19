@@ -170,6 +170,9 @@ pub struct Config {
     pub encrypt_store: bool,
     /// Load the scripts in ~/.textrix/scripts at startup.
     pub scripts: bool,
+    /// Keep an encrypted local index of decrypted messages for /search
+    /// (needs the encrypted store).
+    pub search_index: bool,
     /// Once a day, ask GitHub whether a newer Textrix is out.
     pub check_updates: bool,
     /// Keep recent messages in the local store so windows fill instantly at
@@ -227,6 +230,7 @@ impl Default for Config {
             history_cache: true,
             check_updates: false,
             scripts: true,
+            search_index: true,
             title: "{window}{activity} — Textrix".into(),
             encrypt_store: true,
             theme: ThemeName::Default,

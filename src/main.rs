@@ -9,6 +9,7 @@ mod convert;
 mod eggs;
 mod emoji;
 mod highlight;
+mod index;
 mod input;
 mod links;
 mod matrix;

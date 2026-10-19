@@ -96,7 +96,10 @@ use tokio::{
 use crate::{
     config::{BellKind, Paths, ReceiptMode, SyncMode, create_private_dir},
     convert::Converter,
-    model::{AccountName, Item, Line, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo},
+    index::{Crawl, Entry, ROOM_CAP, SearchIndex},
+    model::{
+        AccountName, Item, Line, LineKind, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo,
+    },
     servers::{EnvFile, Secret, ServerDef, write_private},
     vault,
 };
@@ -373,6 +376,8 @@ pub struct Account {
     fresh_login: bool,
     /// Keep synced messages in the store's event cache (`history_cache`).
     history_cache: bool,
+    /// Decrypted messages for `/search` (with an encrypted store only).
+    index: Arc<std::sync::Mutex<Option<SearchIndex>>>,
 }
 
 /// Settings [`connect`] takes from the config.
@@ -381,6 +386,7 @@ pub struct ConnectOptions {
     pub sync_mode: SyncMode,
     pub history_cache: bool,
     pub encrypt_store: bool,
+    pub search_index: bool,
 }
 
 /// What the keychain holds for an account with an encrypted store.
@@ -459,6 +465,14 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         },
     };
 
+    let index = if opts.search_index && keychain && enc_store.exists() {
+        open_index(&dir, &vault_name, &notify).await
+    } else {
+        // Off, or no encrypted store to keep it as safe as: none at all.
+        let _ = std::fs::remove_dir_all(dir.join("search-index"));
+        None
+    };
+
     let user_id = client.user_id().context("client has no user id")?.to_owned();
     Ok(Account {
         name,
@@ -474,7 +488,23 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         sync_mode: opts.sync_mode,
         fresh_login: !restored,
         history_cache: opts.history_cache,
+        index: Arc::new(std::sync::Mutex::new(index)),
     })
+}
+
+/// The account's search index, unlocked with its store's keychain secret.
+async fn open_index(dir: &Path, vault_name: &str, notify: &Notifier) -> Option<SearchIndex> {
+    let item = vault::get(vault_name).ok().flatten()?;
+    let passphrase = serde_json::from_str::<Vaulted>(&item).ok()?.passphrase;
+    let dir = dir.join("search-index");
+    match tokio::task::spawn_blocking(move || SearchIndex::open(&dir, passphrase.as_bytes())).await {
+        Ok(Ok(index)) => Some(index),
+        Ok(Err(e)) => {
+            notify.error(format!("the search index couldn't be opened: {e:#}"));
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 async fn restore(
@@ -854,6 +884,10 @@ impl Account {
             remember(false);
             acct.sync_loop().await
         }));
+
+        if self.index.lock().unwrap().is_some() {
+            self.track(tokio::spawn(self.clone().crawl_history()));
+        }
     }
 
     /// Stop syncing. The session stays on disk for the next `/connect`.
@@ -861,6 +895,106 @@ impl Account {
         for task in self.tasks.lock().unwrap().drain(..) {
             task.abort();
         }
+    }
+
+    /// Keep new messages, edits and deletions in the search index.
+    pub fn index_items(&self, room_id: &matrix_sdk::ruma::RoomId, items: &[Item]) {
+        let mut guard = self.index.lock().unwrap();
+        let Some(index) = guard.as_mut() else { return };
+        let room = room_id.as_str();
+        let (mut add, mut edits, mut remove) = (Vec::new(), Vec::new(), Vec::new());
+        for item in items {
+            match item {
+                Item::Line(l) if l.redacted => remove.extend(l.event_id.as_ref().map(ToString::to_string)),
+                Item::Line(l) if l.is_message() && l.kind != LineKind::Utd && !l.pending => {
+                    let Some(event) = &l.event_id else { continue };
+                    add.push(Entry {
+                        room: room.to_owned(),
+                        event: event.to_string(),
+                        ts: l.ts.timestamp_millis(),
+                        sender: l.sender.as_ref().map(ToString::to_string).unwrap_or_default(),
+                        nick: l.nick.clone(),
+                        body: l.text(),
+                    });
+                }
+                Item::Edit { target, body, .. } => edits.push((target.to_string(), body.clone())),
+                Item::Redact { target } => remove.push(target.to_string()),
+                _ => {}
+            }
+        }
+        let result = index
+            .add(add)
+            .and_then(|()| edits.into_iter().try_for_each(|(event, body)| index.edit(&event, body)))
+            .and_then(|()| index.remove(remove));
+        if let Err(e) = result {
+            tracing::warn!("search index: {e:#}");
+        }
+    }
+
+    /// `/search` in the index: hits (newest first), how many messages it
+    /// holds, and whether older history is still being read into it.
+    pub fn search_index(&self, needle: &str, limit: usize) -> Option<(Vec<Entry>, usize, bool)> {
+        let guard = self.index.lock().unwrap();
+        let index = guard.as_ref()?;
+        let rooms = self.client.joined_rooms();
+        let reading = rooms.iter().any(|r| !r.is_space() && !index.crawl(r.room_id().as_str()).done);
+        Some((index.search(needle, limit), index.len(), reading))
+    }
+
+    /// Read rooms' history back into the search index, gently (a page
+    /// every few seconds), so `/search` finds older messages too.
+    async fn crawl_history(self) {
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        loop {
+            let next = {
+                let guard = self.index.lock().unwrap();
+                let Some(index) = guard.as_ref() else { return };
+                self.client.joined_rooms().into_iter().filter(|r| !r.is_space()).find_map(|room| {
+                    let crawl = index.crawl(room.room_id().as_str());
+                    (!crawl.done).then_some((room, crawl))
+                })
+            };
+            let Some((room, crawl)) = next else {
+                // All read; look again later for rooms joined since.
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                continue;
+            };
+            let pause = match self.crawl_page(&room, crawl).await {
+                Ok(()) => 3,
+                Err(e) => {
+                    tracing::debug!("indexing {}: {e:#}", room.room_id());
+                    60
+                }
+            };
+            tokio::time::sleep(Duration::from_secs(pause)).await;
+        }
+    }
+
+    async fn crawl_page(&self, room: &Room, crawl: Crawl) -> Result<()> {
+        let mut options = MessagesOptions::backward().from(crawl.from.as_deref());
+        options.limit = 100u32.into();
+        options.filter.lazy_load_options = LazyLoadOptions::Enabled { include_redundant_members: false };
+        let messages = room.messages(options).await?;
+        let mut conv = Converter::new(room, &self.user_id);
+        for raw in &messages.state {
+            if let Ok(AnyStateEvent::RoomMember(StateEvent::Original(member))) = raw.deserialize()
+                && let Some(nick) = member.content.displayname
+            {
+                conv.seed_nick(member.state_key, nick);
+            }
+        }
+        let mut items = Vec::new();
+        for ev in messages.chunk.iter().rev() {
+            if let Some(item) = conv.convert(ev).await {
+                items.push(item);
+            }
+        }
+        self.index_items(room.room_id(), &items);
+        let room_id = room.room_id().as_str();
+        let mut guard = self.index.lock().unwrap();
+        let Some(index) = guard.as_mut() else { return Ok(()) };
+        let done = messages.end.is_none() || messages.chunk.is_empty() || index.room_count(room_id) >= ROOM_CAP;
+        index.set_crawl(room_id, Crawl { from: messages.end, done })
     }
 
     /// Fill each room's window from the event cache, so there's something
@@ -2894,6 +3028,8 @@ impl Account {
             let _ = std::fs::remove_file(acct.dir.join("session.json"));
             let _ = std::fs::remove_dir_all(acct.dir.join("store"));
             let _ = std::fs::remove_dir_all(acct.dir.join("store-enc"));
+            acct.index.lock().unwrap().take();
+            let _ = std::fs::remove_dir_all(acct.dir.join("search-index"));
             if let Err(e) = vault::delete(&vault_account(&acct.name, &acct.dir)) {
                 acct.notify.error(format!("{e:#}"));
             }

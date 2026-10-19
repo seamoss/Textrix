@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.5.0] - 2026-10-18
+
+### Added
+- A search index: `/search` finds messages from any time in any room,
+  encrypted ones included, straight away. Textrix keeps decrypted messages
+  in a local index, encrypted with the same keychain key as its store: new
+  messages go in as they arrive, and older history is read back in the
+  background (a page every few seconds, up to 20,000 messages a room).
+  Edits and deletions are followed; `/logout` removes it, and
+  `search_index = false` turns it off and deletes it.
+- Layouts: the split you quit with comes back next time, and `/layout save
+  <name>` keeps the panes (and whether the window and member lists show)
+  to bring back with `/layout load <name>`.
+
 ## [0.4.0] - 2026-10-18
 
 ### Added
