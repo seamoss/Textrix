@@ -340,7 +340,7 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<()> {
         .context("Textrix isn't running in the background (textrix --daemon starts it)")?;
     let (mut from, mut to) = stream.into_split();
 
-    let mut terminal = ratatui::init();
+    let mut terminal = ratatui::try_init().map_err(|e| anyhow::anyhow!("Textrix needs a terminal ({e})"))?;
     let picker = previews.then(|| Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
     let enhanced_keys = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     let mut out = std::io::stdout();

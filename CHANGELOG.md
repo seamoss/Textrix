@@ -7,6 +7,18 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.3] - 2026-10-18
+
+### Fixed
+- Started without a terminal (from a script, say), Textrix says it needs
+  one instead of crashing.
+
+### Changed
+- Checked on Linux (Debian, in `scripts/linux.sh`): the tests pass, the
+  keychain (Secret Service) holds the store key, and background mode
+  starts, refuses a second one and stops.
+- 0.6.2 wasn't built as a release of its own; this release includes it.
+
 ## [0.6.2] - 2026-10-18
 
 ### Fixed

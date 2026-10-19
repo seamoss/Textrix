@@ -306,7 +306,7 @@ async fn run() -> Result<()> {
         return run_daemon(app, rx, tx, &base).await;
     }
 
-    let mut terminal = ratatui::init();
+    let mut terminal = ratatui::try_init().map_err(|e| anyhow::anyhow!("Textrix needs a terminal ({e})"))?;
     // Ask the terminal about graphics and key reporting before anything
     // else reads stdin.
     if previews {
