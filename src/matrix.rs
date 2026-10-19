@@ -1765,20 +1765,30 @@ impl Account {
                 let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
                 // Videos stay out of the store's media cache: they're big.
                 let data = acct.client.media().get_media_content(&request, !video).await?;
-                let (data, ext) = if crate::audio::is_ogg_opus(&data) {
-                    let wav = tokio::task::spawn_blocking(move || crate::audio::ogg_opus_to_wav(&data)).await??;
-                    (wav, "wav".to_owned())
-                } else {
-                    // Players go by the extension.
-                    let fallback = if video { "mp4" } else { "audio" };
-                    (data, media.extension().unwrap_or_else(|| fallback.to_owned()))
-                };
                 create_private_dir(&dir)?;
                 let stamp =
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-                let file = crate::audio::TempFile(dir.join(format!("play-{stamp}.{ext}")));
                 use std::io::Write;
+                let opus = crate::audio::is_ogg_opus(&data);
+                // Players go by the extension.
+                let fallback = if video { "mp4" } else { "audio" };
+                let ext = if opus { "ogg".to_owned() } else { media.extension().unwrap_or_else(|| fallback.to_owned()) };
+                let mut file = crate::audio::TempFile(dir.join(format!("play-{stamp}.{ext}")));
                 create_private_file(&file.0)?.write_all(&data)?;
+                // Element's voice messages are Ogg Opus: most players read it
+                // (macOS's own afplay does since macOS 15); for the rest,
+                // Textrix decodes it into a WAV.
+                if opus && !crate::audio::plays_ogg_opus(&player, &file.0).await {
+                    let wav = match tokio::task::spawn_blocking(move || crate::audio::ogg_opus_to_wav(&data)).await {
+                        Ok(Ok(wav)) => wav,
+                        Ok(Err(e)) => bail!("couldn't decode {}: {e:#}; audio_player = \"mpv\" plays it", media.filename),
+                        Err(_) => bail!("couldn't decode {}; audio_player = \"mpv\" plays it", media.filename),
+                    };
+                    let wav_file = crate::audio::TempFile(file.0.with_extension("wav"));
+                    create_private_file(&wav_file.0)?.write_all(&wav)?;
+                    file = wav_file;
+                }
+                let ext = file.0.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
                 let (program, args) = player.split_first().context("no player")?;
                 let status = tokio::process::Command::new(program)
                     .args(args)

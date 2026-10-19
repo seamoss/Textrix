@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.1] - 2026-10-18
+
+### Fixed
+- Some voice messages from Element on phones made Textrix's Opus decoder
+  fail (and a development build crash). Players that read Ogg Opus
+  themselves now get it as it is: `afplay` on macOS 15 and later, mpv,
+  ffplay and VLC. Textrix decodes it only for the others, and one it can't
+  decode is an error saying so.
+- A failure in a background task no longer prints over the screen or
+  turns mouse support off; it goes to the log.
+
+### Changed
+- 0.6.0 (background mode) and 0.5.2 (drag and drop) weren't built as
+  releases of their own; this release includes them.
+
 ## [0.6.0] - 2026-10-18
 
 ### Added

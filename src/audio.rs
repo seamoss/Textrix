@@ -157,6 +157,24 @@ pub fn video_player(configured: &str) -> Option<Vec<String>> {
     candidates.iter().find(|c| found(c[0])).map(|c| c.iter().map(|s| (*s).to_owned()).collect())
 }
 
+/// Whether `player` plays Ogg Opus itself: mpv, ffplay and VLC do, and
+/// afplay does when the system can read the file (macOS 15 and later).
+pub async fn plays_ogg_opus(player: &[String], file: &std::path::Path) -> bool {
+    let program = player.first().map(|p| p.rsplit('/').next().unwrap_or(p)).unwrap_or_default();
+    match program {
+        "mpv" | "ffplay" | "vlc" | "cvlc" | "iina" => true,
+        "afplay" => tokio::process::Command::new("/usr/bin/afinfo")
+            .arg(file)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success()),
+        _ => false,
+    }
+}
+
 /// A file that's deleted when dropped: decrypted audio only exists on disk
 /// while it plays.
 pub struct TempFile(pub PathBuf);
@@ -180,6 +198,20 @@ mod tests {
         assert_eq!(duration(Duration::from_millis(12_300)), "0:13");
         assert_eq!(duration(Duration::from_secs(185)), "3:05");
         assert_eq!(duration(Duration::from_secs(3723)), "1:02:03");
+    }
+
+    #[tokio::test]
+    async fn players_that_read_opus_get_it_as_it_is() {
+        let tone = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/tone.opus"));
+        let player = |p: &str| p.split_whitespace().map(ToOwned::to_owned).collect::<Vec<_>>();
+        assert!(plays_ogg_opus(&player("mpv --no-video"), tone).await);
+        assert!(plays_ogg_opus(&player("/opt/homebrew/bin/mpv"), tone).await);
+        assert!(!plays_ogg_opus(&player("aplay -q"), tone).await, "aplay gets a WAV");
+        if std::path::Path::new("/usr/bin/afinfo").exists() {
+            // macOS 15 and later read Ogg Opus; older ones get a WAV.
+            let native = std::process::Command::new("/usr/bin/afinfo").arg(tone).output().unwrap().status.success();
+            assert_eq!(plays_ogg_opus(&player("afplay"), tone).await, native);
+        }
     }
 
     #[test]

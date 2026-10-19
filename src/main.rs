@@ -326,9 +326,15 @@ async fn run() -> Result<()> {
     if mouse {
         app::set_mouse_capture(true);
     }
-    // A crash shouldn't leave the shell receiving mouse reports.
+    // A crash shouldn't leave the shell receiving mouse reports. A panic in
+    // a background task only fails that task (Textrix carries on), so it
+    // goes to the log rather than over the screen.
     let restore = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().name() != Some("main") {
+            tracing::error!("background task: {info}");
+            return;
+        }
         app::set_mouse_capture(false);
         notify::pop_title();
         restore(info);
