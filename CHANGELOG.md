@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.1.4] - 2026-10-18
+
+### Added
+- Command-line options: `--check` (checks the dotfile, config.toml, the
+  keychain and each server's store, then exits, without connecting or
+  reading secrets), `--theme <name>` for one run, `--env <file>` and
+  `--home <dir>`, plus `--completions <shell>` and `--man`. Homebrew
+  installs the shell completions and the man page.
+- An opt-in update notice: with `check_updates = true`, Textrix asks
+  GitHub once a day whether a newer release is out and says so in the
+  status window. `/version` shows the version; `/version check` asks now.
+- Builds for Linux on ARM, and one macOS build for both Apple silicon and
+  Intel, which Homebrew uses.
+- The website has a changelog page, made from this file.
+
 ## [0.1.3] - 2026-10-18
 
 ### Added

@@ -11,11 +11,11 @@ sha() {
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     cut -d' ' -f1 "$file"
 }
-mac_arm=$(sha aarch64-apple-darwin)
-mac_intel=$(sha x86_64-apple-darwin)
+mac=$(sha universal-apple-darwin)
+linux_arm=$(sha aarch64-unknown-linux-gnu)
 linux_intel=$(sha x86_64-unknown-linux-gnu)
 sed -e "s/@VERSION@/$version/g" \
-    -e "s/@SHA_MACOS_ARM@/$mac_arm/" \
-    -e "s/@SHA_MACOS_INTEL@/$mac_intel/" \
+    -e "s/@SHA_MACOS@/$mac/" \
+    -e "s/@SHA_LINUX_ARM@/$linux_arm/" \
     -e "s/@SHA_LINUX_INTEL@/$linux_intel/" \
     "$template"

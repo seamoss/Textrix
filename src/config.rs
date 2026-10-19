@@ -28,13 +28,15 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn discover() -> Result<Self> {
-        let base = match std::env::var_os("TEXTRIX_HOME") {
-            Some(dir) => PathBuf::from(dir),
+    /// `home` and `env_file` (from --home and --env) win over TEXTRIX_HOME
+    /// and TEXTRIX_ENV.
+    pub fn discover(home: Option<PathBuf>, env_file: Option<PathBuf>) -> Result<Self> {
+        let base = match home.or_else(|| std::env::var_os("TEXTRIX_HOME").map(PathBuf::from)) {
+            Some(dir) => dir,
             None => dirs::home_dir().context("cannot locate home directory")?.join(".textrix"),
         };
-        let env_file = match std::env::var_os("TEXTRIX_ENV") {
-            Some(path) => PathBuf::from(path),
+        let env_file = match env_file.or_else(|| std::env::var_os("TEXTRIX_ENV").map(PathBuf::from)) {
+            Some(path) => path,
             None if cfg!(debug_assertions) => Path::new(env!("CARGO_MANIFEST_DIR")).join(".textrix"),
             None => base.join(".env"),
         };
@@ -143,6 +145,8 @@ pub struct Config {
     /// Encrypt each account's local store (keys, session, history cache)
     /// with a key kept in the system keychain.
     pub encrypt_store: bool,
+    /// Once a day, ask GitHub whether a newer Textrix is out.
+    pub check_updates: bool,
     /// Keep recent messages in the local store so windows fill instantly at
     /// startup. They're stored decrypted, next to the keys and session
     /// that can decrypt them anyway; off clears what's stored.
@@ -192,6 +196,7 @@ impl Default for Config {
             mouse: true,
             paste_confirm_lines: 5,
             history_cache: true,
+            check_updates: false,
             title: "{window}{activity} — Textrix".into(),
             encrypt_store: true,
             theme: ThemeName::Default,

@@ -8,17 +8,15 @@ class Textrix < Formula
   head "https://github.com/seamoss/Textrix.git", branch: "master"
 
   on_macos do
-    on_arm do
-      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-aarch64-apple-darwin.tar.gz"
-      sha256 "@SHA_MACOS_ARM@"
-    end
-    on_intel do
-      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-x86_64-apple-darwin.tar.gz"
-      sha256 "@SHA_MACOS_INTEL@"
-    end
+    url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-universal-apple-darwin.tar.gz"
+    sha256 "@SHA_MACOS@"
   end
 
   on_linux do
+    on_arm do
+      url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_ARM@"
+    end
     on_intel do
       url "https://github.com/seamoss/Textrix/releases/download/v@VERSION@/textrix-v@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "@SHA_LINUX_INTEL@"
@@ -36,6 +34,8 @@ class Textrix < Formula
       bin.install "textrix"
     end
     pkgshare.install ".env.example" => "env.example"
+    generate_completions_from_executable(bin/"textrix", "--completions")
+    (man1/"textrix.1").write Utils.safe_popen_read(bin/"textrix", "--man")
   end
 
   def caveats

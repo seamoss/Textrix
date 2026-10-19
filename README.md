@@ -7,13 +7,23 @@ and end-to-end encryption.
 ## Install
 
 ```sh
-brew install seamoss/textrix/textrix      # macOS, Linux x86_64
+brew install seamoss/textrix/textrix      # macOS, Linux (x86_64, ARM); with completions and a man page
 cargo install --git https://github.com/seamoss/Textrix   # anywhere with Rust 1.96+
 ```
 
-Or download a build for macOS (Apple silicon, Intel) or Linux from the
-[releases](https://github.com/seamoss/Textrix/releases). Then make your
-dotfile (below) and run `textrix`.
+Or download a build for macOS (universal, or per chip) or Linux (x86_64,
+ARM) from the [releases](https://github.com/seamoss/Textrix/releases).
+Then make your dotfile (below) and run `textrix`; `textrix --check` tells
+you whether everything's in place.
+
+```text
+textrix [--env FILE] [--home DIR] [--theme NAME]
+textrix --check | --completions SHELL | --man | --version
+```
+
+`--check` reads the dotfile (not its secrets), config.toml and the
+keychain and reports, without connecting. `--theme` picks colours for one
+run. `--env` and `--home` work like `TEXTRIX_ENV` and `TEXTRIX_HOME`.
 
 ## Setup
 
@@ -151,7 +161,7 @@ bindings.
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
 | Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
@@ -356,6 +366,7 @@ theme = "default"          # light, mono, green, blue, red, amber (+ -deep, -tro
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
+check_updates = false      # once a day, ask GitHub whether a newer release is out
 scrollback = 5000
 history_page = 50
 completion_char = ":"

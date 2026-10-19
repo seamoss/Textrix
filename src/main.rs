@@ -17,12 +17,16 @@ mod servers;
 mod switcher;
 mod theme;
 mod ui;
+mod update;
 mod vault;
 mod viewer;
 
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use std::path::PathBuf;
+
+use anyhow::Result;
+use clap::{CommandFactory, Parser};
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -34,16 +38,93 @@ use crate::{
     app::App,
     config::{Config, Paths, create_private_dir},
     servers::EnvFile,
+    theme::{Theme, ThemeName},
 };
 
-const USAGE: &str = "\
-usage: textrix [--help] [--version]
+/// `--check`: what Textrix would use, without connecting anywhere or
+/// reading any secrets.
+fn check(paths: &Paths) -> Result<()> {
+    println!("textrix {}", env!("CARGO_PKG_VERSION"));
+    let mut ok = true;
+    let env = EnvFile::new(paths.env_file.clone());
+    match env.servers() {
+        Ok(servers) => {
+            println!("dotfile   {}: {} server(s)", paths.env_file.display(), servers.defs.len());
+            for def in &servers.defs {
+                let home = def.homeserver_or_server_name().unwrap_or("(found from the user ID)");
+                let dir = paths.account_dir(&def.name);
+                let store = if dir.join("store-enc").exists() {
+                    "encrypted store"
+                } else if dir.join("store").exists() {
+                    "unencrypted store (encrypted at next start)"
+                } else {
+                    "not signed in yet"
+                };
+                println!("  {:<12} {} on {home}; {store}", def.name, def.user);
+            }
+            for warning in &servers.warnings {
+                println!("  warning: {warning}");
+            }
+        }
+        Err(e) => {
+            ok = false;
+            println!("dotfile   {}: {e:#}", paths.env_file.display());
+        }
+    }
+    let config = paths.config_file();
+    match Config::load(&config) {
+        Ok(cfg) if config.exists() => println!("config    {}: ok (theme {})", config.display(), cfg.theme.name()),
+        Ok(_) => println!("config    {}: none, using defaults", config.display()),
+        Err(e) => {
+            ok = false;
+            println!("config    {}: {e:#}", config.display());
+        }
+    }
+    let keychain = if vault::available() { "available" } else { "not found (stores stay unencrypted)" };
+    println!("keychain  {keychain}");
+    if ok { Ok(()) } else { anyhow::bail!("fix the problems above") }
+}
 
-Connects to every server defined in the dotfile:
-  release builds: ~/.textrix/.env   debug builds: ./.textrix in the repo
-  (override with TEXTRIX_ENV=<path>; state lives in TEXTRIX_HOME, default ~/.textrix)
+/// An irssi-style terminal client for Matrix.
+#[derive(clap::Parser)]
+#[command(name = "textrix", version, about, long_about = LONG_ABOUT)]
+struct Cli {
+    /// The dotfile listing your servers [default: ~/.textrix/.env; debug
+    /// builds use .textrix in the repo; TEXTRIX_ENV also sets it]
+    #[arg(long, value_name = "FILE")]
+    env: Option<PathBuf>,
+    /// Where Textrix keeps its state and config.toml [default: ~/.textrix;
+    /// TEXTRIX_HOME also sets it]
+    #[arg(long, value_name = "DIR")]
+    home: Option<PathBuf>,
+    /// Start with this colour theme, for this run only
+    #[arg(long, value_name = "NAME", value_parser = theme_names())]
+    theme: Option<String>,
+    /// Check the dotfile, config.toml, keychain and stores, then exit
+    #[arg(long)]
+    check: bool,
+    /// Print shell completions (bash, zsh, fish, elvish, powershell)
+    #[arg(long, value_name = "SHELL")]
+    completions: Option<clap_complete::Shell>,
+    /// Print the man page
+    #[arg(long)]
+    man: bool,
+}
 
-See .env.example for the format.";
+const LONG_ABOUT: &str = "\
+An irssi-style terminal client for Matrix: numbered windows, a status bar, \
+slash commands, and end-to-end encryption.
+
+Textrix connects to every server defined in its dotfile (~/.textrix/.env), \
+a private file of TEXTRIX_<NAME>_HOMESERVER, _USER, _PASSWORD and \
+_RECOVERY_KEY lines; see the env.example installed with it. Secrets are read \
+only for the call that needs them, and environment variables of the same \
+name override the file. Preferences live in ~/.textrix/config.toml; inside \
+Textrix, /set and /save change them, and F1 lists every key and command.";
+
+fn theme_names() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(ThemeName::ALL.map(|(name, _)| name))
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -57,25 +138,28 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<()> {
-    if let Some(arg) = std::env::args().nth(1) {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            "-V" | "--version" => {
-                println!("textrix {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            other => bail!("unknown argument {other}\n\n{USAGE}"),
-        }
+    let cli = Cli::parse();
+    if let Some(shell) = cli.completions {
+        clap_complete::generate(shell, &mut Cli::command(), "textrix", &mut std::io::stdout());
+        return Ok(());
+    }
+    if cli.man {
+        clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
+        return Ok(());
     }
 
-    let paths = Paths::discover()?;
+    let paths = Paths::discover(cli.home, cli.env)?;
+    if cli.check {
+        return check(&paths);
+    }
     create_private_dir(&paths.base)?;
     let env = EnvFile::new(paths.env_file.clone());
     let servers = env.servers().map_err(|e| anyhow::anyhow!("{e:#}\n(see .env.example for the format)"))?;
-    let cfg = Config::load(&paths.config_file())?;
+    let mut cfg = Config::load(&paths.config_file())?;
+    if let Some(theme) = cli.theme.as_deref().and_then(ThemeName::parse) {
+        cfg.palette = Theme::build(theme, &cfg.colors)?;
+        cfg.theme = theme;
+    }
 
     let log = tracing_appender::rolling::never(&paths.base, "textrix.log");
     let (log, _log_guard) = tracing_appender::non_blocking(log);

@@ -53,7 +53,7 @@ use crate::{
     servers::{EnvFile, ServerDef, Servers},
     switcher::{self, Switcher},
     theme::{Theme, ThemeName},
-    ui,
+    ui, update,
     viewer::{self, Viewer},
 };
 
@@ -886,6 +886,7 @@ const COMMANDS: &[Cmd] = &[
         args: "[rename <id> <name> | delete <id>]",
         help: "List your sessions, rename one, or sign one out (asks to confirm)",
     },
+    Cmd { name: "version", args: "[check]", help: "Show the version; check asks GitHub for a newer one" },
     Cmd { name: "quit", args: "", help: "Exit Textrix (alias /exit)" },
 ];
 
@@ -1109,6 +1110,31 @@ impl App {
         for name in names {
             self.connect(&name);
         }
+        if self.cfg.check_updates {
+            self.watch_for_updates();
+        }
+    }
+
+    /// `check_updates`: once a day (remembered across restarts), ask GitHub
+    /// for the latest release.
+    fn watch_for_updates(&self) {
+        let (tx, stamp) = (self.tx.clone(), self.paths.base.join("update-check"));
+        tokio::spawn(async move {
+            loop {
+                let due =
+                    update::last_checked(&stamp).and_then(|t| t.elapsed().ok()).is_none_or(|age| age >= update::EVERY);
+                if due {
+                    match update::latest().await {
+                        Ok(latest) => {
+                            update::mark_checked(&stamp);
+                            let _ = tx.send(AppEvent::Update { latest: Some(latest), asked: false });
+                        }
+                        Err(e) => tracing::debug!("update check failed: {e:#}"),
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            }
+        });
     }
 
     fn connect(&mut self, name: &str) {
@@ -1284,6 +1310,17 @@ impl App {
     pub fn on_event(&mut self, ev: AppEvent) {
         let cap = self.cfg.scrollback;
         match ev {
+            AppEvent::Update { latest, asked } => {
+                let current = env!("CARGO_PKG_VERSION");
+                match latest {
+                    Some((version, url)) if update::newer(&version, current) => self.status(Line::info(format!(
+                        "Textrix {version} is out (you have {current}): brew upgrade textrix, or {url}"
+                    ))),
+                    Some(_) if asked => self.info(format!("Textrix {current} is the latest")),
+                    None if asked => self.error("couldn't reach GitHub to check for updates"),
+                    _ => {}
+                }
+            }
             AppEvent::LinkTitle { url, title } => {
                 if self.link_titles.len() > LINK_TITLES_MAX {
                     self.link_titles.clear();
@@ -3446,6 +3483,21 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "version" => {
+                self.info(format!("Textrix {}", env!("CARGO_PKG_VERSION")));
+                match args.trim() {
+                    "check" => {
+                        let tx = self.tx.clone();
+                        tokio::spawn(async move {
+                            let latest = update::latest().await.ok();
+                            let _ = tx.send(AppEvent::Update { latest, asked: true });
+                        });
+                        Ok(())
+                    }
+                    "" => Ok(()),
+                    _ => Err("usage: /version [check]".into()),
+                }
+            }
             "avatar" => self.pick_account(args).and_then(|(acct, image)| {
                 let image = avatar_arg(image, "/avatar")?;
                 acct.set_avatar(self.here(), image);

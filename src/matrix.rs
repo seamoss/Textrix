@@ -189,6 +189,12 @@ pub enum AppEvent {
         items: Vec<Item>,
     },
     /// `/threads`: the room's thread roots, newest first.
+    /// A newer release than this build: (version, its page). `asked` when
+    /// /version check asked, so "you're up to date" is worth saying.
+    Update {
+        latest: Option<(String, String)>,
+        asked: bool,
+    },
     /// A link's title (`None`: it has none, or the preview failed).
     LinkTitle {
         url: String,

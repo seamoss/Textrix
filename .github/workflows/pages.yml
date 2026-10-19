@@ -1,10 +1,11 @@
 name: Website
 
-# site/ is published to GitHub Pages (seamoss.github.io/Textrix).
+# site/ is published to GitHub Pages (seamoss.github.io/Textrix), with a
+# changelog page built from CHANGELOG.md and the version stamped in.
 on:
   push:
     branches: [master]
-    paths: [site/**, .github/workflows/pages.yml]
+    paths: [site/**, packaging/site/**, CHANGELOG.md, Cargo.toml, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -25,8 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v6
+      - run: python3 packaging/site/build.py _site
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v5
