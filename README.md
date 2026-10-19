@@ -151,7 +151,7 @@ bindings.
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
 | Nicknames | `/nickname sam Sammy` shows that person as "Sammy" everywhere in Textrix: on their messages and replies to them, read markers, typing notices, the member list, notifications, and their DM window. Only you see it; Tab finds them by either name but inserts their own, so a nickname never ends up in a message. `/nickname sam` takes it off, `/nickname` lists them. Kept in `layout.json` |
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Splits last for the session |
-| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
+| Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 Editing follows Matrix's rules: only your own text messages, and only where
@@ -197,6 +197,9 @@ classic session's encryption stream position over to sliding sync, so an
 existing session stays on classic sync (to switch, `/logout` and reconnect).
 Sliding sync has no presence, so presence dots there only update via
 `/whois`. Force a method with `sync = "classic"` or `"sliding"`.
+
+When the connection drops, it's a netsplit: `Netsplit 0x4f02.com ⇄ you,
+quits: …`, then `Netsplit over after 2m 13s, joins: …` once it's back.
 
 ### History at startup
 
@@ -292,8 +295,8 @@ synced, so your other clients notify on it too); `/hilight` lists them and
 
 `theme = "default"` suits dark terminal backgrounds, `"light"` light ones,
 `"mono"` uses no colour at all (bold, underline and reverse video). The
-rest are monochrome monitors in green (phosphor), blue or red (Virtual
-Boy), each three ways: on black (`"green"`), on deep blue with every panel
+rest are monochrome monitors in green (phosphor), blue, red (Virtual Boy)
+or amber, each three ways: on black (`"green"`), on deep blue with every panel
 framed in double lines like an 80s airport terminal (`"green-deep"`), or
 on black with thin neon outlines (`"green-tron"`). `/theme blue-deep`
 tries one for the session; `/theme` lists them. A `[colors]` table changes single
@@ -349,7 +352,7 @@ sidebar_avatars = true     # room avatars there (coloured initials without graph
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
-theme = "default"          # light, mono, green, blue, red (+ -deep, -tron); [colors] overrides parts
+theme = "default"          # light, mono, green, blue, red, amber (+ -deep, -tron); [colors] overrides
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain

@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.1.3] - 2026-10-18
+
+### Added
+- Amber monochrome-monitor themes: `amber`, `amber-deep` (on deep blue
+  with double-line frames) and `amber-tron`.
+- `/avatar <image>` sets your profile picture and `/roomavatar <image>`
+  the room's; `-remove` takes either off. The file has to really be an
+  image (checked before uploading), up to 10 MB; Tab completes the path.
+
+### Changed
+- A dropped connection is a netsplit now, irssi-style: "Netsplit
+  0x4f02.com ⇄ you, quits: …" when it goes and "Netsplit over after
+  2m 13s, joins: …" when it's back, in the status window and the window
+  you're in.
+
 ## [0.1.2] - 2026-10-16
 
 ### Added

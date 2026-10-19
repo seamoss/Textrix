@@ -66,7 +66,7 @@ use matrix_sdk::{
             receipt::{ReceiptThread, ReceiptType as EventReceiptType},
             relation::Annotation,
             room::{
-                MediaSource,
+                MediaSource, avatar,
                 encryption::RoomEncryptionEventContent,
                 guest_access::{GuestAccess, RoomGuestAccessEventContent},
                 history_visibility::HistoryVisibility,
@@ -1523,6 +1523,48 @@ impl Account {
         encode_image(bytes, picker, cells).await
     }
 
+    /// `/avatar`: your profile picture (`None` removes it), seen by everyone
+    /// who shares a room with you.
+    pub fn set_avatar(&self, out: Option<OwnedRoomId>, image: Option<PathBuf>) {
+        let acct = self.clone();
+        self.spawn_op(out.clone(), async move {
+            let text = match image {
+                Some(path) => {
+                    let (mime, data, _) = read_avatar(&path)?;
+                    acct.client.account().upload_avatar(&mime, data).await?;
+                    format!("your picture is now {}", path.display())
+                }
+                None => {
+                    acct.client.account().set_avatar_url(None).await?;
+                    "your picture is removed".to_owned()
+                }
+            };
+            acct.notify.line(out, Line::info(text));
+            Ok(())
+        });
+    }
+
+    /// `/roomavatar`: the room's picture (`None` removes it).
+    pub fn set_room_avatar(&self, room_id: OwnedRoomId, image: Option<PathBuf>) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            let text = match image {
+                Some(path) => {
+                    let (mime, data, info) = read_avatar(&path)?;
+                    room.upload_avatar(&mime, data, Some(info)).await?;
+                    format!("the room's picture is now {}", path.display())
+                }
+                None => {
+                    room.remove_avatar().await?;
+                    "the room's picture is removed".to_owned()
+                }
+            };
+            acct.notify.line(Some(room_id), Line::info(text));
+            Ok(())
+        });
+    }
+
     /// The original image for the viewer, decoded in memory only.
     pub fn fetch_full_image(&self, event_id: OwnedEventId, media: Media) {
         const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
@@ -2803,6 +2845,26 @@ async fn encode_image(bytes: Vec<u8>, picker: Picker, cells: Size) -> Result<Pro
     .await?
 }
 
+/// An image file for an avatar: its type, bytes and size, refused unless
+/// it really decodes as an image (and isn't huge).
+fn read_avatar(path: &Path) -> Result<(mime::Mime, Vec<u8>, avatar::ImageInfo)> {
+    const MAX: u64 = 10 * 1024 * 1024;
+    let size = std::fs::metadata(path).with_context(|| format!("{}", path.display()))?.len();
+    if size > MAX {
+        bail!("{} is over 10 MB; pick a smaller picture", path.display());
+    }
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    if mime.type_() != mime::IMAGE {
+        bail!("{} isn't an image", path.display());
+    }
+    let data = std::fs::read(path).with_context(|| format!("{}", path.display()))?;
+    let decoded = decode_image(&data).with_context(|| format!("{} doesn't open as an image", path.display()))?;
+    let mut info = avatar::ImageInfo::new();
+    (info.width, info.height) = (Some(decoded.width().into()), Some(decoded.height().into()));
+    (info.mimetype, info.size) = (Some(mime.to_string()), Some(UInt::try_from(size).unwrap_or_default()));
+    Ok((mime, data, info))
+}
+
 /// Decode an untrusted image with caps on its size and memory (blocking).
 fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
@@ -2865,6 +2927,31 @@ pub enum VerifyAnswer {
     Confirm,
     Mismatch,
     Cancel,
+}
+
+#[cfg(test)]
+mod avatar_tests {
+    use super::read_avatar;
+
+    #[test]
+    fn avatars_must_really_be_images() {
+        let dir = std::env::temp_dir().join(format!("textrix-avatar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("me.png");
+        image::RgbImage::from_pixel(6, 4, image::Rgb([200, 30, 30])).save(&png).unwrap();
+        let (mime, data, info) = read_avatar(&png).unwrap();
+        assert_eq!(mime.essence_str(), "image/png");
+        assert!(!data.is_empty());
+        assert_eq!((info.width.map(u64::from), info.height.map(u64::from)), (Some(6), Some(4)));
+
+        let fake = dir.join("fake.png");
+        std::fs::write(&fake, "not a picture").unwrap();
+        assert!(read_avatar(&fake).unwrap_err().to_string().contains("doesn't open as an image"));
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, "hello").unwrap();
+        assert!(read_avatar(&text).unwrap_err().to_string().contains("isn't an image"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]

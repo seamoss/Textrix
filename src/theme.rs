@@ -43,10 +43,16 @@ pub enum ThemeName {
     BlueTron,
     #[serde(rename = "red-tron")]
     RedTron,
+    /// Amber on black, like the other monochrome monitors.
+    Amber,
+    #[serde(rename = "amber-deep")]
+    AmberDeep,
+    #[serde(rename = "amber-tron")]
+    AmberTron,
 }
 
 impl ThemeName {
-    pub const ALL: [(&str, ThemeName); 12] = [
+    pub const ALL: [(&str, ThemeName); 15] = [
         ("default", ThemeName::Default),
         ("light", ThemeName::Light),
         ("mono", ThemeName::Mono),
@@ -59,6 +65,9 @@ impl ThemeName {
         ("red", ThemeName::Red),
         ("red-deep", ThemeName::RedDeep),
         ("red-tron", ThemeName::RedTron),
+        ("amber", ThemeName::Amber),
+        ("amber-deep", ThemeName::AmberDeep),
+        ("amber-tron", ThemeName::AmberTron),
     ];
 
     /// A theme by name (also "dark", "phosphor", "virtualboy").
@@ -159,6 +168,7 @@ const BLUE: Hue = Hue { shades: [39, 32, 25, 17], hot: 123, code: 45, nicks: [39
 /// Lighter blues, to read on the deep blue.
 const BLUE_ON_DEEP: Hue =
     Hue { shades: [123, 81, 74, 25], hot: 231, code: 159, nicks: [123, 159, 117, 87, 81, 195, 153] };
+const AMBER: Hue = Hue { shades: [214, 172, 136, 94], hot: 229, code: 220, nicks: [214, 208, 220, 178, 215, 221, 179] };
 const RED: Hue = Hue { shades: [196, 160, 124, 52], hot: 210, code: 203, nicks: [196, 160, 203, 124, 167, 197, 161] };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -239,6 +249,9 @@ impl Theme {
             ThemeName::GreenTron => Self::monochrome(GREEN, Backdrop::Tron),
             ThemeName::BlueTron => Self::monochrome(BLUE, Backdrop::Tron),
             ThemeName::RedTron => Self::monochrome(RED, Backdrop::Tron),
+            ThemeName::Amber => Self::monochrome(AMBER, Backdrop::Black),
+            ThemeName::AmberDeep => Self::monochrome(AMBER, Backdrop::Deep),
+            ThemeName::AmberTron => Self::monochrome(AMBER, Backdrop::Tron),
         };
         for (key, value) in overrides {
             theme.set(key, value)?;

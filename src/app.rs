@@ -675,6 +675,8 @@ pub struct App {
     /// The full-screen image viewer.
     pub viewer: Option<Viewer>,
     pub split: Option<Split>,
+    /// Servers whose connection dropped, and since when (netsplits).
+    splits: HashMap<String, Instant>,
     /// People whose away status you've been told about (irssi's "is
     /// away"), and what it was.
     away_noted: HashMap<OwnedUserId, String>,
@@ -813,6 +815,8 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "names", args: "", help: "List room members" },
     Cmd { name: "whois", args: "<nick|@user>", help: "Show a user's profile and device trust" },
     Cmd { name: "nick", args: "<name>", help: "Set your display name on this server" },
+    Cmd { name: "avatar", args: "<image> | -remove", help: "Set or remove your profile picture" },
+    Cmd { name: "roomavatar", args: "<image> | -remove", help: "Set or remove this room's picture" },
     Cmd {
         name: "nickname",
         args: "[nick|@user [name]]",
@@ -847,7 +851,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "theme",
         args: "[name]",
-        help: "Colours for this session: default, light, mono, or green, blue, red (each also -deep, -tron)",
+        help: "Colours for this session: default, light, mono, or green, blue, red, amber (each also -deep, -tron)",
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
@@ -1057,6 +1061,7 @@ impl App {
             help: None,
             viewer: None,
             split: None,
+            splits: HashMap::new(),
             away_noted: HashMap::new(),
             mention_origins: HashMap::new(),
             alias_depth: 0,
@@ -1340,16 +1345,26 @@ impl App {
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.status = ConnStatus::Online;
                 }
-                let text = if first { "synced" } else { "connection restored" };
-                self.status(Line::info(format!("{account}: {text}")));
+                match self.splits.remove(&*account) {
+                    Some(since) if !first => {
+                        let rooms = self.split_rooms(&account);
+                        let text = format!("Netsplit over after {}, joins: {rooms}", short_duration(since.elapsed()));
+                        self.netsplit_note(&account, Line::info(text));
+                    }
+                    _ => self.status(Line::info(format!("{account}: synced"))),
+                }
             }
             AppEvent::SyncError { account, error } => {
-                let was_lagging = self.accounts.get(&account).is_some_and(|s| s.status == ConnStatus::Lagging);
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.status = ConnStatus::Lagging;
                 }
-                if !was_lagging {
-                    self.status(Line::error(format!("{account}: sync failed ({error}); retrying")));
+                if !self.splits.contains_key(&*account) {
+                    // irssi-style: the server split from you, taking your rooms.
+                    self.splits.insert(account.to_string(), Instant::now());
+                    let server = self.server_host(&account);
+                    let rooms = self.split_rooms(&account);
+                    let text = format!("Netsplit {server} ⇄ you, quits: {rooms} ({error}; rejoining when it's back)");
+                    self.netsplit_note(&account, Line::error(text));
                 }
             }
             AppEvent::Rooms { account, mut rooms } => {
@@ -1902,6 +1917,37 @@ impl App {
         let markdown = std::mem::replace(&mut self.cfg.markdown, false);
         self.say(text, kind);
         self.cfg.markdown = markdown;
+    }
+
+    /// Where a server lives, for netsplit lines: "0x4f02.com".
+    fn server_host(&self, account: &str) -> String {
+        let url = self.connected(account).map(|a| a.homeserver).unwrap_or_else(|| account.to_owned());
+        let host = url.split("://").last().unwrap_or(&url);
+        host.trim_end_matches('/').split('/').next().unwrap_or(host).to_owned()
+    }
+
+    /// The server's rooms, as a netsplit lists its nicks.
+    fn split_rooms(&self, account: &str) -> String {
+        let rooms: Vec<&str> = self
+            .windows
+            .iter()
+            .filter(|w| w.room.as_ref().is_some_and(|k| k.account == account && k.thread.is_none()))
+            .map(|w| w.title())
+            .collect();
+        match rooms.len() {
+            0 => "no rooms".to_owned(),
+            n if n <= 4 => rooms.join(", "),
+            n => format!("{} +{}", rooms[..3].join(", "), n - 3),
+        }
+    }
+
+    /// In the status window, and the window you're in if it's that server's.
+    fn netsplit_note(&mut self, account: &str, line: Line) {
+        if self.active != 0 && self.win().account() == Some(account) {
+            let cap = self.cfg.scrollback;
+            self.windows[self.active].push(line.clone(), cap);
+        }
+        self.status(line);
     }
 
     /// `/bell [on|off|away|sound|visual|both|test]` for this session.
@@ -3271,6 +3317,9 @@ impl App {
         if first == "/upload" || (first == "/keys" && matches!(second, "export" | "import") && !at_start) {
             return path_candidates(&word);
         }
+        if matches!(first, "/avatar" | "/roomavatar") && !at_start {
+            return path_candidates(&word);
+        }
 
         if word.is_empty() {
             return Vec::new();
@@ -3397,6 +3446,15 @@ impl App {
             }),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
+            "avatar" => self.pick_account(args).and_then(|(acct, image)| {
+                let image = avatar_arg(image, "/avatar")?;
+                acct.set_avatar(self.here(), image);
+                Ok(())
+            }),
+            "roomavatar" => {
+                let image = avatar_arg(args, "/roomavatar");
+                image.and_then(|image| self.room_ctx().map(|(acct, room_id)| acct.set_room_avatar(room_id, image)))
+            }
             "set" => self.cmd_set(args),
             "save" => self.cmd_save(),
             "nickname" => self.cmd_nickname(args),
@@ -4920,6 +4978,25 @@ fn is_mention(line: &Line) -> bool {
     line.highlight && !line.own && line.is_message()
 }
 
+/// "45s", "2m 13s", "1h 5m".
+fn short_duration(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m {}s", s / 60, s % 60),
+        _ => format!("{}h {}m", s / 3600, s % 3600 / 60),
+    }
+}
+
+/// `<image>` or `-remove` for /avatar and /roomavatar.
+fn avatar_arg(args: &str, command: &str) -> Result<Option<PathBuf>, String> {
+    match args.trim() {
+        "" => Err(format!("usage: {command} <image> | -remove")),
+        "-remove" => Ok(None),
+        path => Ok(Some(parse_path(path))),
+    }
+}
+
 fn split_first(s: &str) -> (&str, &str) {
     let s = s.trim_start();
     match s.find(char::is_whitespace) {
@@ -5485,6 +5562,26 @@ mod tests {
         app.cmd_save().unwrap();
         assert!(app.windows[0].lines.back().unwrap().body.contains("already has these settings"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dropped_connections_are_netsplits() {
+        let mut app = test_app();
+        for (room, name) in [("!a:x.org", "Night Owls"), ("!b:x.org", "Book Club")] {
+            room_window(&mut app, room, name);
+        }
+        let error = || AppEvent::SyncError { account: "t".into(), error: "connection refused".into() };
+        app.on_event(error());
+        app.on_event(error());
+        let status: Vec<&str> = app.windows[0].lines.iter().map(|l| l.body.as_str()).collect();
+        let splits: Vec<&&str> = status.iter().filter(|b| b.starts_with("Netsplit t ⇄ you")).collect();
+        assert_eq!(splits.len(), 1, "once per split: {status:?}");
+        assert!(splits[0].contains("quits: Night Owls, Book Club"), "{}", splits[0]);
+        app.on_event(AppEvent::Synced { account: "t".into(), first: false });
+        let over = &app.windows[0].lines.back().unwrap().body;
+        assert!(over.starts_with("Netsplit over after 0s, joins: Night Owls, Book Club"), "{over}");
+        assert_eq!(short_duration(Duration::from_secs(133)), "2m 13s");
+        assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
     }
 
     #[test]
