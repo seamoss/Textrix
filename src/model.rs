@@ -132,14 +132,47 @@ impl Line {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    /// Shown inline, and full screen with `z`.
+    Image,
+    /// Played in a video player; shows its poster frame inline if it has one.
+    Video,
+    /// Played through the system's audio player.
+    Audio,
+    File,
+}
+
+impl Media {
+    /// Whether it has something to show inline: an image, or a video's
+    /// poster frame.
+    pub fn has_picture(&self) -> bool {
+        self.kind == MediaKind::Image || (self.kind == MediaKind::Video && self.thumbnail.is_some())
+    }
+
+    pub fn playable(&self) -> bool {
+        matches!(self.kind, MediaKind::Audio | MediaKind::Video)
+    }
+
+    /// An extension players can go by: the file name's, or one for its MIME type.
+    pub fn extension(&self) -> Option<String> {
+        let sane = |e: &str| (1..=5).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric());
+        let from_name = self.filename.rsplit_once('.').map(|(_, e)| e.to_lowercase()).filter(|e| sane(e));
+        from_name.or_else(|| {
+            let mime = self.mimetype.as_deref()?;
+            let ext = mime_guess::get_mime_extensions_str(mime)?.first()?;
+            sane(ext).then(|| (*ext).to_owned())
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Media {
     pub source: MediaSource,
     pub filename: String,
-    /// Images get inline previews.
-    pub is_image: bool,
-    /// Audio (and voice messages) can be played.
-    pub is_audio: bool,
+    pub kind: MediaKind,
+    /// The sender's MIME type, e.g. `video/mp4`.
+    pub mimetype: Option<String>,
     /// A sender-provided thumbnail (the only kind encrypted images have).
     pub thumbnail: Option<MediaSource>,
     pub size: Option<u64>,

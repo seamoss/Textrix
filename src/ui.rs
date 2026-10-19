@@ -698,7 +698,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         let is_selected = selected.is_some() && line.event_id == selected;
         if images
             && !line.redacted
-            && let (Some(media), Some(id)) = (line.media.as_ref().filter(|m| m.is_image), &line.event_id)
+            && let (Some(media), Some(id)) = (line.media.as_ref().filter(|m| m.has_picture()), &line.event_id)
         {
             match previews.get(id) {
                 Some(Preview::Ready(protocol)) => {

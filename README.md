@@ -104,7 +104,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
@@ -249,7 +249,7 @@ keys (or `hjkl`) move around, `0` fits it again, and Esc closes. With
 kitty, iTerm2 or sixel graphics it's sharp; with half-blocks, zooming in is
 how you see the detail.
 
-### Voice messages
+### Voice messages and video
 
 Voice messages show their length and waveform, `[voice] 0:12 ▁▃▅▇▅▃▁`, and
 other audio its length. `z` (or Space) on one in selection mode plays it,
@@ -259,6 +259,14 @@ decrypts it, decodes Element's Ogg Opus itself, and hands it to the
 system's player (`afplay` on macOS; `pw-play`, `paplay`, `mpv`, `ffplay`
 or `aplay` on Linux, or whatever `audio_player` says) from a private file
 that's deleted as soon as it stops.
+
+Videos show their length and size, `[video] clip.mp4 (0:42, 1920×1080)`,
+and their poster frame inline when the sender included one. `z` (or
+Space, or `/play`) fetches and decrypts one (up to 200 MB) and opens it
+in mpv if you have it, otherwise in the app your system uses for that
+kind of file (QuickTime Player on macOS, which can't play `.webm`; set
+`video_player`, e.g. to `"mpv"`, for one that can). The decrypted copy
+stays in a private folder until Textrix closes.
 
 ### Reading state
 
@@ -396,6 +404,7 @@ sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
 audio_player = ""          # e.g. "mpv --no-video"; "" uses the system's player
+video_player = ""          # e.g. "mpv" or "open -a IINA"; "" uses mpv, else the system's app
 sidebar = true             # window list (F2)
 sidebar_avatars = true     # room avatars there (coloured initials without graphics)
 nicklist = true            # member list (F3)

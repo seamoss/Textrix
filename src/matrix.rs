@@ -98,7 +98,8 @@ use crate::{
     convert::Converter,
     index::{Crawl, Entry, ROOM_CAP, SearchIndex},
     model::{
-        AccountName, Item, Line, LineKind, Media, Member, Permissions, Presence, PresenceKind, RoomMeta, SpaceInfo,
+        AccountName, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence, PresenceKind, RoomMeta,
+        SpaceInfo,
     },
     servers::{EnvFile, Secret, ServerDef, write_private},
     vault,
@@ -1654,6 +1655,8 @@ impl Account {
         let bytes = match (&media.thumbnail, &media.source) {
             // Encrypted images can only have sender-made thumbnails.
             (Some(thumbnail), _) => media_api.get_media_content(&file(thumbnail), true).await?,
+            // A video's picture is its poster frame or nothing.
+            (None, _) if media.kind == MediaKind::Video => bail!("{} has no poster frame", media.filename),
             (None, MediaSource::Plain(_)) => {
                 let settings = MediaThumbnailSettings::new(UInt::from(width.max(96)), UInt::from(height.max(96)));
                 let request =
@@ -1730,33 +1733,36 @@ impl Account {
         });
     }
 
-    /// Play an attachment through `player` (the file goes on the end of the
-    /// command). The decrypted audio is on disk, in a private file in `dir`,
-    /// only while it plays: aborting the task stops the player and deletes it.
-    pub fn play_audio(
+    /// Play audio or video through `player` (the file goes on the end of
+    /// the command). The decrypted file is on disk, in a private file in
+    /// `dir`: audio only while it plays (aborting the task stops the player
+    /// and deletes it); video until Textrix closes, as video players often
+    /// hand the file to an app and return straight away.
+    pub fn play(
         &self,
         event_id: OwnedEventId,
         media: Media,
         player: Vec<String>,
         dir: PathBuf,
     ) -> tokio::task::AbortHandle {
-        const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
+        let video = media.kind == MediaKind::Video;
+        let limit: u64 = if video { 200 } else { 50 };
         let acct = self.clone();
         tokio::spawn(async move {
             let result = async {
-                if media.size.is_some_and(|s| s > MAX_DOWNLOAD) {
-                    bail!("{} is over 50 MB", media.filename);
+                if media.size.is_some_and(|s| s > limit * 1024 * 1024) {
+                    bail!("{} is over {limit} MB", media.filename);
                 }
                 let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
-                let data = acct.client.media().get_media_content(&request, true).await?;
+                // Videos stay out of the store's media cache: they're big.
+                let data = acct.client.media().get_media_content(&request, !video).await?;
                 let (data, ext) = if crate::audio::is_ogg_opus(&data) {
                     let wav = tokio::task::spawn_blocking(move || crate::audio::ogg_opus_to_wav(&data)).await??;
                     (wav, "wav".to_owned())
                 } else {
                     // Players go by the extension.
-                    let ext = media.filename.rsplit_once('.').map(|(_, ext)| ext.to_lowercase());
-                    let ext = ext.filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()));
-                    (data, ext.unwrap_or_else(|| "audio".to_owned()))
+                    let fallback = if video { "mp4" } else { "audio" };
+                    (data, media.extension().unwrap_or_else(|| fallback.to_owned()))
                 };
                 create_private_dir(&dir)?;
                 let stamp =
@@ -1764,7 +1770,7 @@ impl Account {
                 let file = crate::audio::TempFile(dir.join(format!("play-{stamp}.{ext}")));
                 use std::io::Write;
                 create_private_file(&file.0)?.write_all(&data)?;
-                let (program, args) = player.split_first().context("no audio player")?;
+                let (program, args) = player.split_first().context("no player")?;
                 let status = tokio::process::Command::new(program)
                     .args(args)
                     .arg(&file.0)
@@ -1775,8 +1781,16 @@ impl Account {
                     .status()
                     .await
                     .with_context(|| format!("running {program}"))?;
+                if video {
+                    std::mem::forget(file);
+                }
                 if !status.success() {
-                    bail!("{program} couldn't play {} ({status})", media.filename);
+                    let hint = if video {
+                        format!(" ({status}); if nothing here plays .{ext} files, video_player in config.toml can name a player, e.g. \"mpv\"")
+                    } else {
+                        format!(" ({status})")
+                    };
+                    bail!("{program} couldn't play {}{hint}", media.filename);
                 }
                 anyhow::Ok(())
             }

@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.5.1] - 2026-10-18
+
+### Added
+- Videos play: `z` or Space in selection mode (or `/play`) fetches and
+  decrypts one and opens it in mpv if it's installed, otherwise in the
+  system's app for that kind of file; `video_player` picks another. The
+  decrypted copy stays in a private folder only until Textrix closes.
+- Videos show their length and size (`[video] clip.mp4 (0:42, 1920×1080)`)
+  and their poster frame inline when the sender included one.
+
+### Changed
+- 0.3.0 to 0.5.0 were never built as releases of their own; this release
+  includes everything in them.
+
 ## [0.5.0] - 2026-10-18
 
 ### Added

@@ -132,6 +132,31 @@ pub fn player(configured: &str) -> Option<Vec<String>> {
     candidates.iter().find(|c| found(c[0])).map(|c| c.iter().map(|s| (*s).to_owned()).collect())
 }
 
+/// The command that plays a video (the file goes on the end):
+/// `video_player` from config.toml, a player if there is one, or the app
+/// the system opens that kind of file with.
+pub fn video_player(configured: &str) -> Option<Vec<String>> {
+    if !configured.trim().is_empty() {
+        return Some(configured.split_whitespace().map(ToOwned::to_owned).collect());
+    }
+    let candidates: &[&[&str]] = if cfg!(target_os = "macos") {
+        &[&["mpv", "--really-quiet"], &["open"]]
+    } else {
+        &[
+            &["mpv", "--really-quiet"],
+            &["vlc", "--play-and-exit"],
+            &["ffplay", "-autoexit", "-loglevel", "quiet"],
+            &["xdg-open"],
+        ]
+    };
+    let found = |program: &str| {
+        program == "open" && cfg!(target_os = "macos")
+            || std::env::var_os("PATH")
+                .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+    };
+    candidates.iter().find(|c| found(c[0])).map(|c| c.iter().map(|s| (*s).to_owned()).collect())
+}
+
 /// A file that's deleted when dropped: decrypted audio only exists on disk
 /// while it plays.
 pub struct TempFile(pub PathBuf);

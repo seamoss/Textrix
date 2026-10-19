@@ -12,7 +12,7 @@ use matrix_sdk::{
             AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent, SyncMessageLikeEvent, SyncStateEvent,
             room::{
                 member::MembershipChange,
-                message::{AudioMessageEventContent, MessageFormat, MessageType, Relation},
+                message::{AudioMessageEventContent, MessageFormat, MessageType, Relation, VideoMessageEventContent},
                 redaction::SyncRoomRedactionEvent,
             },
         },
@@ -21,7 +21,7 @@ use matrix_sdk::{
 use serde::Deserialize;
 
 use crate::{
-    model::{Fold, Item, Line, LineKind, Media},
+    model::{Fold, Item, Line, LineKind, Media, MediaKind},
     richtext,
 };
 
@@ -257,7 +257,7 @@ fn render_msgtype(msgtype: &MessageType) -> (LineKind, String) {
         MessageType::Notice(c) => (LineKind::Notice, c.body.clone()),
         MessageType::ServerNotice(c) => (LineKind::Notice, c.body.clone()),
         MessageType::Image(c) => (LineKind::Message, attachment("image", c.filename.as_deref(), &c.body)),
-        MessageType::Video(c) => (LineKind::Message, attachment("video", c.filename.as_deref(), &c.body)),
+        MessageType::Video(c) => (LineKind::Message, video_text(c)),
         MessageType::Audio(c) => (LineKind::Message, audio_text(c)),
         MessageType::File(c) => (LineKind::Message, attachment("file", c.filename.as_deref(), &c.body)),
         MessageType::Location(c) => (LineKind::Message, format!("[location] {} ({})", c.body, c.geo_uri)),
@@ -292,6 +292,20 @@ fn audio_text(c: &AudioMessageEventContent) -> String {
     }
 }
 
+/// `[video] clip.mp4 (0:42, 1920×1080)`.
+fn video_text(c: &VideoMessageEventContent) -> String {
+    let text = attachment("video", c.filename.as_deref(), &c.body);
+    let info = c.info.as_deref();
+    let mut details = Vec::new();
+    if let Some(length) = info.and_then(|i| i.duration).filter(|d| !d.is_zero()) {
+        details.push(crate::audio::duration(length));
+    }
+    if let (Some(w), Some(h)) = (info.and_then(|i| i.width), info.and_then(|i| i.height)) {
+        details.push(format!("{w}×{h}"));
+    }
+    if details.is_empty() { text } else { format!("{text} ({})", details.join(", ")) }
+}
+
 fn media_of(msgtype: &MessageType) -> Option<Media> {
     let (source, filename, body) = match msgtype {
         MessageType::Image(c) => (&c.source, &c.filename, &c.body),
@@ -300,18 +314,33 @@ fn media_of(msgtype: &MessageType) -> Option<Media> {
         MessageType::File(c) => (&c.source, &c.filename, &c.body),
         _ => return None,
     };
-    let (is_image, thumbnail, size) = match msgtype {
+    let size = |s: Option<matrix_sdk::ruma::UInt>| s.map(u64::from);
+    let (kind, thumbnail, size, mimetype) = match msgtype {
         MessageType::Image(c) => {
             let info = c.info.as_deref();
-            (true, info.and_then(|i| i.thumbnail_source.clone()), info.and_then(|i| i.size).map(u64::from))
+            let thumbnail = info.and_then(|i| i.thumbnail_source.clone());
+            (MediaKind::Image, thumbnail, size(info.and_then(|i| i.size)), info.and_then(|i| i.mimetype.clone()))
         }
-        _ => (false, None, None),
+        MessageType::Video(c) => {
+            let info = c.info.as_deref();
+            let thumbnail = info.and_then(|i| i.thumbnail_source.clone());
+            (MediaKind::Video, thumbnail, size(info.and_then(|i| i.size)), info.and_then(|i| i.mimetype.clone()))
+        }
+        MessageType::Audio(c) => {
+            let info = c.info.as_deref();
+            (MediaKind::Audio, None, size(info.and_then(|i| i.size)), info.and_then(|i| i.mimetype.clone()))
+        }
+        MessageType::File(c) => {
+            let info = c.info.as_deref();
+            (MediaKind::File, None, size(info.and_then(|i| i.size)), info.and_then(|i| i.mimetype.clone()))
+        }
+        _ => return None,
     };
     Some(Media {
         source: source.clone(),
         filename: filename.clone().unwrap_or_else(|| body.clone()),
-        is_image,
-        is_audio: matches!(msgtype, MessageType::Audio(_)),
+        kind,
+        mimetype,
         thumbnail,
         size,
     })
@@ -360,13 +389,49 @@ mod tests {
         let (_, text) = super::render_msgtype(&MessageType::Audio(voice));
         assert_eq!(text, "[voice] 0:12 ▁▂▄█▄▂▁");
         let media = super::media_of(&MessageType::Audio(AudioMessageEventContent::new("x".into(), source.clone())));
-        assert!(media.is_some_and(|m| m.is_audio && !m.is_image));
+        assert!(media.is_some_and(|m| m.kind == crate::model::MediaKind::Audio));
 
         let mut song = AudioMessageEventContent::new("song.mp3".into(), source);
         let mut info = AudioInfo::new();
         info.duration = Some(Duration::from_secs(185));
         song.info = Some(Box::new(info));
         assert_eq!(super::render_msgtype(&MessageType::Audio(song)).1, "[audio] song.mp3 (3:05)");
+    }
+
+    #[test]
+    fn videos_show_length_size_and_poster() {
+        use std::time::Duration;
+
+        use matrix_sdk::ruma::{
+            UInt,
+            events::room::{
+                MediaSource,
+                message::{MessageType, VideoInfo, VideoMessageEventContent},
+            },
+        };
+        let mut info = VideoInfo::new();
+        info.duration = Some(Duration::from_secs(42));
+        (info.width, info.height) = (Some(UInt::from(1920u32)), Some(UInt::from(1080u32)));
+        info.mimetype = Some("video/mp4".into());
+        info.size = Some(UInt::from(5_000_000u32));
+        info.thumbnail_source = Some(MediaSource::Plain("mxc://x.org/poster".into()));
+        let mut clip = VideoMessageEventContent::new("clip".into(), MediaSource::Plain("mxc://x.org/v".into()));
+        clip.info = Some(Box::new(info));
+        let clip = MessageType::Video(clip);
+        assert_eq!(super::render_msgtype(&clip).1, "[video] clip (0:42, 1920×1080)");
+        let media = super::media_of(&clip).unwrap();
+        assert!(media.playable() && media.has_picture(), "plays, and shows its poster frame");
+        assert_eq!(media.extension().as_deref(), Some("mp4"), "from the MIME type when the name has none");
+        assert_eq!(media.size, Some(5_000_000));
+
+        let bare = MessageType::Video(VideoMessageEventContent::new(
+            "x.webm".into(),
+            MediaSource::Plain("mxc://x.org/w".into()),
+        ));
+        let media = super::media_of(&bare).unwrap();
+        assert!(!media.has_picture(), "no poster, nothing inline: the video itself is never fetched for it");
+        assert_eq!(media.extension().as_deref(), Some("webm"));
+        assert_eq!(super::render_msgtype(&bare).1, "[video] x.webm");
     }
 
     #[test]
