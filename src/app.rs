@@ -560,8 +560,12 @@ pub enum LinkTitle {
     None,
 }
 
-/// `/themes`: every theme in a list, each tried on the whole screen as
-/// you move to it.
+/// What `/theme` does other than pick a theme, so no theme file can be
+/// called these.
+const THEME_WORDS: [&str; 3] = ["list", "save", "import"];
+
+/// `/themes` (or `/theme` on its own): every theme in a list, each tried
+/// on the whole screen as you move to it.
 pub struct ThemePicker {
     pub entries: Vec<ThemeChoice>,
     /// What's typed, narrowing the list.
@@ -1020,8 +1024,9 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[name | save <name> | import <file>]",
-        help: "Colours for this session (no name lists them); save writes this look to a theme file, import adds one",
+        args: "[name | list | save <name> | import <file>]",
+        help: "Colours: no name opens the list, each shown as you move to it; list prints them; save writes this look \
+               to a theme file, import adds one",
     },
     Cmd {
         name: "themes",
@@ -4034,7 +4039,7 @@ impl App {
                 let yours = crate::theme::files(&self.paths.themes_dir());
                 let names = ThemeName::ALL.iter().map(|(n, _)| *n).chain(yours.iter().map(String::as_str));
                 return names
-                    .chain(["save", "import"])
+                    .chain(THEME_WORDS)
                     .filter(|n| n.starts_with(&lower))
                     .map(|n| Candidate { text: format!("{n} "), user: None, hint: None })
                     .collect();
@@ -5558,6 +5563,10 @@ impl App {
         let (sub, rest) = args.split_once(' ').map_or((args, ""), |(a, b)| (a, b.trim()));
         match sub {
             "" => {
+                self.open_theme_picker();
+                return Ok(());
+            }
+            "list" => {
                 self.list_themes();
                 return Ok(());
             }
@@ -5599,8 +5608,9 @@ impl App {
             self.info(format!("    {name}{about}"));
         }
         self.info(
-            "/themes picks one with a preview; /theme <name> tries one (theme = \"<name>\" in config.toml keeps \
-             it); /theme save <name> writes this look to a theme file to share, /theme import <file> adds one",
+            "/theme on its own picks one with a preview; /theme <name> tries one (theme = \"<name>\" in \
+             config.toml keeps it); /theme save <name> writes this look to a theme file to share, /theme import \
+             <file> adds one",
         );
     }
 
@@ -5612,6 +5622,9 @@ impl App {
         }
         if !matches!(ThemeId::parse(name).map_err(|e| format!("{e:#}"))?, ThemeId::File(_)) {
             return Err(format!("{name} is a built-in theme; pick another name"));
+        }
+        if THEME_WORDS.contains(&name) {
+            return Err(format!("/theme {name} means something else; pick another name"));
         }
         let dir = self.paths.themes_dir();
         let path = ThemeFile::path(&dir, name);
@@ -5641,7 +5654,7 @@ impl App {
         let stem = from.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
         let name = file.name.as_deref().unwrap_or(stem);
         match ThemeId::parse(name).map_err(|e| format!("{e:#}"))? {
-            ThemeId::File(_) if !matches!(name, "save" | "import") => {}
+            ThemeId::File(_) if !THEME_WORDS.contains(&name) => {}
             _ => return Err(format!("{name} is a built-in theme's name; change the file's name = line")),
         }
         let dir = self.paths.themes_dir();
@@ -6939,8 +6952,8 @@ mod tests {
                 .join("\n")
         };
 
-        app.command("themes");
-        assert!(app.theme_picker.is_some());
+        app.command("theme");
+        assert!(app.theme_picker.is_some(), "/theme on its own opens it too");
         let screen = draw(&mut app);
         assert!(screen.contains("Themes") && screen.contains("• default") && screen.contains("Classic"), "{screen}");
         app.on_key(key(KeyCode::Down));
@@ -6993,6 +7006,9 @@ mod tests {
         let saved = std::fs::read_to_string(dir.join("themes/vampire.toml")).unwrap();
         assert!(saved.contains("base = \"dracula\"") && saved.contains("link = \"red\""), "{saved}");
         assert!(app.cmd_theme("save nord").is_err(), "not under a built-in name");
+        assert!(app.cmd_theme("save list").is_err(), "nor a word /theme takes");
+        app.cmd_theme("list").unwrap();
+        assert!(app.windows[0].lines.iter().any(|l| l.body.contains("vampire")), "/theme list prints them");
         app.cmd_theme("vampire").unwrap();
         assert_eq!(app.cfg.theme, ThemeId::File("vampire".into()));
         app.cmd_theme("save vampire").unwrap();

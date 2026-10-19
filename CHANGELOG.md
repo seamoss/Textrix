@@ -7,6 +7,14 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.2] - 2026-10-19
+
+### Changed
+- `/theme` on its own opens the theme list with the live preview, the
+  same as `/themes`, instead of printing the themes in the status window;
+  `/theme list` prints them now. No theme file can be called `list`,
+  `save` or `import`.
+
 ## [0.9.1] - 2026-10-19
 
 ### Added
