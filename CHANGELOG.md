@@ -311,7 +311,7 @@ release notes.
 
 ### Changed
 - A dropped connection is a netsplit now, irssi-style: "Netsplit
-  0x4f02.com ⇄ you, quits: …" when it goes and "Netsplit over after
+  example.org ⇄ you, quits: …" when it goes and "Netsplit over after
   2m 13s, joins: …" when it's back, in the status window and the window
   you're in.
 

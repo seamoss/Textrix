@@ -2428,7 +2428,7 @@ impl App {
         self.cfg.markdown = markdown;
     }
 
-    /// Where a server lives, for netsplit lines: "0x4f02.com".
+    /// Where a server lives, for netsplit lines: "example.org".
     fn server_host(&self, account: &str) -> String {
         let url = self.connected(account).map(|a| a.homeserver).unwrap_or_else(|| account.to_owned());
         let host = url.split("://").last().unwrap_or(&url);

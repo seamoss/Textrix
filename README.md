@@ -262,7 +262,7 @@ existing session stays on classic sync (to switch, `/logout` and reconnect).
 Sliding sync has no presence, so presence dots there only update via
 `/whois`. Force a method with `sync = "classic"` or `"sliding"`.
 
-When the connection drops, it's a netsplit: `Netsplit 0x4f02.com ⇄ you,
+When the connection drops, it's a netsplit: `Netsplit example.org ⇄ you,
 quits: …`, then `Netsplit over after 2m 13s, joins: …` once it's back.
 
 ### History at startup
