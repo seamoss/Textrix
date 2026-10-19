@@ -207,11 +207,9 @@ impl SearchIndex {
         self.by_event.len()
     }
 
-    /// Messages containing `needle` (any case), newest first.
-    pub fn search(&self, needle: &str, limit: usize) -> Vec<Entry> {
-        let needle = needle.to_lowercase();
-        let mut hits: Vec<&Entry> =
-            self.entries.iter().flatten().filter(|e| e.body.to_lowercase().contains(&needle)).collect();
+    /// The messages `matches` picks, newest first.
+    pub fn search(&self, matches: impl Fn(&Entry) -> bool, limit: usize) -> Vec<Entry> {
+        let mut hits: Vec<&Entry> = self.entries.iter().flatten().filter(|e| matches(e)).collect();
         hits.sort_by_key(|e| std::cmp::Reverse(e.ts));
         hits.into_iter().take(limit).cloned().collect()
     }
@@ -276,8 +274,9 @@ mod tests {
         index.edit("$2", "fine, pizza".into()).unwrap();
         index.remove(vec!["$3".into()]).unwrap();
         index.set_crawl("!a:x.org", Crawl { from: Some("t42".into()), done: false }).unwrap();
-        let found =
-            |index: &SearchIndex| -> Vec<String> { index.search("pizza", 10).into_iter().map(|e| e.body).collect() };
+        let found = |index: &SearchIndex| -> Vec<String> {
+            index.search(|e| e.body.to_lowercase().contains("pizza"), 10).into_iter().map(|e| e.body).collect()
+        };
         assert_eq!(found(&index), ["fine, pizza", "Pizza tonight?"], "newest first, any case, edits and deletions");
 
         // Reopened, as after a restart: the same, read back from the log.

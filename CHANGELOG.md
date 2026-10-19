@@ -7,6 +7,30 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.7.0] - 2026-10-18
+
+### Added
+- Images you send carry a thumbnail and a blurhash, as Element sends them,
+  so they show quickly in other clients (phones especially), and videos a
+  poster frame (Quick Look on macOS, ffmpeg elsewhere), their length and
+  size.
+- Links are real hyperlinks (OSC 8) in terminals that have them: hovering
+  shows where they go, Cmd/Ctrl+click opens them, and a link wrapped over
+  several lines is one link. `hyperlinks = false` turns it off.
+- Search filters: `/search from:sam in:"Book Club" after:2026-01
+  before:2026-06-30 pizza`, any part optional, over loaded history, the
+  index and `-deep`.
+- Resizable panes: drag the line between two panes (or the upper pane's
+  title bar), or `/resize +5`, `/resize -5`, `/resize =`. Sizes are kept
+  with the split and in saved layouts.
+- Script timers and hooks: `every(secs, f)`, `after(secs, f)` and
+  `cancel(id)`; `on_join`, `on_leave`, `on_reaction` and `on_highlight`.
+  A new example, `/remind 10 stretch`.
+
+### Changed
+- The website lists what's arrived since: background mode, the search
+  index, voice and video, drag and drop, layouts.
+
 ## [0.6.5] - 2026-10-18
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "textrix"
-version = "0.6.5"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.96"
 description = "An irssi-style terminal client for Matrix"
@@ -51,6 +51,7 @@ opus-decoder = "0.1"
 ogg = "0.9"
 matrix-sdk-store-encryption = "0.19.1"
 rmp-serde = "1.3"
+blurhash = "0.2"
 
 # opus-decoder 0.1.1 shifts a u8 past its width in CELT's collapse mask on
 # some voice messages; release builds (no overflow checks) play them, so

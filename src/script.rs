@@ -80,6 +80,7 @@ struct Script {
     path: Option<PathBuf>,
     ast: AST,
     on_message: Vec<FnPtr>,
+    hooks: Hooks,
     commands: Vec<ScriptCommand>,
     /// When it last sent things, for the rate limit.
     sent: VecDeque<Instant>,
@@ -89,8 +90,63 @@ struct Script {
 #[derive(Default)]
 struct Registry {
     on_message: Vec<FnPtr>,
+    hooks: Hooks,
     commands: Vec<(String, String, FnPtr)>,
 }
+
+/// Handlers for what happens in rooms besides messages.
+#[derive(Clone, Default)]
+struct Hooks {
+    join: Vec<FnPtr>,
+    leave: Vec<FnPtr>,
+    reaction: Vec<FnPtr>,
+    highlight: Vec<FnPtr>,
+}
+
+impl Hooks {
+    fn len(&self) -> usize {
+        self.join.len() + self.leave.len() + self.reaction.len() + self.highlight.len()
+    }
+}
+
+/// Someone joining or leaving a room, as a script sees it.
+#[derive(Clone, Debug, Default)]
+pub struct Member {
+    pub context: Context,
+    pub user: String,
+    pub nick: String,
+}
+
+/// A reaction to a message, as a script sees it.
+#[derive(Clone, Debug, Default)]
+pub struct Reaction {
+    pub context: Context,
+    pub nick: String,
+    pub key: String,
+    /// The message reacted to: its ID, and its text if it's loaded.
+    pub target: String,
+    pub text: String,
+}
+
+/// What scripts hear about.
+pub enum Event {
+    Message(Message),
+    Join(Member),
+    Leave(Member),
+    Reaction(Reaction),
+}
+
+/// `every` or `after`: a function to call once a time comes.
+struct Timer {
+    id: i64,
+    script: String,
+    every: Option<Duration>,
+    due: Instant,
+    call: FnPtr,
+}
+
+/// Timers each script can have.
+const TIMERS_MAX: usize = 32;
 
 /// Sends per script in a [`SEND_WINDOW`].
 const SEND_LIMIT: usize = 5;
@@ -128,6 +184,8 @@ struct Shared {
     /// config.toml's `[script_settings]`, by script.
     config: BTreeMap<String, toml::Table>,
     status: BTreeMap<String, Status>,
+    timers: Vec<Timer>,
+    next_timer: i64,
 }
 
 impl Shared {
@@ -209,6 +267,14 @@ impl Scripts {
 
         let hooks = registry.clone();
         engine.register_fn("on_message", move |handler: FnPtr| hooks.borrow_mut().on_message.push(handler));
+        let hooks = registry.clone();
+        engine.register_fn("on_join", move |handler: FnPtr| hooks.borrow_mut().hooks.join.push(handler));
+        let hooks = registry.clone();
+        engine.register_fn("on_leave", move |handler: FnPtr| hooks.borrow_mut().hooks.leave.push(handler));
+        let hooks = registry.clone();
+        engine.register_fn("on_reaction", move |handler: FnPtr| hooks.borrow_mut().hooks.reaction.push(handler));
+        let hooks = registry.clone();
+        engine.register_fn("on_highlight", move |handler: FnPtr| hooks.borrow_mut().hooks.highlight.push(handler));
         let commands = registry.clone();
         engine.register_fn("command", move |name: ImmutableString, help: ImmutableString, handler: FnPtr| {
             let name = name.trim_start_matches('/').to_lowercase();
@@ -216,6 +282,7 @@ impl Scripts {
         });
 
         let shared: Rc<RefCell<Shared>> = Rc::default();
+        Self::register_timers(&mut engine, &shared);
         Self::register_store(&mut engine, &shared);
         Self::register_settings(&mut engine, &shared);
         let status = shared.clone();
@@ -234,6 +301,37 @@ impl Scripts {
         });
 
         Self { engine, scripts: Vec::new(), effects, registry, shared, data_dir: None }
+    }
+
+    /// `every(secs, f)` and `after(secs, f)` call `f` each `secs` seconds,
+    /// or once after them, and return an ID that `cancel(id)` takes.
+    fn register_timers(engine: &mut Engine, shared: &Rc<RefCell<Shared>>) {
+        fn add(shared: &Rc<RefCell<Shared>>, secs: f64, call: FnPtr, repeat: bool) -> Result<i64, Box<EvalAltResult>> {
+            let mut shared = shared.borrow_mut();
+            let script = shared.script("a timer")?;
+            if shared.timers.iter().filter(|t| t.script == script).count() >= TIMERS_MAX {
+                return Err(format!("{TIMERS_MAX} timers at most per script").into());
+            }
+            // Timers run on the once-a-second clock.
+            let after = Duration::from_secs_f64(secs.clamp(1.0, 7.0 * 24.0 * 3600.0));
+            shared.next_timer += 1;
+            let id = shared.next_timer;
+            shared.timers.push(Timer { id, script, every: repeat.then_some(after), due: Instant::now() + after, call });
+            Ok(id)
+        }
+        for (name, repeat) in [("every", true), ("after", false)] {
+            let timers = shared.clone();
+            engine.register_fn(name, move |secs: i64, f: FnPtr| add(&timers, secs as f64, f, repeat));
+            let timers = shared.clone();
+            engine.register_fn(name, move |secs: f64, f: FnPtr| add(&timers, secs, f, repeat));
+        }
+        let timers = shared.clone();
+        engine.register_fn("cancel", move |id: i64| {
+            let mut shared = timers.borrow_mut();
+            let before = shared.timers.len();
+            shared.timers.retain(|t| t.id != id);
+            shared.timers.len() != before
+        });
     }
 
     /// `store_get`, `store_set`, `store_remove` and `store_keys`: a map per
@@ -458,16 +556,19 @@ impl Scripts {
         *self.registry.borrow_mut() = Registry::default();
         let ast = self.engine.compile(source).map_err(|e| format!("{name}: {e}"))?;
         self.load_store(name)?;
-        let old_status = {
+        let (old_status, first_new_timer) = {
             let mut shared = self.shared.borrow_mut();
             shared.current = name.to_owned();
-            shared.status.remove(name)
+            (shared.status.remove(name), shared.next_timer + 1)
         };
         let result = self.engine.run_ast(&ast);
         let registry = std::mem::take(&mut *self.registry.borrow_mut());
         let effects = self.take_effects();
+        // The new version's timers replace the old one's; a broken new
+        // version leaves the old one (its item and timers) running.
+        let failed = result.is_err();
+        self.shared.borrow_mut().timers.retain(|t| t.script != name || (t.id >= first_new_timer) != failed);
         if let Err(e) = result {
-            // A broken new version leaves the old one (and its item) running.
             if let Some(old) = old_status {
                 self.shared.borrow_mut().status.insert(name.to_owned(), old);
             }
@@ -481,6 +582,7 @@ impl Scripts {
             path,
             ast,
             on_message: registry.on_message,
+            hooks: registry.hooks,
             commands,
             sent: VecDeque::new(),
         });
@@ -507,7 +609,9 @@ impl Scripts {
     pub fn unload(&mut self, name: &str) -> bool {
         let before = self.scripts.len();
         self.scripts.retain(|s| s.name != name);
-        self.shared.borrow_mut().status.remove(name);
+        let mut shared = self.shared.borrow_mut();
+        shared.status.remove(name);
+        shared.timers.retain(|t| t.script != name);
         self.scripts.len() != before
     }
 
@@ -520,7 +624,7 @@ impl Scripts {
                     s.name.clone(),
                     s.path.clone(),
                     s.commands.iter().map(|c| c.name.clone()).collect(),
-                    s.on_message.len(),
+                    s.on_message.len() + s.hooks.len(),
                 )
             })
             .collect()
@@ -558,17 +662,79 @@ impl Scripts {
 
     /// Hand a message to every script's hooks. Returns what they asked for
     /// and any errors.
+    #[cfg(test)]
     pub fn on_message(&mut self, message: &Message) -> (Vec<Effect>, Vec<String>) {
-        let map = message.to_map();
+        self.on_event(&Event::Message(message.clone()))
+    }
+
+    /// Hand something that happened to the scripts' hooks for it. Returns
+    /// what they asked for and any errors.
+    pub fn on_event(&mut self, event: &Event) -> (Vec<Effect>, Vec<String>) {
+        let map = match event {
+            Event::Message(m) => m.to_map(),
+            Event::Join(m) | Event::Leave(m) => m.to_map(),
+            Event::Reaction(r) => r.to_map(),
+        };
         let (mut out, mut errors) = (Vec::new(), Vec::new());
         for index in 0..self.scripts.len() {
-            self.shared.borrow_mut().current = self.scripts[index].name.clone();
-            for handler in self.scripts[index].on_message.clone() {
+            let script = &self.scripts[index];
+            let handlers: Vec<FnPtr> = match event {
+                Event::Message(m) if m.highlight => {
+                    script.on_message.iter().chain(&script.hooks.highlight).cloned().collect()
+                }
+                Event::Message(_) => script.on_message.clone(),
+                Event::Join(_) => script.hooks.join.clone(),
+                Event::Leave(_) => script.hooks.leave.clone(),
+                Event::Reaction(_) => script.hooks.reaction.clone(),
+            };
+            self.shared.borrow_mut().current = script.name.clone();
+            for handler in handlers {
                 let result = handler.call::<Dynamic>(&self.engine, &self.scripts[index].ast, (map.clone(),));
                 let effects = self.take_effects();
                 match result {
                     Ok(_) => out.extend(self.limit(index, effects)),
                     Err(e) => errors.push(format!("{}: {e}", self.scripts[index].name)),
+                }
+            }
+        }
+        (out, errors)
+    }
+
+    /// Call the timers that are due (once a second).
+    pub fn run_timers(&mut self) -> (Vec<Effect>, Vec<String>) {
+        let now = Instant::now();
+        let due: Vec<(i64, String, FnPtr)> = self
+            .shared
+            .borrow()
+            .timers
+            .iter()
+            .filter(|t| t.due <= now)
+            .map(|t| (t.id, t.script.clone(), t.call.clone()))
+            .collect();
+        let (mut out, mut errors) = (Vec::new(), Vec::new());
+        for (id, script, call) in due {
+            // Run it again later, or not at all.
+            {
+                let mut shared = self.shared.borrow_mut();
+                match shared.timers.iter().position(|t| t.id == id) {
+                    Some(i) => match shared.timers[i].every {
+                        Some(every) => shared.timers[i].due = now + every,
+                        None => drop(shared.timers.remove(i)),
+                    },
+                    // Cancelled by an earlier one.
+                    None => continue,
+                }
+            }
+            let Some(index) = self.scripts.iter().position(|s| s.name == script) else { continue };
+            self.shared.borrow_mut().current = script.clone();
+            let result = call.call::<Dynamic>(&self.engine, &self.scripts[index].ast, ());
+            let effects = self.take_effects();
+            match result {
+                Ok(_) => out.extend(self.limit(index, effects)),
+                Err(e) => {
+                    // One error, not one a second.
+                    self.shared.borrow_mut().timers.retain(|t| t.id != id);
+                    errors.push(format!("{script}: timer: {e}"));
                 }
             }
         }
@@ -687,6 +853,26 @@ impl Context {
         map.insert("server".into(), self.server.clone().into());
         map.insert("room".into(), self.room.clone().into());
         map.insert("room_id".into(), self.room_id.clone().into());
+        map
+    }
+}
+
+impl Member {
+    fn to_map(&self) -> Map {
+        let mut map = self.context.to_map();
+        map.insert("user".into(), self.user.clone().into());
+        map.insert("nick".into(), self.nick.clone().into());
+        map
+    }
+}
+
+impl Reaction {
+    fn to_map(&self) -> Map {
+        let mut map = self.context.to_map();
+        map.insert("nick".into(), self.nick.clone().into());
+        map.insert("key".into(), self.key.clone().into());
+        map.insert("target".into(), self.target.clone().into());
+        map.insert("text".into(), self.text.clone().into());
         map
     }
 }
@@ -889,6 +1075,77 @@ mod tests {
         assert_eq!(scripts.status_items(), ["tick 4"]);
     }
 
+    /// Make every timer due now.
+    fn time_passes(scripts: &mut Scripts) {
+        let now = Instant::now();
+        scripts.shared.borrow_mut().timers.iter_mut().for_each(|t| t.due = now);
+    }
+
+    #[test]
+    fn timers_run_repeat_and_cancel() {
+        let mut scripts = Scripts::new();
+        let source = r#"
+            let ticks = 0;
+            let id = every(1, || { ticks += 1; print(`tick ${ticks}`); });
+            after(60, || print("later"));
+            command("stop", "", |a, c| print(cancel(id).to_string()));
+        "#;
+        scripts.load("clock", None, source).unwrap();
+        assert!(scripts.run_timers().0.is_empty(), "nothing is due yet");
+        time_passes(&mut scripts);
+        assert_eq!(scripts.run_timers().0, [Effect::Print("tick 1".into()), Effect::Print("later".into())]);
+        time_passes(&mut scripts);
+        assert_eq!(scripts.run_timers().0, [Effect::Print("tick 2".into())], "after runs once, every again");
+        assert_eq!(
+            scripts.run_command("stop", "", &Context::default()).unwrap().unwrap(),
+            [Effect::Print("true".into())]
+        );
+        time_passes(&mut scripts);
+        assert!(scripts.run_timers().0.is_empty(), "cancelled");
+
+        // Reloading swaps a script's timers; a broken reload keeps them.
+        scripts.load("clock", None, r#"every(5, || print("new"));"#).unwrap();
+        assert!(scripts.load("clock", None, r#"every(5, || print("newer")); throw "no";"#).is_err());
+        time_passes(&mut scripts);
+        assert_eq!(scripts.run_timers().0, [Effect::Print("new".into())]);
+        scripts.load("broken", None, r#"every(1, || { throw "oops" });"#).unwrap();
+        time_passes(&mut scripts);
+        let (_, errors) = scripts.run_timers();
+        assert!(errors.iter().any(|e| e.contains("broken: timer")), "{errors:?}");
+        time_passes(&mut scripts);
+        assert!(scripts.run_timers().1.is_empty(), "a failing timer stops, so it fails once");
+        scripts.unload("clock");
+        time_passes(&mut scripts);
+        assert!(scripts.run_timers().0.is_empty(), "unloading stops them");
+        assert!(scripts.exec("after(1, || 1)").unwrap_err().contains("scripts loaded from a file"));
+    }
+
+    #[test]
+    fn hooks_hear_joins_leaves_reactions_and_highlights() {
+        let mut scripts = Scripts::new();
+        let source = r#"
+            on_join(|m| print(`hello ${m.nick} (${m.user}) in ${m.room}`));
+            on_leave(|m| print(`bye ${m.nick}`));
+            on_reaction(|r| print(`${r.nick} ${r.key} "${r.text}"`));
+            on_highlight(|msg| print(`you were mentioned by ${msg.nick}`));
+        "#;
+        scripts.load("greeter", None, source).unwrap();
+        let context = Context { room: "Night Owls".into(), ..Context::default() };
+        let member = Member { context: context.clone(), user: "@sam:x.org".into(), nick: "sam".into() };
+        assert_eq!(
+            scripts.on_event(&Event::Join(member.clone())).0,
+            [Effect::Print("hello sam (@sam:x.org) in Night Owls".into())]
+        );
+        assert_eq!(scripts.on_event(&Event::Leave(member)).0, [Effect::Print("bye sam".into())]);
+        let reaction =
+            Reaction { context, nick: "sam".into(), key: "🍕".into(), target: "$1".into(), text: "lunch?".into() };
+        assert_eq!(scripts.on_event(&Event::Reaction(reaction)).0, [Effect::Print("sam 🍕 \"lunch?\"".into())]);
+        assert!(scripts.on_message(&message("hi")).0.is_empty(), "only highlights");
+        let mention = Message { highlight: true, ..message("hi you") };
+        assert_eq!(scripts.on_message(&mention).0, [Effect::Print("you were mentioned by sam".into())]);
+        assert_eq!(scripts.list()[0].3, 4, "four hooks");
+    }
+
     #[test]
     fn the_example_scripts_work() {
         let mut scripts = Scripts::new();
@@ -898,6 +1155,7 @@ mod tests {
             ("seen", include_str!("../examples/scripts/seen.rhai")),
             ("watchwords", include_str!("../examples/scripts/watchwords.rhai")),
             ("dms", include_str!("../examples/scripts/dms.rhai")),
+            ("remind", include_str!("../examples/scripts/remind.rhai")),
         ] {
             assert_eq!(scripts.load(name, None, source), Ok(vec![]), "{name} loads quietly");
         }
@@ -946,5 +1204,12 @@ mod tests {
         let read = scripts.run_command("dms", "", &here).unwrap().unwrap();
         assert_eq!(read, [Effect::Print("direct messages from sam, jo_bloggs".into())]);
         assert!(scripts.status_items().is_empty());
+
+        let set = scripts.run_command("remind", "10 stretch your legs", &here).unwrap().unwrap();
+        assert_eq!(set, [Effect::Print("I'll remind you in 10 min: stretch your legs".into())]);
+        assert!(scripts.run_timers().0.is_empty(), "not yet");
+        time_passes(&mut scripts);
+        let due = scripts.run_timers().0;
+        assert!(due.contains(&Effect::Bell) && due.contains(&Effect::Print("⏰ stretch your legs".into())), "{due:?}");
     }
 }

@@ -25,7 +25,7 @@ use matrix_sdk::ruma::{
 use ratatui::{
     Terminal,
     backend::Backend,
-    layout::{Position, Size},
+    layout::{Position, Rect, Size},
 };
 
 use serde::{Deserialize, Serialize};
@@ -42,8 +42,8 @@ use crate::{
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
     model::{
-        AccountName, Activity, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence, PresenceKind,
-        RoomMeta, SpaceInfo, ago,
+        AccountName, Activity, Fold, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence,
+        PresenceKind, RoomMeta, SpaceInfo, ago,
     },
     notify,
     picture::{Painter, Picture},
@@ -599,6 +599,9 @@ struct SavedLayout {
     #[serde(default)]
     side_by_side: bool,
     focus: Option<WinRef>,
+    /// The panes' shares of the room.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sizes: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sidebar: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -623,6 +626,14 @@ struct Layout {
     layouts: BTreeMap<String, SavedLayout>,
 }
 
+/// Something for scripts to hear about, from a room's timeline.
+enum Heard {
+    Message(Line),
+    Join(Line),
+    Leave(Line),
+    Reaction { nick: String, key: String, target: OwnedEventId, text: String },
+}
+
 /// Several windows on screen at once, like irssi's split windows. Panes
 /// hold window identities (`None` is the status window), so they survive
 /// windows opening, closing and moving. The active window is always one of
@@ -630,7 +641,47 @@ struct Layout {
 pub struct Split {
     pub panes: Vec<WinRef>,
     pub side_by_side: bool,
+    /// Each pane's share of the room (in cells when last resized; they
+    /// scale with the terminal).
+    pub sizes: Vec<u16>,
 }
+
+impl Split {
+    pub fn new(panes: Vec<WinRef>, side_by_side: bool) -> Self {
+        let sizes = vec![PANE_SHARE; panes.len()];
+        Self { panes, side_by_side, sizes }
+    }
+
+    /// Each pane's share; equal ones if they've got out of step.
+    pub fn weights(&self) -> Vec<u16> {
+        if self.sizes.len() == self.panes.len() { self.sizes.clone() } else { vec![PANE_SHARE; self.panes.len()] }
+    }
+
+    /// A new pane at `slot`, taking half the room of the one before it.
+    fn insert(&mut self, slot: usize, pane: WinRef) {
+        let mut sizes = self.weights();
+        let from = slot.saturating_sub(1).min(sizes.len().saturating_sub(1));
+        let half = sizes.get(from).map_or(PANE_SHARE, |s| (s / 2).max(1));
+        if let Some(s) = sizes.get_mut(from) {
+            *s = (*s - half).max(1);
+        }
+        sizes.insert(slot.min(sizes.len()), half);
+        self.panes.insert(slot, pane);
+        self.sizes = sizes;
+    }
+
+    fn remove(&mut self, slot: usize) {
+        let mut sizes = self.weights();
+        self.panes.remove(slot);
+        sizes.remove(slot);
+        self.sizes = sizes;
+    }
+}
+
+/// A pane's share of the room before any resizing.
+const PANE_SHARE: u16 = 100;
+/// The smallest a pane can be made: rows stacked, columns side by side.
+const PANE_MIN: (u16, u16) = (3, 12);
 
 const PANES_MAX: usize = 4;
 /// Link titles kept in memory.
@@ -666,6 +717,8 @@ pub struct App {
     pub flash_until: Option<Instant>,
     /// The terminal title last set.
     last_title: Option<String>,
+    /// The hyperlinks last written over the screen's links.
+    last_links: String,
     pub redraw_all: bool,
     pub show_sidebar: bool,
     pub show_nicklist: bool,
@@ -696,6 +749,8 @@ pub struct App {
     upload_declined: Option<String>,
     /// When Ctrl+C was pressed on an empty input line: again soon quits.
     quit_armed: Option<Instant>,
+    /// The divider being dragged (between drawn panes k and k + 1).
+    dragging: Option<usize>,
     /// The edit to go back to if a delete started from it is declined.
     resume_edit: Option<EditSession>,
     editing: Option<EditSession>,
@@ -711,8 +766,8 @@ pub struct App {
     pub split: Option<Split>,
     /// Loaded scripts (~/.textrix/scripts).
     pub scripts: Scripts,
-    /// Messages to hand to scripts after this event.
-    script_messages: Vec<(WinKey, Line)>,
+    /// What to tell scripts about after this event.
+    script_messages: Vec<(WinKey, Heard)>,
     /// Servers whose connection dropped, and since when (netsplits).
     splits: HashMap<String, Instant>,
     /// People whose away status you've been told about (irssi's "is
@@ -760,6 +815,8 @@ pub struct App {
     /// still running.
     search_out: Option<WinKey>,
     search_pending: usize,
+    /// The `/search -deep` being answered, to narrow what comes back.
+    search_query: Option<crate::search::Query>,
 }
 
 struct Cmd {
@@ -878,6 +935,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "split", args: "<window>", help: "Show another window in a pane below (F6 moves between panes)" },
     Cmd { name: "vsplit", args: "<window>", help: "Show another window in a pane beside this one" },
     Cmd { name: "unsplit", args: "[all]", help: "Close this pane (the window stays open), or all but this one" },
+    Cmd {
+        name: "resize",
+        args: "+N | -N | =",
+        help: "Grow or shrink this pane by N rows (columns side by side), or make them even; or drag the line between",
+    },
     Cmd {
         name: "layout",
         args: "[save <name> | load <name> | delete <name>]",
@@ -1101,6 +1163,7 @@ impl App {
             last_bell: None,
             flash_until: None,
             last_title: None,
+            last_links: String::new(),
             redraw_all: false,
             show_sidebar,
             show_nicklist,
@@ -1120,6 +1183,7 @@ impl App {
             confirm_upload: None,
             upload_declined: None,
             quit_armed: None,
+            dragging: None,
             resume_edit: None,
             editing: None,
             compose: None,
@@ -1154,6 +1218,7 @@ impl App {
             search_hits: Vec::new(),
             search_out: None,
             search_pending: 0,
+            search_query: None,
         };
         app.notify_mode = notify::resolve(app.cfg.notifications);
         app.apply_logging();
@@ -1284,20 +1349,49 @@ impl App {
         }
     }
 
-    /// Hand new messages from others to the scripts' hooks.
+    /// Hand what others did (messages, joins and leaves, reactions) to the
+    /// scripts' hooks.
     fn run_message_scripts(&mut self) {
-        for (key, line) in std::mem::take(&mut self.script_messages) {
+        for (key, heard) in std::mem::take(&mut self.script_messages) {
             let context = self.script_context(Some(&key));
             let dm = self.window_idx(&key.account, &key.room_id).is_some_and(|i| self.windows[i].is_dm);
-            let message = script::Message {
-                context,
-                sender: line.sender.as_ref().map(ToString::to_string).unwrap_or_default(),
-                nick: self.display_name(line.sender.as_deref(), &line.nick).to_owned(),
-                body: line.text(),
-                highlight: line.highlight,
-                dm,
+            let member = |line: &Line, name: &str| script::Member {
+                context: context.clone(),
+                user: line.sender.as_ref().map(ToString::to_string).unwrap_or_default(),
+                nick: self.display_name(line.sender.as_deref(), name).to_owned(),
             };
-            let (effects, errors) = self.scripts.on_message(&message);
+            let event = match heard {
+                Heard::Message(line) => script::Event::Message(script::Message {
+                    context: context.clone(),
+                    sender: line.sender.as_ref().map(ToString::to_string).unwrap_or_default(),
+                    nick: self.display_name(line.sender.as_deref(), &line.nick).to_owned(),
+                    body: line.text(),
+                    highlight: line.highlight,
+                    dm,
+                }),
+                Heard::Join(line) => {
+                    let name = match &line.fold {
+                        Some(Fold::Joined(name)) => name.clone(),
+                        _ => line.nick.clone(),
+                    };
+                    script::Event::Join(member(&line, &name))
+                }
+                Heard::Leave(line) => {
+                    let name = match &line.fold {
+                        Some(Fold::Left(name)) => name.clone(),
+                        _ => line.nick.clone(),
+                    };
+                    script::Event::Leave(member(&line, &name))
+                }
+                Heard::Reaction { nick, key: emoji, target, text } => script::Event::Reaction(script::Reaction {
+                    context: context.clone(),
+                    nick,
+                    key: emoji,
+                    target: target.to_string(),
+                    text,
+                }),
+            };
+            let (effects, errors) = self.scripts.on_event(&event);
             for e in errors {
                 self.status(Line::error(format!("script {e}")));
             }
@@ -1761,7 +1855,11 @@ impl App {
                     .map(|i| self.windows[i].title().to_owned())
                     .or_else(|| self.connected(&account).and_then(|a| a.quick_meta(&room_id)).map(|m| m.name))
                     .unwrap_or_else(|| room_id.to_string());
+                let query = self.search_query.clone().unwrap_or_default();
                 let rows: Vec<Line> = hits
+                    .into_iter()
+                    .filter(|line| self.search_matches(&query, &room, line))
+                    .collect::<Vec<_>>()
                     .into_iter()
                     .filter_map(|line| {
                         let event = line.event_id.clone()?;
@@ -2071,7 +2169,16 @@ impl App {
             }
         }
 
+        let script_key = self.windows[idx].room.clone().map(|k| WinKey { thread: None, ..k });
         for item in items {
+            if live
+                && let Item::React { target, key, nick, own: false } = &item
+                && let Some(room) = script_key.clone()
+            {
+                let text = self.windows[idx].find_mut(target).map(|l| l.text()).unwrap_or_default();
+                let heard = Heard::Reaction { nick: nick.clone(), key: key.clone(), target: target.clone(), text };
+                self.script_messages.push((room, heard));
+            }
             let Some(line) = self.windows[idx].apply(item, cap, live) else { continue };
             if live
                 && let Some(root) = &line.thread_root
@@ -2082,11 +2189,17 @@ impl App {
             if is_mention(&line) {
                 mentions.push(line.clone());
             }
-            if live && !line.own && line.is_message() && !line.redacted {
-                let key = self.windows[idx].room.clone().map(|k| WinKey { thread: None, ..k });
-                if let Some(key) = key {
-                    self.script_messages.push((key, line.clone()));
-                }
+            if live
+                && !line.own
+                && let Some(key) = script_key.clone()
+            {
+                let heard = match &line.fold {
+                    _ if line.is_message() && !line.redacted => Some(Heard::Message(line.clone())),
+                    Some(Fold::Joined(_)) => Some(Heard::Join(line.clone())),
+                    Some(Fold::Left(_)) => Some(Heard::Leave(line.clone())),
+                    _ => None,
+                };
+                self.script_messages.extend(heard.map(|h| (key, h)));
             }
             let w = &mut self.windows[idx];
             if w.scroll > 0 {
@@ -2444,7 +2557,7 @@ impl App {
             && let Some(slot) = split.panes.iter().position(|k| *k == removed)
         {
             if split.panes.contains(&active) {
-                split.panes.remove(slot);
+                split.remove(slot);
             } else {
                 split.panes[slot] = active;
             }
@@ -2533,6 +2646,23 @@ impl App {
 
     /// Called after every draw: lazy history, member lists, read markers,
     /// image previews, avatars.
+    /// The links on screen in the last frame, with where they go.
+    pub fn screen_links(&self) -> Vec<crate::hyperlinks::Link> {
+        let mut out = Vec::new();
+        for pane in &self.hits.panes {
+            for (i, row) in pane.rows.iter().enumerate() {
+                let Some(event) = &row.event else { continue };
+                for (from, to, text) in &row.links {
+                    if let Some(url) = self.link_in_window(pane.window, event, text).filter(|u| links::is_safe(u)) {
+                        let (x, y, width) = (*from, pane.area.y + i as u16, to.saturating_sub(*from));
+                        out.push(crate::hyperlinks::Link { x, y, width, url });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Say how pictures are drawn in this terminal.
     pub fn note_images(&mut self) {
         let Some(painter) = &self.picker else { return };
@@ -2566,6 +2696,9 @@ impl App {
         self.restore_split();
         let (effects, mut errors) = self.scripts.refresh_status();
         self.apply_effects(effects, None);
+        let (effects, timer_errors) = self.scripts.run_timers();
+        self.apply_effects(effects, None);
+        errors.extend(timer_errors);
         errors.extend(self.scripts.save_stores());
         for e in errors {
             self.status(Line::error(format!("script {e}")));
@@ -2692,6 +2825,20 @@ impl App {
         match m.kind {
             MouseEventKind::ScrollUp => self.on_wheel(at, true),
             MouseEventKind::ScrollDown => self.on_wheel(at, false),
+            // Dragging the line between two panes moves it.
+            MouseEventKind::Down(MouseButton::Left) if let Some(k) = self.divider_at(at) => self.dragging = Some(k),
+            MouseEventKind::Drag(MouseButton::Left) if let Some(k) = self.dragging => {
+                let side = self.split.as_ref().is_some_and(|s| s.side_by_side);
+                if let (Some((a, _)), Some((b, _))) =
+                    (self.hits.splits.get(k).copied(), self.hits.splits.get(k + 1).copied())
+                {
+                    let (start, at, pair) =
+                        if side { (a.x, at.x, a.width + b.width) } else { (a.y, at.y, a.height + b.height) };
+                    let cells = self.clamp_pane(i32::from(at) - i32::from(start) + 1, pair);
+                    self.set_divider(k, cells);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
             MouseEventKind::Down(MouseButton::Left) => self.on_click(at),
             _ => {}
         }
@@ -2804,11 +2951,15 @@ impl App {
     /// The link a clicked piece of underlined text belongs to (a wrapped
     /// link shows in pieces).
     fn link_in(&self, event: &EventId, fragment: &str) -> Option<String> {
+        self.link_in_window(self.active, event, fragment)
+    }
+
+    fn link_in_window(&self, window: usize, event: &EventId, fragment: &str) -> Option<String> {
         let fragment = fragment.trim().trim_matches(|c: char| "()<>[]\"'".contains(c));
         if fragment.chars().count() < 3 {
             return None;
         }
-        let line = self.win().lines.iter().rev().find(|l| l.event_id.as_deref() == Some(event))?;
+        let line = self.windows.get(window)?.lines.iter().rev().find(|l| l.event_id.as_deref() == Some(event))?;
         let text = line.text();
         let url = links::urls(&line.body).into_iter().chain(links::urls(&text)).find(|u| u.contains(fragment));
         url.map(ToOwned::to_owned)
@@ -3094,7 +3245,7 @@ impl App {
             let from = self.windows[self.active].id();
             match split.panes.iter().position(|k| *k == from) {
                 Some(slot) => split.panes[slot] = to,
-                None => split.panes.push(to),
+                None => split.insert(split.panes.len(), to),
             }
         }
         self.active = idx;
@@ -4073,6 +4224,7 @@ impl App {
             "split" => self.cmd_split(args, false),
             "vsplit" => self.cmd_split(args, true),
             "unsplit" => self.cmd_unsplit(args),
+            "resize" => self.cmd_resize(args),
             "layout" => self.cmd_layout(args),
             "wc" => self.cmd_window("close"),
             "wl" => self.cmd_window("list"),
@@ -4631,14 +4783,15 @@ impl App {
     }
 
     fn cmd_search(&mut self, args: &str) -> Result<(), String> {
-        let (deep, needle) = match args.trim().strip_prefix("-deep") {
+        let (deep, rest) = match args.trim().strip_prefix("-deep") {
             Some(rest) => (true, rest.trim()),
             None => (false, args.trim()),
         };
-        if needle.is_empty() {
-            return Err("usage: /search [-deep] <text>".into());
+        let query = crate::search::Query::parse(rest)?;
+        if query.is_empty() {
+            return Err(crate::search::USAGE.into());
         }
-        let needle = needle.to_lowercase();
+        let needle = query.describe();
         self.search_hits.clear();
         self.search_out = self.win().room.clone();
 
@@ -4646,6 +4799,8 @@ impl App {
             let rooms: Vec<(Account, OwnedRoomId)> = self
                 .windows
                 .iter()
+                .filter(|w| w.room.as_ref().is_some_and(|k| k.thread.is_none()))
+                .filter(|w| query.room.as_deref().is_none_or(|r| w.title().to_lowercase().contains(r)))
                 .filter_map(|w| {
                     let key = w.room.as_ref()?;
                     Some((self.connected(&key.account)?, key.room_id.clone()))
@@ -4655,27 +4810,30 @@ impl App {
                 return Err("no connected rooms to search".into());
             }
             self.search_pending = rooms.len();
-            self.info(format!("searching the last 500 messages of {} room(s) for \"{needle}\"…", rooms.len()));
+            self.info(format!("searching the last 500 messages of {} room(s) for {needle}…", rooms.len()));
             for (acct, room_id) in rooms {
-                acct.search_history(room_id, needle.clone(), 5);
+                acct.search_history(room_id, query.text.clone(), 5);
             }
+            self.search_query = Some(query);
             return Ok(());
         }
 
         // Newest first across every window's loaded history.
-        let mut found: Vec<(WinKey, String, Line)> = self
+        let this: &Self = self;
+        let mut found: Vec<(WinKey, String, Line)> = this
             .windows
             .iter()
             .filter_map(|w| Some((w.room.clone()?, w)))
             .flat_map(|(key, w)| {
+                let query = &query;
                 w.lines
                     .iter()
                     .filter(|l| l.event_id.is_some() && l.is_message() && !l.redacted)
-                    .filter(|l| l.text().to_lowercase().contains(&needle))
+                    .filter(move |l| this.search_matches(query, w.title(), l))
                     .map(move |l| (key.clone(), w.title().to_owned(), l.clone()))
             })
             .collect();
-        let (indexed, reading) = self.search_indexes(&needle, &mut found);
+        let (indexed, reading) = self.search_indexes(&query, &mut found);
         found.sort_by_key(|(_, _, line)| std::cmp::Reverse(line.ts));
         let more = found.len().saturating_sub(50);
         found.truncate(50);
@@ -4686,7 +4844,7 @@ impl App {
         };
         if found.is_empty() {
             let hint = if indexed == 0 { "; try /search -deep" } else { "" };
-            self.info(format!("no messages match \"{needle}\"{searched}{hint}"));
+            self.info(format!("no messages match {needle}{searched}{hint}"));
             return Ok(());
         }
         let rows: Vec<String> = found
@@ -4708,11 +4866,42 @@ impl App {
     /// Add each connected server's search index hits to `found` (the ones
     /// not already there). Returns how many messages the indexes hold, and
     /// whether any is still reading older history.
-    fn search_indexes(&self, needle: &str, found: &mut Vec<(WinKey, String, Line)>) -> (usize, bool) {
+    /// Whether a loaded message matches a search, by its room's name.
+    fn search_matches(&self, query: &crate::search::Query, room: &str, line: &Line) -> bool {
+        let sender = line.sender.as_ref().map(|s| s.as_str()).unwrap_or_default();
+        let nickname = self.display_name(line.sender.as_deref(), &line.nick);
+        query.matches(room, &[&line.nick, nickname], sender, line.ts.timestamp_millis(), &line.text())
+    }
+
+    fn search_indexes(&self, query: &crate::search::Query, found: &mut Vec<(WinKey, String, Line)>) -> (usize, bool) {
         let (mut indexed, mut reading) = (0, false);
         let have: HashSet<OwnedEventId> = found.iter().filter_map(|(_, _, l)| l.event_id.clone()).collect();
         for (name, state) in &self.accounts {
-            let Some((hits, len, more)) = state.account.as_ref().and_then(|a| a.search_index(needle, 200)) else {
+            let Some(acct) = state.account.as_ref() else { continue };
+            // Room names, looked up once each, and only for `in:`.
+            let titles: std::cell::RefCell<HashMap<String, String>> = Default::default();
+            let title = |room: &str| -> String {
+                if let Some(title) = titles.borrow().get(room) {
+                    return title.clone();
+                }
+                let title = OwnedRoomId::try_from(room)
+                    .ok()
+                    .and_then(|id| {
+                        let open = self.window_idx(name, &id).map(|i| self.windows[i].title().to_owned());
+                        open.or_else(|| acct.quick_meta(&id).map(|m| m.name))
+                    })
+                    .unwrap_or_else(|| room.to_owned());
+                titles.borrow_mut().insert(room.to_owned(), title.clone());
+                title
+            };
+            let matches = |e: &crate::index::Entry| {
+                let room = if query.room.is_some() { title(&e.room) } else { String::new() };
+                let nickname =
+                    OwnedUserId::try_from(e.sender.as_str()).ok().and_then(|u| self.layout.nicknames.get(&u).cloned());
+                let names = [e.nick.as_str(), nickname.as_deref().unwrap_or_default()];
+                query.matches(&room, &names, &e.sender, e.ts, &e.body)
+            };
+            let Some((hits, len, more)) = acct.search_index(matches, 200) else {
                 continue;
             };
             (indexed, reading) = (indexed + len, reading || more);
@@ -5237,13 +5426,13 @@ impl App {
             return Err(format!("{} is already on screen", self.windows[idx].title()));
         }
         let current = self.windows[self.active].id();
-        let split = self.split.get_or_insert_with(|| Split { panes: vec![current.clone()], side_by_side });
+        let split = self.split.get_or_insert_with(|| Split::new(vec![current.clone()], side_by_side));
         if split.panes.len() >= PANES_MAX {
             return Err(format!("{PANES_MAX} panes at most; /unsplit closes this one"));
         }
         split.side_by_side = side_by_side;
         let slot = split.panes.iter().position(|k| *k == current).map_or(split.panes.len(), |i| i + 1);
-        split.panes.insert(slot, self.windows[idx].id());
+        split.insert(slot, self.windows[idx].id());
         self.windows[idx].activity = Activity::None;
         Ok(())
     }
@@ -5254,6 +5443,7 @@ impl App {
             panes: self.split.as_ref().map(|s| s.panes.clone()).unwrap_or_default(),
             side_by_side: self.split.as_ref().is_some_and(|s| s.side_by_side),
             focus: Some(self.windows[self.active].id()),
+            sizes: self.split.as_ref().map(Split::weights).unwrap_or_default(),
             sidebar: panels.then_some(self.show_sidebar),
             nicklist: panels.then_some(self.show_nicklist),
         }
@@ -5264,6 +5454,13 @@ impl App {
     fn apply_layout(&mut self, saved: &SavedLayout) -> usize {
         let open = |app: &Self, r: &WinRef| app.windows.iter().position(|w| w.id() == *r);
         let present: Vec<WinRef> = saved.panes.iter().filter(|r| open(self, r).is_some()).cloned().collect();
+        // Sizes for the panes that are there (if they were saved).
+        let sizes: Vec<u16> = match saved.sizes.len() == saved.panes.len() {
+            true => {
+                saved.panes.iter().zip(&saved.sizes).filter(|(r, _)| open(self, r).is_some()).map(|(_, s)| *s).collect()
+            }
+            false => vec![PANE_SHARE; present.len()],
+        };
         let missing = saved.panes.len() - present.len();
         self.show_sidebar = saved.sidebar.unwrap_or(self.show_sidebar);
         self.show_nicklist = saved.nicklist.unwrap_or(self.show_nicklist);
@@ -5273,7 +5470,7 @@ impl App {
         }
         if present.len() >= 2 {
             let first = present[0].clone();
-            self.split = Some(Split { panes: present, side_by_side: saved.side_by_side });
+            self.split = Some(Split { panes: present, side_by_side: saved.side_by_side, sizes });
             // The focus is always one of the panes.
             if !self.split.as_ref().is_some_and(|s| s.panes.contains(&self.windows[self.active].id()))
                 && let Some(idx) = open(self, &first)
@@ -5364,6 +5561,82 @@ impl App {
         }
     }
 
+    /// `/resize [+N | -N | =]`: grow or shrink the focused pane by N rows
+    /// (columns side by side), or make them all the same.
+    fn cmd_resize(&mut self, args: &str) -> Result<(), String> {
+        const USAGE: &str = "usage: /resize +N | -N | = (the focused pane, in rows or columns)";
+        let Some(split) = &mut self.split else { return Err("nothing is split; /split <window> adds a pane".into()) };
+        let arg = args.trim();
+        if arg == "=" {
+            split.sizes = vec![PANE_SHARE; split.panes.len()];
+            return Ok(());
+        }
+        let delta: i32 = arg.strip_prefix('+').unwrap_or(arg).parse().map_err(|_| USAGE)?;
+        let active = self.windows[self.active].id();
+        let slot = split.panes.iter().position(|k| *k == active).ok_or(USAGE)?;
+        let k = self.hits.splits.iter().position(|(_, s)| *s == slot).ok_or("the panes aren't drawn yet")?;
+        // Against the pane after it, or the one before for the last.
+        let (a, b) = if k + 1 < self.hits.splits.len() { (k, k + 1) } else { (k.saturating_sub(1), k) };
+        let cells = |r: Rect| if split.side_by_side { r.width } else { r.height };
+        let (ca, cb) = (cells(self.hits.splits[a].0), cells(self.hits.splits[b].0));
+        let grown = i32::from(if a == k { ca } else { cb }) + delta;
+        let new_k = self.clamp_pane(grown, ca + cb);
+        let new_a = if a == k { new_k } else { ca + cb - new_k };
+        self.set_divider(a, new_a);
+        Ok(())
+    }
+
+    /// A pane's size kept between the smallest a pane can be and what
+    /// leaves the other pane its smallest.
+    fn clamp_pane(&self, cells: i32, pair: u16) -> u16 {
+        let side = self.split.as_ref().is_some_and(|s| s.side_by_side);
+        let min = if side { PANE_MIN.1 } else { PANE_MIN.0 };
+        (cells.max(i32::from(min)) as u16).min(pair.saturating_sub(min).max(min))
+    }
+
+    /// Give drawn pane `a` (of `hits.splits`) `cells`, and the one after it
+    /// the rest of what the two had.
+    fn set_divider(&mut self, a: usize, cells: u16) {
+        let Some(split) = &mut self.split else { return };
+        if a + 1 >= self.hits.splits.len() {
+            return;
+        }
+        let size = |r: Rect| if split.side_by_side { r.width } else { r.height };
+        let pair = size(self.hits.splits[a].0) + size(self.hits.splits[a + 1].0);
+        let mut sizes = split.weights();
+        // Shares in cells, as drawn, so the two change and the rest stay.
+        for (area, slot) in &self.hits.splits {
+            if let Some(s) = sizes.get_mut(*slot) {
+                *s = size(*area).max(1);
+            }
+        }
+        let (sa, sb) = (self.hits.splits[a].1, self.hits.splits[a + 1].1);
+        if let (true, true) = (sa < sizes.len(), sb < sizes.len()) {
+            sizes[sa] = cells.max(1);
+            sizes[sb] = pair.saturating_sub(cells).max(1);
+        }
+        split.sizes = sizes;
+    }
+
+    /// The divider (between drawn panes `k` and `k + 1`) at `at`, if any:
+    /// the line or bar between them.
+    fn divider_at(&self, at: Position) -> Option<usize> {
+        let side = self.split.as_ref()?.side_by_side;
+        // Framed panes meet at two frame lines; plain ones at the line on
+        // the right-hand pane's edge, or the upper pane's title bar.
+        let framed = self.cfg.palette.outlines.is_some();
+        self.hits.splits.windows(2).position(|pair| {
+            let (a, b) = (pair[0].0, pair[1].0);
+            if side {
+                let from = if framed { a.right().saturating_sub(1) } else { b.x };
+                (from..=b.x).contains(&at.x) && (a.y..a.bottom()).contains(&at.y)
+            } else {
+                let to = if framed { b.y } else { a.bottom().saturating_sub(1) };
+                (a.bottom().saturating_sub(1)..=to).contains(&at.y) && (a.x..a.right()).contains(&at.x)
+            }
+        })
+    }
+
     fn cmd_unsplit(&mut self, args: &str) -> Result<(), String> {
         let Some(split) = &mut self.split else { return Err("nothing is split; /split <window> adds a pane".into()) };
         if args.trim() == "all" {
@@ -5372,7 +5645,7 @@ impl App {
         }
         let current = self.windows[self.active].id();
         let slot = split.panes.iter().position(|k| *k == current).unwrap_or(0);
-        split.panes.remove(slot);
+        split.remove(slot);
         let next = split.panes[slot.min(split.panes.len() - 1)].clone();
         if split.panes.len() < 2 {
             self.split = None;
@@ -5950,8 +6223,19 @@ where
         if shown {
             if std::mem::take(&mut app.redraw_all) {
                 terminal.clear()?;
+                app.last_links.clear();
             }
-            terminal.draw(|f| ui::draw(f, &mut app))?;
+            let frame = terminal.draw(|f| ui::draw(f, &mut app))?;
+            // Unchanged links keep their hyperlinks: the frame left them be.
+            let links = if app.cfg.hyperlinks {
+                crate::hyperlinks::overlay(frame.buffer, &app.screen_links())
+            } else {
+                String::new()
+            };
+            if links != app.last_links {
+                crate::term::write(links.as_bytes());
+                app.last_links = links;
+            }
             let title = app.terminal_title();
             if title != app.last_title {
                 match &title {
@@ -6064,7 +6348,11 @@ mod tests {
         let mut w = Window::status();
         w.push(msg("$c", "newest"), 100);
         // A reaction arrives live for a message that is not loaded yet.
-        w.apply(Item::React { target: "$a".try_into().unwrap(), key: "👍".into(), nick: "bob".into() }, 100, true);
+        w.apply(
+            Item::React { target: "$a".try_into().unwrap(), key: "👍".into(), nick: "bob".into(), own: false },
+            100,
+            true,
+        );
         let edit = Item::Edit { target: "$a".try_into().unwrap(), body: "fixed".into(), fallback: msg("$e", "fixed") };
         w.merge_history(vec![Item::Line(msg("$a", "typo")), edit, Item::Line(msg("$c", "newest"))]);
 
@@ -6207,6 +6495,53 @@ mod tests {
     }
 
     #[test]
+    fn panes_resize_by_command_and_by_dragging() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        room_window(&mut app, "!b:x.org", "Book Club");
+        app.switch_to(a);
+        app.cmd_split("Book Club", false).unwrap();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut heights = |app: &mut App| -> Vec<u16> {
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            app.hits.splits.iter().map(|(r, _)| r.height).collect()
+        };
+        let even = heights(&mut app);
+        assert!(even.len() == 2 && even[0].abs_diff(even[1]) <= 1, "{even:?}");
+        let room = even[0] + even[1];
+
+        app.cmd_resize("+4").unwrap();
+        assert_eq!(heights(&mut app), [even[0] + 4, room - even[0] - 4], "the focused pane grows");
+        app.cmd_resize("-100").unwrap();
+        assert_eq!(heights(&mut app)[0], PANE_MIN.0, "not past the smallest");
+        app.cmd_resize("=").unwrap();
+        assert_eq!(heights(&mut app), even);
+        assert!(app.cmd_resize("lots").is_err());
+
+        // Drag the upper pane's title bar down to row 20.
+        let (top, bar) = (app.hits.splits[0].0.y, app.hits.splits[0].0.bottom() - 1);
+        let mouse = |kind, row| MouseEvent { kind, column: 30, row, modifiers: KeyModifiers::NONE };
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), bar));
+        assert_eq!(app.dragging, Some(0));
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 20));
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 20));
+        assert_eq!(app.dragging, None);
+        let dragged = heights(&mut app);
+        assert_eq!(dragged[0], 20 - top + 1);
+
+        // Saved layouts keep the sizes.
+        let dir = std::env::temp_dir().join(format!("textrix-resize-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        app.cmd_layout("save tall").unwrap();
+        app.cmd_resize("=").unwrap();
+        app.cmd_layout("tall").unwrap();
+        assert_eq!(heights(&mut app), dragged);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn layouts_are_saved_and_come_back() {
         let dir = std::env::temp_dir().join(format!("textrix-layouts-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -6284,6 +6619,17 @@ mod tests {
         assert_eq!(app.windows[a].scroll, WHEEL_ROWS);
         app.on_wheel(Position::new(10, 2), false);
         assert_eq!(app.windows[a].scroll, 0);
+        // Every row of a wrapped link becomes a hyperlink to the whole of it.
+        let pieces =
+            [(30, 40, "https://en.wikipedia".to_owned()), (2, 34, "wiki/Rust_(programming_language)".to_owned())];
+        let rows = vec![
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[0].clone()], image: false },
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[1].clone()], image: false },
+        ];
+        app.hits.panes = vec![ui::PaneHits { area: ratatui::layout::Rect::new(0, 3, 40, 2), window: a, rows }];
+        let links = app.screen_links();
+        assert_eq!(links.iter().map(|l| (l.x, l.y, l.width)).collect::<Vec<_>>(), [(30, 3, 10), (2, 4, 32)]);
+        assert!(links.iter().all(|l| l.url == url));
     }
 
     #[test]
@@ -6602,6 +6948,23 @@ mod tests {
         own.own = true;
         app.on_timeline("t", &room, vec![Item::Line(own)], true);
         assert_ne!(app.windows[a].lines.back().unwrap().body, "pong for sam", "scripts don't hear your own messages");
+
+        // Joins and reactions from the timeline reach hooks too (not your own).
+        app.scripts
+            .load(
+                "hooks",
+                None,
+                r#"on_join(|m| print("hi " + m.nick)); on_reaction(|r| print(r.nick + r.key + r.text));"#,
+            )
+            .unwrap();
+        let mut join = Line::new(LineKind::Event, "sam joined");
+        (join.event_id, join.sender) = (Some("$j".try_into().unwrap()), Some("@sam:x.org".try_into().unwrap()));
+        join.fold = Some(Fold::Joined("sam".into()));
+        let react = |own| Item::React { target: "$9".try_into().unwrap(), key: "🍕".into(), nick: "sam".into(), own };
+        app.on_timeline("t", &room, vec![Item::Line(join), react(true), react(false)], true);
+        let said: Vec<&str> = app.windows[a].lines.iter().rev().take(3).map(|l| l.body.as_str()).collect();
+        assert!(said.contains(&"hi sam") && said.contains(&"sam🍕anyone? ping"), "{said:?}");
+        assert_eq!(app.windows[a].lines.iter().filter(|l| l.body.starts_with("sam🍕")).count(), 1, "not your own");
 
         app.input.set_text("/sho");
         assert_eq!(app.candidates()[0].text, "/shout ");
@@ -6970,6 +7333,19 @@ mod tests {
         assert_eq!(app.active, 1, "switched to the first room");
         assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$old"));
         assert!(app.cmd_jump("9").is_err());
+
+        // Narrowed by room, sender and date.
+        let found = |app: &mut App, query: &str| -> Vec<String> {
+            app.cmd_search(query).unwrap();
+            app.search_hits.iter().map(|(_, e)| e.to_string()).collect()
+        };
+        assert_eq!(found(&mut app, "deploy in:!b"), ["$new"]);
+        assert_eq!(found(&mut app, "from:alice in:!a"), ["$oldx", "$old"], "everything alice said there");
+        assert!(found(&mut app, "deploy from:sam").is_empty());
+        assert!(found(&mut app, "deploy before:2020").is_empty());
+        assert_eq!(found(&mut app, "deploy after:yesterday").len(), 2);
+        assert!(app.cmd_search("after:soon").unwrap_err().contains("isn't a date"));
+        assert!(app.cmd_search("").unwrap_err().starts_with("usage"));
     }
 
     #[test]
@@ -7012,7 +7388,8 @@ mod tests {
         let mut reply = msg("$r1", "yes");
         (reply.thread, reply.thread_root) = (true, Some(root.clone()));
         let other = msg("$x", "unrelated chatter");
-        let react = Item::React { target: "$r1".try_into().unwrap(), key: "👍".into(), nick: "bob".into() };
+        let react =
+            Item::React { target: "$r1".try_into().unwrap(), key: "👍".into(), nick: "bob".into(), own: false };
         app.on_timeline("t", &room_id, vec![Item::Line(reply), Item::Line(other), react], true);
 
         let bodies = |w: &Window| w.lines.iter().map(|l| l.body.clone()).collect::<Vec<_>>();

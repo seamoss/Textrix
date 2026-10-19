@@ -41,6 +41,11 @@ handlers, and what it prints there shows in the status window.
 |---|---|
 | `command(name, help, \|args, ctx\| …)` | Adds `/name`. `args` is the text after the command; `ctx` is the room it was typed in. The help shows in `/help` and under the input line as you type. Built-in commands and your aliases come first, so a script can't replace them |
 | `on_message(\|msg\| …)` | Called for each new message from someone else, in every room |
+| `on_highlight(\|msg\| …)` | Called for each message that mentions you or a `/hilight` word |
+| `on_join(\|m\| …)`, `on_leave(\|m\| …)` | Called when someone joins or leaves a room: `m.nick`, `m.user` (their Matrix ID) and the `ctx` fields |
+| `on_reaction(\|r\| …)` | Called when someone reacts: `r.nick`, `r.key` (the emoji), `r.target` (the message's ID), `r.text` (its text, if it's loaded) and the `ctx` fields |
+| `every(secs, \|\| …)`, `after(secs, \|\| …)` | Calls the function every `secs` seconds, or once after them (at least a second; up to 32 timers a script). Returns an ID |
+| `cancel(id)` | Stops a timer; `true` if it was running |
 | `print(text)` | A line only you see, in the room the script is working in |
 | `say(text)` | Sends a message to that room (Markdown, like typing it) |
 | `send(room, text)` | Sends to another room: by its whole name as the window list shows it, or an `#alias:server`, `!id:server` or `@user:server` (their DM, started if you haven't one) |
@@ -148,6 +153,18 @@ status(|| `up ${(now() - started) / 60}m`);
 
 A function that fails loses its item (and says why, once).
 
+### Timers
+
+A timer's function runs on Textrix's once-a-second clock, so a timer is
+accurate to about a second. What it prints shows in the window you're in.
+Reloading a script replaces its timers; unloading stops them.
+
+```rhai
+// The time in Tokyo can't be had, but how long you've been up can.
+let started = now();
+every(3600, || print(`${(now() - started) / 3600} hours in`));
+```
+
 ## Limits
 
 Scripts run inside Textrix, so they're kept on a short leash:
@@ -158,8 +175,8 @@ Scripts run inside Textrix, so they're kept on a short leash:
   error in the status window.
 - Each script can send at most 5 things (`say`, `send`, `run`) in any 10
   seconds; anything beyond that is dropped, and Textrix says so.
-- Scripts don't hear your own messages, so a script that answers messages
-  can't end up answering itself. Scripts and aliases calling each other
+- Scripts don't hear your own messages or reactions, so a script that
+  answers them can't end up answering itself. Scripts and aliases calling each other
   stop after 8 levels.
 
 They are still your code, running as you. `run` can do anything you can

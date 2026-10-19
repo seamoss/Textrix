@@ -45,6 +45,9 @@ pub struct Hits {
     pub input: Option<(Rect, u16, usize)>,
     /// The quick switcher's box, and its rows: (row, entry index).
     pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// Split panes as drawn, in order: (their whole area, their place in
+    /// the split's panes).
+    pub splits: Vec<(Rect, usize)>,
 }
 
 pub struct PaneHits {
@@ -588,8 +591,18 @@ fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
         return draw_messages(f, body, app, idx);
     }
     let side_by_side = app.split.as_ref().is_some_and(|s| s.side_by_side);
-    let fill = vec![Constraint::Fill(1); panes.len()];
+    // Each drawn pane's place in the split, and its share of the room.
+    let slots: Vec<usize> = panes
+        .iter()
+        .map(|&idx| {
+            app.split.as_ref().and_then(|s| s.panes.iter().position(|r| *r == app.windows[idx].id())).unwrap_or(0)
+        })
+        .collect();
+    let weights = app.split.as_ref().map(|s| s.weights()).unwrap_or_default();
+    let fill: Vec<Constraint> =
+        slots.iter().map(|&slot| Constraint::Fill(weights.get(slot).copied().unwrap_or(1).max(1))).collect();
     let areas = if side_by_side { Layout::horizontal(fill).split(area) } else { Layout::vertical(fill).split(area) };
+    app.hits.splits = areas.iter().copied().zip(slots).collect();
     for (n, (&idx, &pane)) in panes.iter().zip(areas.iter()).enumerate() {
         let body = if let Some(block) = frame_of(app, idx) {
             let body = block.inner(pane);

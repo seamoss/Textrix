@@ -107,6 +107,8 @@ pub struct Config {
     /// Page titles under links, fetched by your homeserver: "unencrypted"
     /// (rooms the server can read anyway), "all", or "off".
     pub link_titles: LinkTitles,
+    /// Make links real hyperlinks (OSC 8) in terminals that have them.
+    pub hyperlinks: bool,
     /// Fold runs of joins, leaves and renames into one summary line.
     pub fold_joins: bool,
     /// Render outgoing messages as Markdown.
@@ -210,6 +212,7 @@ impl Default for Config {
             timestamp_format: "%H:%M".into(),
             show_joins: true,
             link_titles: LinkTitles::Unencrypted,
+            hyperlinks: true,
             fold_joins: true,
             markdown: true,
             send_typing: true,

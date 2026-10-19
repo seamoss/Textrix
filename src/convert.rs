@@ -217,7 +217,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
         }
         AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(ev)) => {
             let rel = ev.content.relates_to;
-            Some(Item::React { target: rel.event_id, key: rel.key, nick: line.nick })
+            Some(Item::React { target: rel.event_id, key: rel.key, nick: line.nick, own: line.own })
         }
         AnySyncMessageLikeEvent::RoomRedaction(SyncRoomRedactionEvent::Original(ev)) => {
             let target = ev.redacts.or(ev.content.redacts)?;

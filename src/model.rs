@@ -195,6 +195,8 @@ pub enum Item {
         target: OwnedEventId,
         key: String,
         nick: String,
+        /// Yours.
+        own: bool,
     },
 }
 

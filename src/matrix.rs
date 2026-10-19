@@ -18,7 +18,9 @@ use eyeball::SharedObservable;
 use futures_util::StreamExt;
 use matrix_sdk::{
     Client, Room, RoomMemberships, RoomState, TransmissionProgress,
-    attachment::{AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo},
+    attachment::{
+        AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo, Thumbnail,
+    },
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::RawSyncOrStrippedState,
@@ -943,12 +945,12 @@ impl Account {
 
     /// `/search` in the index: hits (newest first), how many messages it
     /// holds, and whether older history is still being read into it.
-    pub fn search_index(&self, needle: &str, limit: usize) -> Option<(Vec<Entry>, usize, bool)> {
+    pub fn search_index(&self, matches: impl Fn(&Entry) -> bool, limit: usize) -> Option<(Vec<Entry>, usize, bool)> {
         let guard = self.index.lock().unwrap();
         let index = guard.as_ref()?;
         let rooms = self.client.joined_rooms();
         let reading = rooms.iter().any(|r| !r.is_space() && !index.crawl(r.room_id().as_str()).done);
-        Some((index.search(needle, limit), index.len(), reading))
+        Some((index.search(matches, limit), index.len(), reading))
     }
 
     /// Read rooms' history back into the search index, gently (a page
@@ -1588,22 +1590,41 @@ impl Account {
         let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("not a file path")?;
         let mime = mime_guess::from_path(path).first_or_octet_stream();
         let size = Some(UInt::try_from(data.len() as u64).unwrap_or(UInt::MAX));
-        let info = match mime.type_() {
+        let px = |n: Option<u32>| n.map(UInt::from);
+        // Size, blurhash and thumbnail, as Element sends them.
+        let extras = match mime.type_() {
             mime::IMAGE => {
-                let dims = imagesize::blob_size(&data).ok();
-                let px = |n: usize| UInt::try_from(n as u64).ok();
-                AttachmentInfo::Image(BaseImageInfo {
-                    width: dims.as_ref().and_then(|d| px(d.width)),
-                    height: dims.as_ref().and_then(|d| px(d.height)),
-                    size,
-                    ..Default::default()
-                })
+                let bytes = data.clone();
+                let mut extras =
+                    tokio::task::spawn_blocking(move || crate::upload::image_extras(&bytes)).await.unwrap_or_default();
+                // Too big to decode here: still say its size.
+                if extras.width.is_none()
+                    && let Ok(dims) = imagesize::blob_size(&data)
+                {
+                    (extras.width, extras.height) = (u32::try_from(dims.width).ok(), u32::try_from(dims.height).ok());
+                }
+                extras
             }
-            mime::VIDEO => AttachmentInfo::Video(BaseVideoInfo { size, ..Default::default() }),
+            mime::VIDEO => crate::upload::video_extras(path, &data).await,
+            _ => crate::upload::Extras::default(),
+        };
+        let (width, height, blurhash) = (px(extras.width), px(extras.height), extras.blurhash);
+        let info = match mime.type_() {
+            mime::IMAGE => AttachmentInfo::Image(BaseImageInfo { width, height, size, blurhash, ..Default::default() }),
+            mime::VIDEO => {
+                AttachmentInfo::Video(BaseVideoInfo { duration: extras.duration, width, height, size, blurhash })
+            }
             mime::AUDIO => AttachmentInfo::Audio(BaseAudioInfo { size, ..Default::default() }),
             _ => AttachmentInfo::File(BaseFileInfo { size }),
         };
-        let config = AttachmentConfig::new().txn_id(txn_id.clone()).info(info);
+        let thumbnail = extras.thumbnail.map(|(data, content_type, width, height)| Thumbnail {
+            size: UInt::try_from(data.len() as u64).unwrap_or(UInt::MAX),
+            data,
+            content_type,
+            width: UInt::from(width),
+            height: UInt::from(height),
+        });
+        let config = AttachmentConfig::new().txn_id(txn_id.clone()).info(info).thumbnail(thumbnail);
 
         let progress = SharedObservable::new(TransmissionProgress::default());
         let mut updates = progress.subscribe();
@@ -3103,7 +3124,7 @@ fn read_avatar(path: &Path) -> Result<(mime::Mime, Vec<u8>, avatar::ImageInfo)> 
 }
 
 /// Decode an untrusted image with caps on its size and memory (blocking).
-fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage> {
+pub(crate) fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(12_000);
