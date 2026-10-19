@@ -1272,7 +1272,9 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled("more", style)]);
     }
 
-    if let Some(lines) = app.confirm_paste {
+    if let Some(prompt) = app.quit_prompt() {
+        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+    } else if let Some(lines) = app.confirm_paste {
         let prompt = format!("send {lines} pasted lines to {}? y/n", win.title());
         item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
     } else if let Some(what) = app.upload_summary() {

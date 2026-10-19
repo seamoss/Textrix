@@ -641,6 +641,8 @@ const LINK_TITLES_MAX: usize = 2000;
 const BELL_GAP: Duration = Duration::from_secs(2);
 /// How long the visual bell flashes.
 const FLASH: Duration = Duration::from_millis(250);
+/// How soon a second Ctrl+C has to come to quit.
+const QUIT_WINDOW: Duration = Duration::from_secs(2);
 /// Messages the mentions window keeps.
 const MENTIONS_MAX: usize = 500;
 /// Rows one notch of the mouse wheel scrolls.
@@ -694,6 +696,8 @@ pub struct App {
     pub confirm_upload: Option<Vec<PathBuf>>,
     /// Text whose upload was declined, so Enter then sends it as it is.
     upload_declined: Option<String>,
+    /// When Ctrl+C was pressed on an empty input line: again soon quits.
+    quit_armed: Option<Instant>,
     /// The edit to go back to if a delete started from it is declined.
     resume_edit: Option<EditSession>,
     editing: Option<EditSession>,
@@ -978,7 +982,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), image (views), name or the input"),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
-    ("Ctrl+C", "clear the input line"),
+    ("Ctrl+C", "clear the input line; on an empty one, twice quits (detaches, in the background)"),
     ("Ctrl+L", "redraw the screen"),
 ];
 
@@ -1116,6 +1120,7 @@ impl App {
             confirm_paste: None,
             confirm_upload: None,
             upload_declined: None,
+            quit_armed: None,
             resume_edit: None,
             editing: None,
             compose: None,
@@ -2817,6 +2822,9 @@ impl App {
         use KeyCode::*;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if !(ctrl && key.code == Char('c')) {
+            self.quit_armed = None;
+        }
         if let Some(v) = self.viewer.as_mut() {
             match key.code {
                 Esc | Enter | Char('q' | 'z') => self.close_viewer(),
@@ -2983,6 +2991,7 @@ impl App {
                 'k' if self.input.cursor() == self.input.chars().len() => {
                     self.switcher = Some(Switcher::default());
                 }
+                'c' if self.input.is_empty() && self.compose.is_none() => self.ctrl_c_quits(),
                 'd' | 'h' | 'u' | 'k' | 'w' | 'y' | 'c' => {
                     match c {
                         'd' => self.input.delete(),
@@ -3751,6 +3760,28 @@ impl App {
     }
 
     // ---- commands --------------------------------------------------------
+
+    /// Ctrl+C on an empty input line: once asks, and again within two
+    /// seconds quits (in the background, detaches, as closing the terminal
+    /// would).
+    fn ctrl_c_quits(&mut self) {
+        if self.quit_armed.is_some_and(|at| at.elapsed() < QUIT_WINDOW) {
+            self.quit_armed = None;
+            if !crate::remote::detach("detached; textrix --attach comes back to it") {
+                self.quit = true;
+            }
+        } else {
+            self.quit_armed = Some(Instant::now());
+        }
+    }
+
+    /// The status bar's "press Ctrl+C again" while it's waiting.
+    pub fn quit_prompt(&self) -> Option<&'static str> {
+        self.quit_armed.filter(|at| at.elapsed() < QUIT_WINDOW).map(|_| match crate::term::remote_client() {
+            Some(_) => "press Ctrl+C again to detach (Textrix keeps running; /quit stops it)",
+            None => "press Ctrl+C again to quit",
+        })
+    }
 
     /// Ask whether to upload what's in the input line, if it's nothing but
     /// paths to files (as dropping files on the terminal leaves it).
@@ -6582,6 +6613,25 @@ mod tests {
         assert_eq!(app.cmd_play("jo_bloggs"), Err("no audio or video from jo_bloggs here".into()));
         // Found; with no server connected here it stops short of playing.
         assert!(app.cmd_play("sam").unwrap_err().contains("not connected"), "found sam's");
+    }
+
+    #[test]
+    fn ctrl_c_twice_quits() {
+        let mut app = test_app();
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        app.input.set_text("a draft");
+        app.on_key(ctrl_c);
+        assert!(app.input.is_empty() && app.quit_prompt().is_none(), "with text, it clears the line");
+        app.on_key(ctrl_c);
+        assert_eq!(app.quit_prompt(), Some("press Ctrl+C again to quit"));
+        app.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert!(app.quit_prompt().is_none() && !app.quit, "any other key calls it off");
+        app.on_key(ctrl_c);
+        app.quit_armed = app.quit_armed.map(|at| at - Duration::from_secs(3));
+        app.on_key(ctrl_c);
+        assert!(!app.quit, "too slow: that one only asks again");
+        app.on_key(ctrl_c);
+        assert!(app.quit);
     }
 
     #[test]

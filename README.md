@@ -126,6 +126,7 @@ unencrypted too.
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
 | F6 / Shift+F6 | focus the next / previous split pane |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
+| Ctrl+C twice | on an empty line, quits ("press Ctrl+C again to quit"); in the background, detaches instead |
 | Ctrl+L | redraw |
 
 **Mouse** (`mouse = true`): the wheel scrolls the pane under the pointer

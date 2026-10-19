@@ -7,6 +7,18 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.6.4] - 2026-10-18
+
+### Added
+- Ctrl+C twice quits: on an empty input line, the first asks "press
+  Ctrl+C again to quit" and a second within two seconds does. In the
+  background it detaches instead, leaving Textrix running. With text in
+  the line, Ctrl+C still clears it.
+
+### Changed
+- 0.6.3 and 0.6.2 weren't built as releases of their own; this release
+  includes them.
+
 ## [0.6.3] - 2026-10-18
 
 ### Fixed
