@@ -155,6 +155,12 @@ focused pane when split), as set by `title`: `{window}`, `{number}`,
 have new messages. Inside tmux it's the pane title. The title you had is
 put back when Textrix exits.
 
+The window list (F2) puts rooms and DMs with messages you haven't read
+under **Unreads** at the top, mentions first; once you've read them they
+go back to **Rooms** (grouped under their spaces, if you're in any) or
+**DMs**, each by name. A window's number stays the same wherever it's
+listed, so Alt+1..0 and `/window N` always find it.
+
 While you type a command, its usage appears in dim text after the cursor.
 
 What you've typed stays with its window: switch away and it's waiting when

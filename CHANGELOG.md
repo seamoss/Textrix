@@ -7,6 +7,15 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.8.1] - 2026-10-19
+
+### Changed
+- The window list has sections: **Unreads** at the top (rooms and DMs
+  with messages you haven't read, mentions first), then **Rooms** (under
+  their spaces, if any) and **DMs**, each by name. A window moves up to
+  Unreads when messages arrive and back once you've read them; its number
+  stays the same throughout.
+
 ## [0.8.0] - 2026-10-19
 
 ### Added

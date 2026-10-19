@@ -296,13 +296,29 @@ pub enum SidebarEntry {
     Window(usize),
 }
 
-/// Window list layout: the status window, then each server's windows,
-/// grouped under their spaces when there are any. Window numbers never
-/// change, only the order they're listed in.
+/// Window list layout: the status window; then Unreads (any room or DM
+/// with messages you haven't seen, mentions first), which go back where
+/// they belong once read; then each server's Rooms (grouped under their
+/// spaces when there are any) and DMs, by name. Window numbers never
+/// change, only where they're listed.
 pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
     // The status window, then other windows that aren't a room (mentions).
     let mut out = vec![SidebarEntry::Window(0)];
     out.extend((1..app.windows.len()).filter(|&i| app.windows[i].room.is_none()).map(SidebarEntry::Window));
+    let rooms = |i: &usize| app.windows[*i].room.is_some();
+    let unread = |i: &usize| app.windows[*i].activity >= Activity::Message;
+    let by_name = |a: &usize, b: &usize| {
+        let name = |i: &usize| app.windows[*i].title().to_lowercase();
+        name(a).cmp(&name(b)).then(a.cmp(b))
+    };
+
+    let mut unreads: Vec<usize> = (1..app.windows.len()).filter(rooms).filter(unread).collect();
+    unreads.sort_by(|a, b| app.windows[*b].activity.cmp(&app.windows[*a].activity).then(by_name(a, b)));
+    if !unreads.is_empty() {
+        out.push(SidebarEntry::Header("Unreads".into()));
+        out.extend(unreads.into_iter().map(SidebarEntry::Window));
+    }
+
     let mut servers: Vec<&str> = Vec::new();
     for w in &app.windows[1..] {
         if let Some(server) = w.account()
@@ -311,32 +327,44 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
             servers.push(server);
         }
     }
+    let several = app.accounts.len() > 1 || servers.len() > 1;
     for server in servers {
-        if app.accounts.len() > 1 {
-            out.push(SidebarEntry::Header(server.to_owned()));
-        }
-        let windows: Vec<usize> =
-            (1..app.windows.len()).filter(|&i| app.windows[i].account() == Some(server)).collect();
-        let spaces = app.spaces.get(server).map(Vec::as_slice).unwrap_or_default();
-        let mut placed: HashSet<usize> = HashSet::new();
-        for space in spaces {
-            let members: Vec<usize> = windows
-                .iter()
-                .copied()
-                .filter(|i| !placed.contains(i))
-                .filter(|&i| app.windows[i].room.as_ref().is_some_and(|k| space.children.contains(&k.room_id)))
-                .collect();
-            if !members.is_empty() {
-                out.push(SidebarEntry::Header(format!("◆ {}", space.name)));
-                placed.extend(&members);
-                out.extend(members.into_iter().map(SidebarEntry::Window));
+        let windows: Vec<usize> = (1..app.windows.len())
+            .filter(|&i| app.windows[i].account() == Some(server))
+            .filter(|i| !unread(i))
+            .collect();
+        let (mut dms, mut rooms): (Vec<usize>, Vec<usize>) = windows.into_iter().partition(|&i| app.windows[i].is_dm);
+        rooms.sort_by(by_name);
+        dms.sort_by(by_name);
+        let label = |section: &str| if several { format!("{section} · {server}") } else { section.to_owned() };
+
+        if !rooms.is_empty() {
+            out.push(SidebarEntry::Header(label("Rooms")));
+            let spaces = app.spaces.get(server).map(Vec::as_slice).unwrap_or_default();
+            let mut placed: HashSet<usize> = HashSet::new();
+            for space in spaces {
+                let members: Vec<usize> = rooms
+                    .iter()
+                    .copied()
+                    .filter(|i| !placed.contains(i))
+                    .filter(|&i| app.windows[i].room.as_ref().is_some_and(|k| space.children.contains(&k.room_id)))
+                    .collect();
+                if !members.is_empty() {
+                    out.push(SidebarEntry::Header(format!("◆ {}", space.name)));
+                    placed.extend(&members);
+                    out.extend(members.into_iter().map(SidebarEntry::Window));
+                }
             }
+            let rest: Vec<usize> = rooms.into_iter().filter(|i| !placed.contains(i)).collect();
+            if !rest.is_empty() && !placed.is_empty() {
+                out.push(SidebarEntry::Header("◇ other".into()));
+            }
+            out.extend(rest.into_iter().map(SidebarEntry::Window));
         }
-        let rest: Vec<usize> = windows.into_iter().filter(|i| !placed.contains(i)).collect();
-        if !rest.is_empty() && !placed.is_empty() {
-            out.push(SidebarEntry::Header("◇ other".into()));
+        if !dms.is_empty() {
+            out.push(SidebarEntry::Header(label("DMs")));
+            out.extend(dms.into_iter().map(SidebarEntry::Window));
         }
-        out.extend(rest.into_iter().map(SidebarEntry::Window));
     }
     out
 }

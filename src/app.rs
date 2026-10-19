@@ -7554,7 +7554,7 @@ mod tests {
             let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
             app.windows.push(Window::new(Some(key), name.into()));
         }
-        assert_eq!(sidebar_entries(&app), vec![Win(0), Win(1), Win(2)], "no spaces, no headers");
+        assert_eq!(sidebar_entries(&app), vec![Win(0), Header("Rooms".into()), Win(2), Win(1)], "by name");
 
         let space = SpaceInfo {
             room_id: "!s:x.org".try_into().unwrap(),
@@ -7564,8 +7564,52 @@ mod tests {
         app.spaces.insert("t".into(), vec![space]);
         assert_eq!(
             sidebar_entries(&app),
-            vec![Win(0), Header("◆ Work".into()), Win(2), Header("◇ other".into()), Win(1)]
+            vec![Win(0), Header("Rooms".into()), Header("◆ Work".into()), Win(2), Header("◇ other".into()), Win(1)]
         );
+    }
+
+    #[test]
+    fn window_list_puts_unreads_first_then_rooms_then_dms() {
+        use crate::ui::{
+            SidebarEntry::{Header, Window as Win},
+            sidebar_entries,
+        };
+        let mut app = test_app();
+        let night = room_window(&mut app, "!n:x.org", "Night Owls");
+        let sam = room_window(&mut app, "!s:x.org", "sam");
+        let book = room_window(&mut app, "!b:x.org", "Book Club");
+        let jo = room_window(&mut app, "!j:x.org", "jo_bloggs");
+        app.windows[sam].is_dm = true;
+        app.windows[jo].is_dm = true;
+        let rooms_then_dms =
+            vec![Win(0), Header("Rooms".into()), Win(book), Win(night), Header("DMs".into()), Win(jo), Win(sam)];
+        assert_eq!(sidebar_entries(&app), rooms_then_dms);
+
+        // New messages bring a window up to Unreads, mentions first.
+        app.windows[night].activity = Activity::Message;
+        app.windows[sam].activity = Activity::Highlight;
+        app.windows[jo].activity = Activity::Event;
+        assert_eq!(
+            sidebar_entries(&app),
+            vec![
+                Win(0),
+                Header("Unreads".into()),
+                Win(sam),
+                Win(night),
+                Header("Rooms".into()),
+                Win(book),
+                Header("DMs".into()),
+                Win(jo),
+            ],
+            "joins and leaves aren't unread messages"
+        );
+
+        // Reading them sends them back.
+        app.switch_to(sam);
+        app.switch_to(night);
+        app.windows[jo].activity = Activity::None;
+        assert_eq!(sidebar_entries(&app), rooms_then_dms);
+        assert_eq!(app.active, night, "the numbers stay what they were");
     }
 
     #[test]
