@@ -360,11 +360,13 @@ on_message(|msg| {
 });
 ```
 
-Scripts are sandboxed (no files, network or programs, and a runaway loop
-is stopped) and rate-limited to 5 messages per 10 seconds.
+Scripts can keep things across restarts, have settings that `/set` and
+`/save` handle like the rest, and put items in the status bar. They're
+sandboxed (no files, network or programs, and a runaway loop is stopped)
+and rate-limited to 5 messages per 10 seconds.
 [SCRIPTING.md](SCRIPTING.md) has the whole API, and
-[examples/scripts](examples/scripts) has dice, `/seen` and watch words to
-start from.
+[examples/scripts](examples/scripts) has dice, `/seen`, watch words and a
+DM counter to start from.
 
 ## Optional preferences
 

@@ -7,6 +7,22 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.4.0] - 2026-10-18
+
+### Added
+- Script stores: `store_set`, `store_get`, `store_remove` and `store_keys`
+  keep a script's things across restarts, in a private JSON file per
+  script in `~/.textrix/script-data/`.
+- Script settings: `setting(name, default, help)` declares one; `/set`
+  lists and changes them as `script.name`, Tab completes them, and `/save`
+  writes them under `[script_settings.<script>]` in config.toml.
+- Status bar items from scripts: `status(text)`, or `status(function)`
+  for one worked out once a second.
+- `now()` for scripts: the time in seconds.
+- The watch words example has its words as a setting, `/seen` remembers
+  across restarts, and a new example counts direct messages in the status
+  bar.
+
 ## [0.3.0] - 2026-10-18
 
 ### Added

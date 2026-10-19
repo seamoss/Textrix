@@ -680,7 +680,7 @@ pub struct App {
     pub playing: Option<(OwnedEventId, tokio::task::AbortHandle)>,
     pub split: Option<Split>,
     /// Loaded scripts (~/.textrix/scripts).
-    scripts: Scripts,
+    pub scripts: Scripts,
     /// Messages to hand to scripts after this event.
     script_messages: Vec<(WinKey, Line)>,
     /// Servers whose connection dropped, and since when (netsplits).
@@ -1137,6 +1137,8 @@ impl App {
         }
         // Audio left over from a crash; anything playing deletes its own.
         let _ = std::fs::remove_dir_all(self.paths.base.join("tmp"));
+        self.scripts.set_data_dir(self.paths.base.join("script-data"));
+        self.scripts.configure(&self.cfg.script_settings);
         if self.cfg.scripts {
             for path in Scripts::available(&self.scripts_dir()) {
                 self.load_script(&path);
@@ -1373,6 +1375,7 @@ impl App {
     pub fn shutdown(&mut self) {
         self.stop_typing();
         self.save_layout();
+        self.scripts.save_stores();
         for state in self.accounts.values() {
             if let Some(account) = &state.account {
                 account.stop();
@@ -2445,6 +2448,17 @@ impl App {
 
     /// Called after every draw: lazy history, member lists, read markers,
     /// image previews, avatars.
+    /// Once a second: scripts' live status items, and their stores saved
+    /// if they changed.
+    pub fn on_clock(&mut self) {
+        let (effects, mut errors) = self.scripts.refresh_status();
+        self.apply_effects(effects, None);
+        errors.extend(self.scripts.save_stores());
+        for e in errors {
+            self.status(Line::error(format!("script {e}")));
+        }
+    }
+
     pub fn after_draw(&mut self) {
         self.request_avatars();
         for (account, url) in std::mem::take(&mut self.link_title_requests) {
@@ -3564,6 +3578,8 @@ impl App {
         if first == "/set" && text.split_whitespace().count() <= 2 && !at_start {
             let mut names: Vec<String> =
                 self.effective_config().to_table().map(|t| t.keys().cloned().collect()).unwrap_or_default();
+            names.retain(|n| n != "script_settings");
+            names.extend(self.scripts.settings().into_iter().map(|(name, _, _)| name));
             names.push("log_dir".into());
             names.sort();
             return names
@@ -5040,6 +5056,7 @@ impl App {
         if cfg.theme != self.cfg.theme || cfg.colors != self.cfg.colors {
             self.redraw_all = true;
         }
+        self.scripts.configure(&cfg.script_settings);
         self.cfg = cfg;
         self.apply_logging();
     }
@@ -5050,6 +5067,7 @@ impl App {
         let mut cfg = self.cfg.clone();
         (cfg.bell, cfg.bell_style) = (self.bell_mode, self.bell_style);
         (cfg.sidebar, cfg.nicklist) = (self.show_sidebar, self.show_nicklist);
+        cfg.script_settings = self.scripts.settings_table();
         cfg
     }
 
@@ -5060,10 +5078,12 @@ impl App {
         let current = self.effective_config().to_table().map_err(|e| format!("{e:#}"))?;
         let (key, value) = split_first(args.trim());
         let value = value.trim();
+        let script_settings = self.scripts.settings();
         if key.is_empty() {
             self.info("Settings (/set <name> <value> changes one for this session, /save keeps them):");
-            let rows: Vec<String> = current
+            let mut rows: Vec<String> = current
                 .iter()
+                .filter(|(k, _)| *k != "script_settings")
                 .map(|(k, v)| match v.as_table() {
                     Some(t) => {
                         format!("  [{k}] {} entr{} (edit config.toml)", t.len(), if t.len() == 1 { "y" } else { "ies" })
@@ -5071,7 +5091,26 @@ impl App {
                     None => format!("  {k} = {v}"),
                 })
                 .collect();
+            if !script_settings.is_empty() {
+                rows.push("Script settings:".into());
+                rows.extend(script_settings.iter().map(|(k, v, help)| format!("  {k} = {v}  ({help})")));
+            }
             rows.into_iter().for_each(|row| self.info(row));
+            return Ok(());
+        }
+        let parse = |value: &str| {
+            toml::from_str::<toml::Table>(&format!("v = {value}"))
+                .ok()
+                .and_then(|mut t| t.remove("v"))
+                .unwrap_or_else(|| toml::Value::String(value.to_owned()))
+        };
+        if let Some((_, now, help)) = script_settings.iter().find(|(k, _, _)| k == key) {
+            if value.is_empty() {
+                self.info(format!("{key} = {now}  ({help})"));
+            } else {
+                let set = self.scripts.set_setting(key, parse(value))?;
+                self.info(format!("{key} = {set} for this session; /save keeps it"));
+            }
             return Ok(());
         }
         if value.is_empty() {
@@ -5085,10 +5124,7 @@ impl App {
         if current.get(key).is_some_and(toml::Value::is_table) {
             return Err(format!("[{key}] is a table: edit it in config.toml, then /reload"));
         }
-        let parsed = toml::from_str::<toml::Table>(&format!("v = {value}"))
-            .ok()
-            .and_then(|mut t| t.remove("v"))
-            .unwrap_or_else(|| toml::Value::String(value.to_owned()));
+        let parsed = parse(value);
         let mut table = current;
         table.insert(key.to_owned(), parsed.clone());
         let cfg = Config::from_table(table).map_err(|e| format!("{key}: {e:#}"))?;
@@ -5488,7 +5524,7 @@ pub async fn run(terminal: &mut DefaultTerminal, mut app: App, mut rx: Unbounded
                     app.on_event(ev);
                 }
             }
-            _ = clock.tick() => {}
+            _ = clock.tick() => app.on_clock(),
             // Redraw when the visual bell's flash ends.
             _ = flash_end(app.flash_until) => app.flash_until = None,
         }
@@ -5873,6 +5909,37 @@ mod tests {
         app.cmd_nickname("@sam:x.org").unwrap();
         assert_eq!(app.windows[1].title(), "sam");
         assert!(app.cmd_nickname("@sam:x.org").is_err(), "nothing to take off");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn script_settings_go_through_set_and_save() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-script-set-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        std::fs::write(app.paths.config_file(), "# mine\n\n[script_settings.watch]\nloud = true\n").unwrap();
+        app.cfg = Config::load(&app.paths.config_file()).unwrap();
+        app.scripts.configure(&app.cfg.script_settings);
+        let source = r#"setting("words", "deploy", "Words to watch for"); setting("loud", false, "Ring too");"#;
+        app.scripts.load("watch", None, source).unwrap();
+
+        app.cmd_set("").unwrap();
+        let listed: Vec<&str> = app.windows[0].lines.iter().map(|l| l.body.as_str()).collect();
+        assert!(listed.contains(&"  watch.words = \"deploy\"  (Words to watch for)"), "{listed:#?}");
+        assert!(listed.contains(&"  watch.loud = true  (Ring too)"), "config.toml's value");
+        assert!(!listed.iter().any(|l| l.contains("[script_settings]")), "shown as settings, not a table");
+        app.cmd_set("watch.words pizza|outage").unwrap();
+        assert!(app.cmd_set("watch.loud maybe").unwrap_err().contains("takes boolean"));
+        app.cmd_set("image_rows 12").unwrap();
+        assert_eq!(app.scripts.settings()[0].1, toml::Value::String("pizza|outage".into()), "other /sets keep it");
+
+        app.cmd_save().unwrap();
+        let saved = std::fs::read_to_string(app.paths.config_file()).unwrap();
+        assert!(saved.contains("# mine\n") && saved.contains("image_rows = 12"), "{saved}");
+        assert!(saved.contains("[script_settings.watch]\nloud = true\nwords = \"pizza|outage\"\n"), "{saved}");
+        let back = Config::load(&app.paths.config_file()).unwrap();
+        assert_eq!(back.script_settings["watch"]["words"], toml::Value::String("pizza|outage".into()));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

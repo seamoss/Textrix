@@ -1,12 +1,10 @@
 // /seen <name>: when someone last said something, and where.
 //
-// A script keeps state in variables its handlers capture: `last` below
-// lives as long as the script is loaded (reloading starts it afresh).
-
-let last = #{};
+// It keeps who, where and when in the script's store, so it remembers
+// across restarts. (Not what they said: a store is a plain file.)
 
 on_message(|msg| {
-    last[msg.nick.to_lower()] = #{ nick: msg.nick, room: msg.room, at: timestamp(), said: msg.body };
+    store_set(msg.nick.to_lower(), #{ nick: msg.nick, room: msg.room, at: now() });
 });
 
 command("seen", "When someone last spoke: /seen <name>", |args, ctx| {
@@ -16,12 +14,20 @@ command("seen", "When someone last spoke: /seen <name>", |args, ctx| {
         print("usage: /seen <name>");
         return;
     }
-    if who !in last {
-        print(`haven't seen ${args} say anything since this script loaded`);
+    let seen = store_get(who);
+    if type_of(seen) != "map" {
+        print(`haven't seen ${args} say anything`);
         return;
     }
-    let seen = last[who];
-    let secs = seen.at.elapsed.to_int();
-    let ago = if secs < 60 { `${secs}s` } else if secs < 3600 { `${secs / 60}m` } else { `${secs / 3600}h ${secs % 3600 / 60}m` };
-    print(`${seen.nick} was in ${seen.room} ${ago} ago: ${seen.said}`);
+    let secs = now() - seen.at;
+    let ago = if secs < 60 {
+        `${secs}s`
+    } else if secs < 3600 {
+        `${secs / 60}m`
+    } else if secs < 86400 {
+        `${secs / 3600}h ${secs % 3600 / 60}m`
+    } else {
+        `${secs / 86400} days`
+    };
+    print(`${seen.nick} was in ${seen.room} ${ago} ago`);
 });

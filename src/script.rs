@@ -7,16 +7,20 @@
 //! carries out: print a line, say something, run a command, ring the bell.
 //! Sending is rate-limited per script, and scripts never see your own
 //! messages, so a script can't talk itself into a loop.
+//!
+//! Each script also gets a store kept across restarts (a JSON file of its
+//! own), settings that `/set` and `/save` know about, and an item in the
+//! status bar.
 
 use std::{
     cell::RefCell,
-    collections::VecDeque,
+    collections::{BTreeMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
 
-use rhai::{AST, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map};
+use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map};
 
 /// Something a script asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,11 +96,63 @@ struct Registry {
 const SEND_LIMIT: usize = 5;
 const SEND_WINDOW: Duration = Duration::from_secs(10);
 
+/// A script's store, as JSON, can't grow past this.
+const STORE_LIMIT: usize = 1024 * 1024;
+
+/// A setting a script declared with `setting(name, default, help)`.
+struct Setting {
+    script: String,
+    name: String,
+    help: String,
+    default: toml::Value,
+    value: toml::Value,
+}
+
+/// A script's status bar item: fixed text, or a function asked once a
+/// second (with what it said last).
+enum Status {
+    Text(String),
+    Live(FnPtr, String),
+}
+
+/// What the registered functions reach besides effects: which script is
+/// running, and the stores, settings and status items of them all.
+#[derive(Default)]
+struct Shared {
+    /// The script whose code is running ("" for `/script exec`).
+    current: String,
+    stores: BTreeMap<String, Map>,
+    dirty: HashSet<String>,
+    /// Kept when a script unloads, so reloading keeps `/set` changes.
+    settings: Vec<Setting>,
+    /// config.toml's `[script_settings]`, by script.
+    config: BTreeMap<String, toml::Table>,
+    status: BTreeMap<String, Status>,
+}
+
+impl Shared {
+    fn script(&self, what: &str) -> Result<String, Box<EvalAltResult>> {
+        match self.current.as_str() {
+            "" => Err(format!("{what} is for scripts loaded from a file").into()),
+            name => Ok(name.to_owned()),
+        }
+    }
+
+    fn store(&mut self, what: &str) -> Result<(String, &mut Map), Box<EvalAltResult>> {
+        let name = self.script(what)?;
+        let store = self.stores.entry(name.clone()).or_default();
+        Ok((name, store))
+    }
+}
+
 pub struct Scripts {
     engine: Engine,
     scripts: Vec<Script>,
     effects: Rc<RefCell<Vec<Effect>>>,
     registry: Rc<RefCell<Registry>>,
+    shared: Rc<RefCell<Shared>>,
+    /// Where stores are kept (`None`: only in memory).
+    data_dir: Option<PathBuf>,
 }
 
 impl Scripts {
@@ -141,6 +197,9 @@ impl Scripts {
                 Ok(re.is_match(&text))
             },
         );
+        engine.register_fn("now", || {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+        });
         engine.register_fn("random", |n: i64| -> Result<i64, Box<EvalAltResult>> {
             if n < 1 {
                 return Err("random(n) needs n of 1 or more".into());
@@ -156,7 +215,224 @@ impl Scripts {
             commands.borrow_mut().commands.push((name, help.to_string(), handler));
         });
 
-        Self { engine, scripts: Vec::new(), effects, registry }
+        let shared: Rc<RefCell<Shared>> = Rc::default();
+        Self::register_store(&mut engine, &shared);
+        Self::register_settings(&mut engine, &shared);
+        let status = shared.clone();
+        engine.register_fn("status", move |text: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            let mut shared = status.borrow_mut();
+            let name = shared.script("status()")?;
+            shared.status.insert(name, Status::Text(text.to_string()));
+            Ok(())
+        });
+        let status = shared.clone();
+        engine.register_fn("status", move |live: FnPtr| -> Result<(), Box<EvalAltResult>> {
+            let mut shared = status.borrow_mut();
+            let name = shared.script("status()")?;
+            shared.status.insert(name, Status::Live(live, String::new()));
+            Ok(())
+        });
+
+        Self { engine, scripts: Vec::new(), effects, registry, shared, data_dir: None }
+    }
+
+    /// `store_get`, `store_set`, `store_remove` and `store_keys`: a map per
+    /// script that outlasts restarts.
+    fn register_store(engine: &mut Engine, shared: &Rc<RefCell<Shared>>) {
+        let get = shared.clone();
+        engine.register_fn("store_get", move |key: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            Ok(get.borrow_mut().store("the store")?.1.get(key.as_str()).cloned().unwrap_or(Dynamic::UNIT))
+        });
+        let set = shared.clone();
+        engine.register_fn(
+            "store_set",
+            move |key: ImmutableString, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+                if !storable(&value) {
+                    return Err("store_set keeps text, numbers, true/false, arrays and maps".into());
+                }
+                let mut shared = set.borrow_mut();
+                let (name, store) = shared.store("the store")?;
+                store.insert(key.as_str().into(), value);
+                shared.dirty.insert(name);
+                Ok(())
+            },
+        );
+        let remove = shared.clone();
+        engine.register_fn("store_remove", move |key: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            let mut shared = remove.borrow_mut();
+            let (name, store) = shared.store("the store")?;
+            let old = store.remove(key.as_str()).unwrap_or(Dynamic::UNIT);
+            shared.dirty.insert(name);
+            Ok(old)
+        });
+        let keys = shared.clone();
+        engine.register_fn("store_keys", move || -> Result<Array, Box<EvalAltResult>> {
+            Ok(keys.borrow_mut().store("the store")?.1.keys().map(|k| Dynamic::from(k.to_string())).collect())
+        });
+    }
+
+    /// `setting(name, default, help)` declares a setting and returns its
+    /// value; `setting(name)` reads it as it is now.
+    fn register_settings(engine: &mut Engine, shared: &Rc<RefCell<Shared>>) {
+        let declare = shared.clone();
+        engine.register_fn(
+            "setting",
+            move |name: ImmutableString,
+                  default: Dynamic,
+                  help: ImmutableString|
+                  -> Result<Dynamic, Box<EvalAltResult>> {
+                let mut shared = declare.borrow_mut();
+                let script = shared.script("setting()")?;
+                let default = to_toml(&default).ok_or("a setting's default must be text, a number or true/false")?;
+                let configured = shared.config.get(&script).and_then(|t| t.get(name.as_str())).cloned();
+                let earlier = shared.settings.iter().position(|s| s.script == script && s.name == name.as_str());
+                // This session's value (from before a reload), else config.toml's, else the default.
+                let value = earlier
+                    .map(|i| shared.settings[i].value.clone())
+                    .into_iter()
+                    .chain(configured)
+                    .find_map(|v| same_kind(&default, v))
+                    .unwrap_or_else(|| default.clone());
+                let setting = Setting { script, name: name.to_string(), help: help.to_string(), default, value };
+                let result = from_toml(&setting.value);
+                match earlier {
+                    Some(i) => shared.settings[i] = setting,
+                    None => shared.settings.push(setting),
+                }
+                Ok(result)
+            },
+        );
+        let read = shared.clone();
+        engine.register_fn("setting", move |name: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            let shared = read.borrow();
+            let script = shared.script("setting()")?;
+            let setting = shared.settings.iter().find(|s| s.script == script && s.name == name.as_str());
+            let setting =
+                setting.ok_or_else(|| format!("no setting {name}; declare it with setting(name, default, help)"))?;
+            Ok(from_toml(&setting.value))
+        });
+    }
+
+    /// Keep stores in `dir` (one JSON file per script).
+    pub fn set_data_dir(&mut self, dir: PathBuf) {
+        self.data_dir = Some(dir);
+    }
+
+    fn store_path(&self, name: &str) -> Option<PathBuf> {
+        Some(self.data_dir.as_ref()?.join(format!("{name}.json")))
+    }
+
+    /// Write the stores that changed. Returns any errors.
+    pub fn save_stores(&mut self) -> Vec<String> {
+        let dirty: Vec<String> = self.shared.borrow_mut().dirty.drain().collect();
+        let mut errors = Vec::new();
+        for name in dirty {
+            let Some(path) = self.store_path(&name) else { continue };
+            let result = (|| -> anyhow::Result<()> {
+                let store = self.shared.borrow().stores.get(&name).cloned().unwrap_or_default();
+                let json = serde_json::to_string(&Dynamic::from_map(store))?;
+                anyhow::ensure!(json.len() <= STORE_LIMIT, "its store is over 1 MB, so it wasn't saved");
+                crate::config::write_private(&path, json.as_bytes())
+            })();
+            if let Err(e) = result {
+                errors.push(format!("script {name}: {e:#}"));
+            }
+        }
+        errors
+    }
+
+    /// config.toml's `[script_settings]`: values for settings scripts
+    /// declare, now or when they next load.
+    pub fn configure(&mut self, config: &BTreeMap<String, toml::Table>) {
+        let mut shared = self.shared.borrow_mut();
+        for setting in &mut shared.settings {
+            if let Some(value) = config.get(&setting.script).and_then(|t| t.get(&setting.name)) {
+                setting.value = same_kind(&setting.default, value.clone()).unwrap_or_else(|| setting.default.clone());
+            }
+        }
+        shared.config = config.clone();
+    }
+
+    /// The loaded scripts' settings: (`script.name`, value, help).
+    pub fn settings(&self) -> Vec<(String, toml::Value, String)> {
+        let loaded: HashSet<&str> = self.scripts.iter().map(|s| s.name.as_str()).collect();
+        let shared = self.shared.borrow();
+        shared
+            .settings
+            .iter()
+            .filter(|s| loaded.contains(s.script.as_str()))
+            .map(|s| (format!("{}.{}", s.script, s.name), s.value.clone(), s.help.clone()))
+            .collect()
+    }
+
+    /// `/set script.name value` for this session.
+    pub fn set_setting(&mut self, key: &str, value: toml::Value) -> Result<toml::Value, String> {
+        let loaded: HashSet<String> = self.scripts.iter().map(|s| s.name.clone()).collect();
+        let mut shared = self.shared.borrow_mut();
+        let setting = shared
+            .settings
+            .iter_mut()
+            .find(|s| loaded.contains(&s.script) && format!("{}.{}", s.script, s.name) == key)
+            .ok_or_else(|| format!("no setting {key}; /set lists them"))?;
+        let kind = setting.default.type_str();
+        setting.value = same_kind(&setting.default, value).ok_or_else(|| format!("{key} takes {kind}"))?;
+        Ok(setting.value.clone())
+    }
+
+    /// `[script_settings]` as this session has them: config.toml's, with
+    /// every declared setting that's been changed from its default.
+    pub fn settings_table(&self) -> BTreeMap<String, toml::Table> {
+        let shared = self.shared.borrow();
+        let mut table = shared.config.clone();
+        for s in &shared.settings {
+            let in_file = table.get(&s.script).is_some_and(|t| t.contains_key(&s.name));
+            if in_file || s.value != s.default {
+                table.entry(s.script.clone()).or_default().insert(s.name.clone(), s.value.clone());
+            }
+        }
+        table
+    }
+
+    /// The status bar items, in script order.
+    pub fn status_items(&self) -> Vec<String> {
+        let shared = self.shared.borrow();
+        self.scripts
+            .iter()
+            .filter_map(|s| match shared.status.get(&s.name)? {
+                Status::Text(text) | Status::Live(_, text) => Some(text.clone()),
+            })
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+
+    /// Ask the live status items for their text (once a second).
+    pub fn refresh_status(&mut self) -> (Vec<Effect>, Vec<String>) {
+        let (mut out, mut errors) = (Vec::new(), Vec::new());
+        for index in 0..self.scripts.len() {
+            let name = self.scripts[index].name.clone();
+            let live = match self.shared.borrow().status.get(&name) {
+                Some(Status::Live(f, _)) => f.clone(),
+                _ => continue,
+            };
+            self.shared.borrow_mut().current = name.clone();
+            let result = live.call::<Dynamic>(&self.engine, &self.scripts[index].ast, ());
+            let effects = self.take_effects();
+            match result {
+                Ok(text) => {
+                    let text = if text.is_unit() { String::new() } else { text.to_string() };
+                    if let Some(Status::Live(_, last)) = self.shared.borrow_mut().status.get_mut(&name) {
+                        *last = text.lines().next().unwrap_or_default().to_owned();
+                    }
+                    out.extend(self.limit(index, effects));
+                }
+                Err(e) => {
+                    // One error, not one a second: the item goes.
+                    self.shared.borrow_mut().status.remove(&name);
+                    errors.push(format!("{name}: status: {e}"));
+                }
+            }
+        }
+        (out, errors)
     }
 
     /// The scripts directory's `.rhai` files, sorted.
@@ -181,13 +457,25 @@ impl Scripts {
     pub fn load(&mut self, name: &str, path: Option<PathBuf>, source: &str) -> Result<Vec<Effect>, String> {
         *self.registry.borrow_mut() = Registry::default();
         let ast = self.engine.compile(source).map_err(|e| format!("{name}: {e}"))?;
+        self.load_store(name)?;
+        let old_status = {
+            let mut shared = self.shared.borrow_mut();
+            shared.current = name.to_owned();
+            shared.status.remove(name)
+        };
         let result = self.engine.run_ast(&ast);
         let registry = std::mem::take(&mut *self.registry.borrow_mut());
         let effects = self.take_effects();
-        result.map_err(|e| format!("{name}: {e}"))?;
+        if let Err(e) = result {
+            // A broken new version leaves the old one (and its item) running.
+            if let Some(old) = old_status {
+                self.shared.borrow_mut().status.insert(name.to_owned(), old);
+            }
+            return Err(format!("{name}: {e}"));
+        }
         let commands =
             registry.commands.into_iter().map(|(name, help, handler)| ScriptCommand { name, help, handler }).collect();
-        self.unload(name);
+        self.scripts.retain(|s| s.name != name);
         self.scripts.push(Script {
             name: name.to_owned(),
             path,
@@ -199,9 +487,27 @@ impl Scripts {
         Ok(effects)
     }
 
+    /// Read a script's store from disk, the first time it loads.
+    fn load_store(&mut self, name: &str) -> Result<(), String> {
+        if self.shared.borrow().stores.contains_key(name) {
+            return Ok(());
+        }
+        let store = match self.store_path(name).map(std::fs::read_to_string) {
+            Some(Ok(json)) => serde_json::from_str::<Dynamic>(&json)
+                .ok()
+                .and_then(|d| d.try_cast::<Map>())
+                .ok_or_else(|| format!("{name}: its store isn't a JSON object; move it aside to start afresh"))?,
+            Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{name}: its store: {e}")),
+            _ => Map::new(),
+        };
+        self.shared.borrow_mut().stores.insert(name.to_owned(), store);
+        Ok(())
+    }
+
     pub fn unload(&mut self, name: &str) -> bool {
         let before = self.scripts.len();
         self.scripts.retain(|s| s.name != name);
+        self.shared.borrow_mut().status.remove(name);
         self.scripts.len() != before
     }
 
@@ -240,6 +546,7 @@ impl Scripts {
             .enumerate()
             .find_map(|(i, s)| s.commands.iter().find(|c| c.name == name).map(|c| (i, c.handler.clone())))?;
         let script = &self.scripts[index];
+        self.shared.borrow_mut().current = script.name.clone();
         let result =
             handler.call::<Dynamic>(&self.engine, &script.ast, (ImmutableString::from(args), context.to_map()));
         let effects = self.take_effects();
@@ -255,6 +562,7 @@ impl Scripts {
         let map = message.to_map();
         let (mut out, mut errors) = (Vec::new(), Vec::new());
         for index in 0..self.scripts.len() {
+            self.shared.borrow_mut().current = self.scripts[index].name.clone();
             for handler in self.scripts[index].on_message.clone() {
                 let result = handler.call::<Dynamic>(&self.engine, &self.scripts[index].ast, (map.clone(),));
                 let effects = self.take_effects();
@@ -269,6 +577,7 @@ impl Scripts {
 
     /// `/script exec`: run a snippet once, with the same functions.
     pub fn exec(&mut self, source: &str) -> Result<Vec<Effect>, String> {
+        self.shared.borrow_mut().current.clear();
         let result = self.engine.eval::<Dynamic>(source);
         let mut effects = self.take_effects();
         let value = result.map_err(|e| e.to_string())?;
@@ -309,6 +618,50 @@ impl Scripts {
             )));
         }
         out
+    }
+}
+
+/// Whether a value can go in a store (as JSON).
+fn storable(value: &Dynamic) -> bool {
+    if value.is_unit() || value.is_bool() || value.is_int() || value.is_float() || value.is_string() || value.is_char()
+    {
+        return true;
+    }
+    if let Some(array) = value.read_lock::<Array>() {
+        return array.iter().all(storable);
+    }
+    value.read_lock::<Map>().is_some_and(|map| map.values().all(storable))
+}
+
+fn to_toml(value: &Dynamic) -> Option<toml::Value> {
+    if let Ok(text) = value.as_immutable_string_ref() {
+        return Some(toml::Value::String(text.to_string()));
+    }
+    value
+        .as_int()
+        .map(toml::Value::Integer)
+        .or_else(|_| value.as_float().map(toml::Value::Float))
+        .or_else(|_| value.as_bool().map(toml::Value::Boolean))
+        .ok()
+}
+
+fn from_toml(value: &toml::Value) -> Dynamic {
+    match value {
+        toml::Value::String(s) => s.clone().into(),
+        toml::Value::Integer(n) => (*n).into(),
+        toml::Value::Float(f) => (*f).into(),
+        toml::Value::Boolean(b) => (*b).into(),
+        _ => Dynamic::UNIT,
+    }
+}
+
+/// `value` as the same kind as `default` (a whole number will do for a
+/// decimal one), or `None`.
+fn same_kind(default: &toml::Value, value: toml::Value) -> Option<toml::Value> {
+    match (default, value) {
+        (toml::Value::Float(_), toml::Value::Integer(n)) => Some(toml::Value::Float(n as f64)),
+        (default, value) if default.same_type(&value) => Some(value),
+        _ => None,
     }
 }
 
@@ -437,6 +790,106 @@ mod tests {
     }
 
     #[test]
+    fn stores_outlast_restarts() {
+        let dir = std::env::temp_dir().join(format!("textrix-store-{}", std::process::id()));
+        let source = r#"
+            command("remember", "", |args, ctx| {
+                store_set("last", args);
+                store_set("count", (store_get("count") ?? 0) + 1);
+            });
+            command("recall", "", |args, ctx| print(`${store_get("last")} (${store_get("count")})`));
+            command("forget", "", |args, ctx| { store_remove("last"); print(store_keys().len().to_string()); });
+            command("bad", "", |args, ctx| store_set("t", timestamp()));
+        "#;
+        let mut scripts = Scripts::new();
+        scripts.set_data_dir(dir.clone());
+        scripts.load("memo", None, source).unwrap();
+        for words in ["hi", "there"] {
+            scripts.run_command("remember", words, &Context::default()).unwrap().unwrap();
+        }
+        assert!(scripts.save_stores().is_empty());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("memo.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "stores may hold messages: only you can read them");
+        }
+
+        // A new session, as after a restart.
+        let mut later = Scripts::new();
+        later.set_data_dir(dir.clone());
+        later.load("memo", None, source).unwrap();
+        let mut run = |name: &str| later.run_command(name, "", &Context::default()).unwrap();
+        assert_eq!(run("recall"), Ok(vec![Effect::Print("there (2)".into())]));
+        assert_eq!(run("forget"), Ok(vec![Effect::Print("1".into())]));
+        assert!(run("bad").unwrap_err().contains("store_set keeps text"), "only what JSON can hold");
+        assert!(later.exec(r#"store_get("x")"#).unwrap_err().contains("scripts loaded from a file"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn settings_come_from_config_and_set() {
+        let mut scripts = Scripts::new();
+        let file = toml::Table::from_iter([
+            ("words".to_owned(), toml::Value::String("pizza".into())),
+            ("loud".to_owned(), toml::Value::String("yes".into())),
+        ]);
+        scripts.configure(&BTreeMap::from([("watch".to_owned(), file)]));
+        let source = r#"
+            let words = setting("words", "deploy", "Words to watch for");
+            setting("loud", true, "Ring the bell too");
+            setting("limit", 1.5, "A number");
+            print(words);
+            command("show", "", |a, c| print(`${setting("words")} ${setting("loud")} ${setting("limit")}`));
+        "#;
+        assert_eq!(scripts.load("watch", None, source), Ok(vec![Effect::Print("pizza".into())]), "config.toml wins");
+        let show = |scripts: &mut Scripts| scripts.run_command("show", "", &Context::default()).unwrap().unwrap();
+        assert_eq!(show(&mut scripts), [Effect::Print("pizza true 1.5".into())], "the wrong kind falls back");
+        let names: Vec<String> = scripts.settings().into_iter().map(|(name, _, _)| name).collect();
+        assert_eq!(names, ["watch.words", "watch.loud", "watch.limit"]);
+
+        assert_eq!(scripts.set_setting("watch.limit", toml::Value::Integer(3)), Ok(toml::Value::Float(3.0)));
+        assert_eq!(
+            scripts.set_setting("watch.loud", toml::Value::String("x".into())),
+            Err("watch.loud takes boolean".into())
+        );
+        assert!(scripts.set_setting("watch.nope", toml::Value::Integer(1)).is_err());
+        scripts.set_setting("watch.words", toml::Value::String("outage".into())).unwrap();
+        assert_eq!(show(&mut scripts), [Effect::Print("outage true 3.0".into())]);
+        assert_eq!(
+            scripts.load("watch", None, source).unwrap(),
+            [Effect::Print("outage".into())],
+            "reloading keeps it"
+        );
+
+        let table = &scripts.settings_table()["watch"];
+        assert_eq!(table["words"], toml::Value::String("outage".into()));
+        assert_eq!(table["loud"], toml::Value::Boolean(true), "the file's mistake is corrected when saved");
+        assert_eq!(table["limit"], toml::Value::Float(3.0));
+        assert!(scripts.exec(r#"setting("words")"#).is_err());
+    }
+
+    #[test]
+    fn status_items_show_text_or_ask_a_function() {
+        let mut scripts = Scripts::new();
+        scripts.load("a", None, r#"status("fixed");"#).unwrap();
+        scripts.load("b", None, r#"let n = 0; status(|| { n += 1; `tick ${n}` });"#).unwrap();
+        assert_eq!(scripts.status_items(), ["fixed"], "a live item shows once it's been asked");
+        scripts.refresh_status();
+        scripts.refresh_status();
+        assert_eq!(scripts.status_items(), ["fixed", "tick 2"]);
+
+        scripts.load("c", None, r#"status(|| { throw "oops" });"#).unwrap();
+        let (_, errors) = scripts.refresh_status();
+        assert!(errors.len() == 1 && errors[0].contains("c: status"), "{errors:?}");
+        assert!(scripts.refresh_status().1.is_empty(), "a failing item goes, so it fails once");
+        assert!(scripts.load("b", None, r#"status("new"); throw "no";"#).is_err());
+        assert_eq!(scripts.status_items(), ["fixed", "tick 4"], "a broken reload keeps the old item");
+        scripts.unload("a");
+        assert_eq!(scripts.status_items(), ["tick 4"]);
+    }
+
+    #[test]
     fn the_example_scripts_work() {
         let mut scripts = Scripts::new();
         for (name, source) in [
@@ -444,6 +897,7 @@ mod tests {
             ("roll", include_str!("../examples/scripts/roll.rhai")),
             ("seen", include_str!("../examples/scripts/seen.rhai")),
             ("watchwords", include_str!("../examples/scripts/watchwords.rhai")),
+            ("dms", include_str!("../examples/scripts/dms.rhai")),
         ] {
             assert_eq!(scripts.load(name, None, source), Ok(vec![]), "{name} loads quietly");
         }
@@ -476,8 +930,21 @@ mod tests {
 
         let seen = scripts.run_command("seen", "Sam", &here).unwrap().unwrap();
         let [Effect::Print(seen)] = &seen[..] else { panic!("{seen:?}") };
-        assert!(seen.starts_with("sam was in Night Owls 0s ago: redeployment"), "{seen}");
+        assert_eq!(seen, "sam was in Night Owls 0s ago");
         let never = scripts.run_command("seen", "jo_bloggs", &here).unwrap().unwrap();
         assert!(matches!(&never[..], [Effect::Print(text)] if text.contains("haven't seen jo_bloggs")));
+
+        assert_eq!(scripts.set_setting("watchwords.words", toml::Value::String("lunch".into())).map(|_| ()), Ok(()));
+        assert!(scripts.on_message(&message("deploy is done")).0.is_empty(), "the setting is read each time");
+        assert_eq!(scripts.on_message(&message("lunch?")).0.len(), 2);
+
+        let dm = |nick: &str| Message { dm: true, nick: nick.into(), ..message("hi") };
+        for nick in ["sam", "jo_bloggs", "sam"] {
+            scripts.on_message(&dm(nick));
+        }
+        assert_eq!(scripts.status_items(), ["DMs: 2"]);
+        let read = scripts.run_command("dms", "", &here).unwrap().unwrap();
+        assert_eq!(read, [Effect::Print("direct messages from sam, jo_bloggs".into())]);
+        assert!(scripts.status_items().is_empty());
     }
 }

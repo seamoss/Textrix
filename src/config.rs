@@ -77,6 +77,26 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Replace a file with `data`, readable only by the current user (written
+/// beside it first, so a crash never leaves half a file).
+pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        create_private_dir(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options.open(&tmp).and_then(|mut f| f.write_all(data)).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -165,6 +185,9 @@ pub struct Config {
     pub theme: ThemeName,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,
+    /// Scripts' settings, by script: `[script_settings.watchwords]`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_settings: BTreeMap<String, toml::Table>,
     /// Colour overrides, e.g. `link = "lightcyan"`, `bar_bg = "#203050"`.
     pub colors: BTreeMap<String, String>,
     /// `theme` with `colors` applied (worked out when loading).
@@ -209,6 +232,7 @@ impl Default for Config {
             theme: ThemeName::Default,
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            script_settings: BTreeMap::new(),
             palette: Theme::default(),
         }
     }
@@ -338,12 +362,34 @@ pub fn save_settings(path: &Path, cfg: &Config) -> Result<Vec<String>> {
         doc[key.as_str()] = toml_edit::Item::Value(value);
         written.push(key.clone());
     }
+    for (script, settings) in &cfg.script_settings {
+        for (name, value) in settings {
+            if on_disk.script_settings.get(script).and_then(|t| t.get(name)) == Some(value) {
+                continue;
+            }
+            let all = doc.entry("script_settings").or_insert_with(|| implicit_table().into());
+            let table = all.as_table_mut().context("script_settings in config.toml isn't a table")?;
+            let table = table.entry(script).or_insert_with(|| toml_edit::Table::new().into());
+            let table = table.as_table_mut().with_context(|| format!("script_settings.{script} isn't a table"))?;
+            let value: toml_edit::Value = value.to_string().parse().with_context(|| format!("writing {name}"))?;
+            table[name.as_str()] = toml_edit::Item::Value(value);
+            written.push(format!("{script}.{name}"));
+        }
+    }
     if !written.is_empty() {
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, doc.to_string()).with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     }
     Ok(written)
+}
+
+/// A table that only appears as the prefix of its subtables
+/// (`[script_settings.x]`, with no `[script_settings]` line).
+fn implicit_table() -> toml_edit::Table {
+    let mut table = toml_edit::Table::new();
+    table.set_implicit(true);
+    table
 }
 
 /// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping

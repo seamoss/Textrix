@@ -49,6 +49,12 @@ handlers, and what it prints there shows in the status window.
 | `notify(title, body)` | A desktop notification, following your `notifications` setting |
 | `matches(text, pattern)` | Whether `text` matches a [regular expression](https://docs.rs/regex/latest/regex/#syntax) |
 | `random(n)` | A number from 0 to n − 1 |
+| `now()` | The time, in seconds since 1970 (to store, or subtract) |
+| `status(text)` | Sets this script's item in the status bar; `status("")` takes it away |
+| `status(\|\| …)` | A status bar item worked out once a second: the function returns its text |
+| `setting(name, default, help)` | Declares a setting and returns its value (see [Settings](#settings)) |
+| `setting(name)` | A setting's value now |
+| `store_set(key, value)`, `store_get(key)`, `store_remove(key)`, `store_keys()` | This script's store, kept across restarts (see [Keeping things](#keeping-things)); `store_get` of a missing key is `()` |
 
 "The room the script is working in" is the room a command was typed in, or
 the one a message arrived in.
@@ -73,7 +79,7 @@ A message has the `ctx` fields too, plus:
 | `msg.highlight` | Whether it mentions you or one of your `/hilight` words |
 | `msg.dm` | Whether it's in a direct message |
 
-### Keeping state
+### Keeping things
 
 Variables that a handler uses are kept as long as the script is loaded, so
 a script can remember things between messages. Reloading it starts over.
@@ -87,6 +93,60 @@ command("count", "Messages since this script loaded", |args, ctx| {
     print(`${count} messages so far`);
 });
 ```
+
+To remember things across restarts, use the script's store: text,
+numbers, true/false, and arrays and maps of them.
+
+```rhai
+command("note", "Keep a note: /note <text>", |args, ctx| {
+    let notes = store_get("notes") ?? [];
+    notes.push(args);
+    store_set("notes", notes);
+});
+```
+
+Each script's store is a JSON file in `~/.textrix/script-data/`, saved a
+second after it changes and readable only by you, up to 1 MB. It isn't
+encrypted like Textrix's own store, so think twice before keeping what
+people said in one.
+
+### Settings
+
+A script can have settings, which `/set` lists with the rest as
+`script.name`, changes for the session (`/set watchwords.words lunch`), and
+`/save` writes to `config.toml`:
+
+```toml
+[script_settings.watchwords]
+words = "deploy|outage|lunch"
+```
+
+```rhai
+setting("words", "deploy|outage", "Words to watch for, separated by |");
+
+on_message(|msg| {
+    if matches(msg.body, "(?i)\\b(" + setting("words") + ")\\b") { bell(); }
+});
+```
+
+The default decides the kind of value (text, a whole number, a decimal
+number, or true/false); a value of the wrong kind in `config.toml` is
+ignored, and `/set` refuses one. Read the setting with `setting(name)` when
+you use it, rather than once at the top, so `/set` changes take effect
+straight away.
+
+### The status bar
+
+`status("text")` puts an item in the status bar, after the others, until
+the script changes it, clears it with `status("")`, or unloads. Given a
+function, Textrix asks it once a second:
+
+```rhai
+let started = now();
+status(|| `up ${(now() - started) / 60}m`);
+```
+
+A function that fails loses its item (and says why, once).
 
 ## Limits
 

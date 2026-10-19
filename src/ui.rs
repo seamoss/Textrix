@@ -1242,6 +1242,10 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
     }
 
+    for text in app.scripts.status_items() {
+        item(&mut spans, vec![Span::styled(text, t.bar)]);
+    }
+
     if app.playing.is_some() {
         item(&mut spans, vec![Span::styled("▶ playing", t.bar.add_modifier(Modifier::BOLD))]);
     }
