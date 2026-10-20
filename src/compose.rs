@@ -63,7 +63,7 @@ pub fn compose(text: &str, kind: Say, mentions: &[(String, OwnedUserId)], markdo
         (Say::Notice, None) => MessageType::Notice(NoticeMessageEventContent::plain(text)),
     };
 
-    let content = RoomMessageEventContent::new(msgtype);
+    let content = spoilers(RoomMessageEventContent::new(msgtype));
     if mentioned.is_empty() {
         content
     } else {
@@ -104,6 +104,11 @@ pub fn custom_emoji(mut content: RoomMessageEventContent, emoji: &[(String, Owne
 /// `html` with each known `:shortcode:` outside `<code>` and `<pre>` as
 /// its picture.
 fn emoticons(html: &str, emoji: &[(String, OwnedMxcUri)]) -> String {
+    outside_code(html, |text| shortcodes(text, emoji))
+}
+
+/// `html` with `change` applied to its text outside `<code>` and `<pre>`.
+fn outside_code(html: &str, change: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_code = 0usize;
     let mut rest = html;
@@ -129,7 +134,7 @@ fn emoticons(html: &str, emoji: &[(String, OwnedMxcUri)]) -> String {
         if in_code > 0 {
             out.push_str(text);
         } else {
-            out.push_str(&shortcodes(text, emoji));
+            out.push_str(&change(text));
         }
         rest = &rest[end..];
     }
@@ -164,6 +169,51 @@ fn shortcodes(text: &str, emoji: &[(String, OwnedMxcUri)]) -> String {
     out
 }
 
+/// `||text||` as a spoiler, the way Element marks them: hidden until
+/// whoever's reading chooses to see it. The plain text keeps the bars.
+fn spoilers(mut content: RoomMessageEventContent) -> RoomMessageEventContent {
+    let (body, formatted) = match &content.msgtype {
+        MessageType::Text(c) => (&c.body, &c.formatted),
+        MessageType::Emote(c) => (&c.body, &c.formatted),
+        MessageType::Notice(c) => (&c.body, &c.formatted),
+        _ => return content,
+    };
+    if body.matches("||").count() < 2 {
+        return content;
+    }
+    let html = match formatted {
+        Some(f) if f.format == MessageFormat::Html => f.body.clone(),
+        _ => html_escape(body).replace('\n', "<br>"),
+    };
+    let with = outside_code(&html, |text| {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find("||") {
+            let after = &rest[start + 2..];
+            match after.find("||").filter(|&end| end > 0 && !after[..end].trim().is_empty()) {
+                Some(end) => {
+                    out.push_str(&rest[..start]);
+                    out.push_str(&format!("<span data-mx-spoiler>{}</span>", &after[..end]));
+                    rest = &after[end + 2..];
+                }
+                None => break,
+            }
+        }
+        out.push_str(rest);
+        out
+    });
+    if with == html {
+        return content;
+    }
+    let body = body.clone();
+    content.msgtype = match content.msgtype {
+        MessageType::Emote(_) => MessageType::Emote(EmoteMessageEventContent::html(body, with)),
+        MessageType::Notice(_) => MessageType::Notice(NoticeMessageEventContent::html(body, with)),
+        _ => MessageType::Text(TextMessageEventContent::html(body, with)),
+    };
+    content
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -182,6 +232,21 @@ fn escape_markdown(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bars_make_spoilers() {
+        let sent = compose("the butler ||did it|| and `||code||` stays", Say::Text, &[], true);
+        let html = html_of(&sent).unwrap();
+        assert!(html.contains("<span data-mx-spoiler>did it</span>"), "{html}");
+        assert!(html.contains("<code>||code||</code>"), "not in code: {html}");
+        let MessageType::Text(text) = &sent.msgtype else { panic!() };
+        assert_eq!(text.body, "the butler ||did it|| and `||code||` stays");
+        let plain = compose("a ||b|| c", Say::Text, &[], false);
+        assert_eq!(html_of(&plain).unwrap(), "a <span data-mx-spoiler>b</span> c");
+        for none in ["a || b", "x |||| y", "or || ||"] {
+            assert!(html_of(&compose(none, Say::Text, &[], false)).is_none(), "{none}");
+        }
+    }
 
     #[test]
     fn custom_emoji_go_as_pictures() {

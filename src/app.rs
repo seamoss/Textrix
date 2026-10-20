@@ -536,8 +536,17 @@ fn is_target(l: &Line) -> bool {
 
 fn annotate(line: &mut Line, item: &Item) {
     match item {
+        // An older edit than the one shown (from loading history) is one
+        // of the earlier versions; a newer one replaces the text, which
+        // joins them.
+        Item::Edit { body, fallback, .. } if !line.redacted && line.edited_at.is_some_and(|now| fallback.ts < now) => {
+            let at = line.versions.partition_point(|(t, _)| *t <= fallback.ts);
+            line.versions.insert(at, (fallback.ts, body.clone()));
+        }
         Item::Edit { body, fallback, .. } if !line.redacted => {
-            line.body = body.clone();
+            let since = line.edited_at.unwrap_or(line.ts);
+            line.versions.push((since, std::mem::replace(&mut line.body, body.clone())));
+            line.edited_at = Some(fallback.ts);
             line.rich = fallback.rich.clone();
             line.kind = fallback.kind;
             line.edited = true;
@@ -4317,6 +4326,21 @@ impl App {
                 let sender = line.sender.as_ref().map(|s| s.to_string()).unwrap_or_default();
                 self.info(format!("{} [{sender}] at {}", line.nick, line.ts.format("%Y-%m-%d %H:%M:%S")));
                 self.info(format!(" event {event}"));
+                // An edited message: what it said before, and when.
+                if !line.versions.is_empty() {
+                    let times = if line.versions.len() == 1 {
+                        "once".to_owned()
+                    } else {
+                        format!("{} times", line.versions.len())
+                    };
+                    self.info(format!(" edited {times}:"));
+                    let when = |t: &chrono::DateTime<Local>| t.format("%Y-%m-%d %H:%M").to_string();
+                    for (at, text) in &line.versions {
+                        self.info(format!("  {} {}", when(at), snippet(text)));
+                    }
+                    let now = line.edited_at.unwrap_or(line.ts);
+                    self.info(format!("  {} {} (now)", when(&now), snippet(&line.body)));
+                }
             }
             _ => {}
         }
@@ -8148,6 +8172,34 @@ mod tests {
         assert_eq!(app.profile.as_ref().map(|p| p.user.clone()), Some(user("bob")));
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.profile.is_none());
+    }
+
+    #[test]
+    fn edits_keep_what_the_message_said_before() {
+        let mut w = Window::status();
+        let mut original = msg("$a", "teh first");
+        original.ts = Local::now() - chrono::TimeDelta::minutes(10);
+        w.push(original, 100);
+        let edit = |mins: i64, body: &str| {
+            let mut fallback = msg("$e", body);
+            fallback.ts = Local::now() - chrono::TimeDelta::minutes(mins);
+            Item::Edit { target: "$a".try_into().unwrap(), body: body.into(), fallback }
+        };
+        w.apply(edit(5, "the first"), 100, true);
+        w.apply(edit(1, "the first!"), 100, true);
+        // An older edit turning up late (from history) doesn't win.
+        w.apply(edit(7, "the frist"), 100, false);
+        let line = w.lines.back().unwrap();
+        assert_eq!(line.body, "the first!");
+        let said: Vec<&str> = line.versions.iter().map(|(_, b)| b.as_str()).collect();
+        assert_eq!(said, ["teh first", "the frist", "the first"], "oldest first");
+
+        let mut app = test_app();
+        app.windows[0] = w;
+        app.enter_select();
+        app.on_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let shown: Vec<&str> = app.windows[0].lines.iter().rev().take(5).map(|l| l.body.as_str()).collect();
+        assert!(shown[4].contains("edited 3 times") && shown[0].ends_with("the first! (now)"), "{shown:?}");
     }
 
     #[test]

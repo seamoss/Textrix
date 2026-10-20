@@ -70,6 +70,11 @@ pub struct Line {
     pub fold: Option<Fold>,
     /// A poll this message starts, with the votes seen so far.
     pub poll: Option<Box<Poll>>,
+    /// Earlier versions of an edited message: when each was written, and
+    /// its text, oldest first.
+    pub versions: Vec<(DateTime<Local>, String)>,
+    /// When the text shown now was written, if it's an edit.
+    pub edited_at: Option<DateTime<Local>>,
 }
 
 /// Membership noise that runs of fold into one summary line.
@@ -111,6 +116,8 @@ impl Line {
             cached: false,
             fold: None,
             poll: None,
+            versions: Vec::new(),
+            edited_at: None,
         }
     }
 
