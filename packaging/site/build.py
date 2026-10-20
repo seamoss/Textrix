@@ -8,6 +8,7 @@ with the current version stamped in. Standard library only.
 import html
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,7 +55,12 @@ def bullet_list(lines, i, indent):
     return "<ul>\n" + "\n".join(items) + "\n</ul>", i
 
 
-def changelog(markdown):
+def newer(a, b):
+    """Whether version a comes after b (1.2.10 after 1.2.9)."""
+    return [int(n) for n in a.split(".")] > [int(n) for n in b.split(".")]
+
+
+def changelog(markdown, released):
     lines, out, i = markdown.splitlines(), [], 0
     while i < len(lines):
         line = lines[i]
@@ -63,6 +69,9 @@ def changelog(markdown):
         elif m := re.match(r"## \[([^\]]+)\](?: - (\S+))?", line):
             version, date = m.group(1), m.group(2) or ""
             anchor = "v" + version.replace(".", "-")
+            # Pushed, but its builds aren't out yet.
+            if newer(version, released):
+                date = "on its way"
             out.append(f'<h2 id="{anchor}"><a href="#{anchor}">v{html.escape(version)}</a> <span class="date">{html.escape(date)}</span></h2>')
             i += 1
         elif line.startswith("### "):
@@ -81,6 +90,17 @@ def changelog(markdown):
 
 
 def version():
+    """The latest release out (its tag), not the version in Cargo.toml,
+    which is ahead of it while a release builds. Cargo.toml's where there
+    are no tags (a copy without its history)."""
+    try:
+        tag = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return tag.removeprefix("v")
+    except (OSError, subprocess.CalledProcessError):
+        pass
     for line in (ROOT / "Cargo.toml").read_text().splitlines():
         if m := re.match(r'version = "([^"]+)"', line):
             return m.group(1)
@@ -95,7 +115,7 @@ def main(out_dir):
     for page in out.glob("*.html"):
         page.write_text(page.read_text().replace("{{VERSION}}", v))
     template = (Path(__file__).parent / "changelog.html").read_text()
-    body = changelog((ROOT / "CHANGELOG.md").read_text())
+    body = changelog((ROOT / "CHANGELOG.md").read_text(), v)
     (out / "changelog.html").write_text(template.replace("{{VERSION}}", v).replace("{{CHANGELOG}}", body))
     print(f"built {out} for v{v}")
 

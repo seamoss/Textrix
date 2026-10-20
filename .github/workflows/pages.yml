@@ -25,6 +25,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The release tags: the site shows the latest one out.
+          fetch-depth: 0
       - uses: actions/configure-pages@v6
       - run: python3 packaging/site/build.py _site
       - uses: actions/upload-pages-artifact@v5

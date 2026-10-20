@@ -141,6 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     env:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
@@ -163,3 +164,8 @@ jobs:
           name: Textrix ${{ needs.check.outputs.version }}
           body_path: notes.md
           files: dist/*
+      # The website shows the latest release: build it again now it's out.
+      - name: Website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref master
