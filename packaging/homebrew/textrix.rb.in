@@ -48,7 +48,7 @@ class Textrix < Formula
       and run `textrix`. Passwords can come from a password manager instead
       of the file; #{opt_pkgshare}/env.example explains how.
 
-      To upgrade: brew upgrade textrix. A Textrix that's running (in the
+      To upgrade: brew update && brew upgrade textrix. A Textrix that's running (in the
       background too) then shows "[x.y.z installed: /restart]", and
       /restart switches to the new one where you were.
     EOS

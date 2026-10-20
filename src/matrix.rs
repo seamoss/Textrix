@@ -98,6 +98,7 @@ use tokio::{
 use crate::{
     config::{BellKind, Paths, ReceiptMode, SyncMode, create_private_dir},
     convert::Converter,
+    home::Invitation,
     index::{Crawl, Entry, ROOM_CAP, SearchIndex},
     model::{
         AccountName, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence, PresenceKind, RoomMeta,
@@ -305,6 +306,16 @@ pub enum AppEvent {
     ImagePreview {
         event_id: OwnedEventId,
         protocol: Option<Picture>,
+    },
+    /// A tile's picture for the media gallery (`None` on failure).
+    Tile {
+        event_id: OwnedEventId,
+        picture: Option<Picture>,
+    },
+    /// Every room this account is invited to.
+    Invites {
+        account: AccountName,
+        invites: Vec<Invitation>,
     },
     Members {
         account: AccountName,
@@ -1366,6 +1377,9 @@ impl Account {
             self.notify.send(AppEvent::RoomGone { account: self.name.clone(), room_id });
         }
 
+        if !rooms.invited.is_empty() {
+            self.fetch_invites();
+        }
         for room_id in rooms.invited.into_keys() {
             let Some(room) = self.client.get_room(&room_id) else { continue };
             let name = room.display_name().await.map(|n| n.to_string()).unwrap_or_else(|_| room_id.to_string());
@@ -1736,6 +1750,15 @@ impl Account {
                 }
             };
             acct.notify.send(AppEvent::ImagePreview { event_id, protocol });
+        });
+    }
+
+    /// A gallery tile's picture, `cells` at most.
+    pub fn fetch_tile(&self, event_id: OwnedEventId, media: Media, picker: Painter, cells: Size) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let picture = acct.load_preview(&media, picker, cells).await.ok();
+            acct.notify.send(AppEvent::Tile { event_id, picture });
         });
     }
 
@@ -3042,6 +3065,29 @@ impl Account {
             room.leave().await?;
             acct.notify.info(format!("declined the invitation to {name}"));
             Ok(())
+        });
+    }
+
+    /// Every pending invitation, for the home window.
+    pub fn fetch_invites(&self) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let mut invites = Vec::new();
+            for room in acct.client.invited_rooms() {
+                let name = room.display_name().await.map_or_else(|_| room.room_id().to_string(), |n| n.to_string());
+                let inviter = match room.invite_details().await {
+                    Ok(details) => details.inviter.map(|m| m.name().to_owned()),
+                    Err(_) => None,
+                };
+                invites.push(Invitation {
+                    account: acct.name.to_string(),
+                    room_id: room.room_id().to_owned(),
+                    name,
+                    inviter,
+                });
+            }
+            invites.sort_by_key(|a| a.name.to_lowercase());
+            acct.notify.send(AppEvent::Invites { account: acct.name.clone(), invites });
         });
     }
 

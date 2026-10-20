@@ -38,6 +38,8 @@ use crate::{
     config::{BellKind, BellMode, BellStyle, Config, NotifyMode, Paths},
     convert::attachment,
     eggs,
+    gallery::{self, Gallery},
+    home::{self, Home, Invitation},
     input::{Candidate, Draft, Input},
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
@@ -140,6 +142,8 @@ pub struct Window {
     orphans: HashMap<OwnedEventId, Vec<Item>>,
     /// `/jump` target: keep loading history until this event shows up.
     seek: Option<OwnedEventId>,
+    /// The media gallery wants more of the room's history.
+    pub wants_older: bool,
     /// Columns it was last drawn at (0 until it's been on screen).
     pub width: u16,
     /// Pinned messages (`m.room.pinned_events`).
@@ -207,6 +211,7 @@ impl Window {
             perms: None,
             orphans: HashMap::new(),
             seek: None,
+            wants_older: false,
             width: 0,
             pinned: Vec::new(),
             unsent: None,
@@ -280,6 +285,16 @@ impl Window {
     /// Unread messages according to the server.
     pub fn unread(&self) -> u64 {
         self.unread.0
+    }
+
+    /// Older history is on its way.
+    pub fn loading_older(&self) -> bool {
+        matches!(self.history, History::Loading)
+    }
+
+    /// All of the room's history is loaded.
+    pub fn history_done(&self) -> bool {
+        matches!(self.history, History::Done)
     }
 
     fn find_mut(&mut self, id: &EventId) -> Option<&mut Line> {
@@ -913,6 +928,14 @@ pub struct App {
     pub theme_picker: Option<ThemePicker>,
     pub vote: Option<VotePicker>,
     pub profile: Option<ProfileView>,
+    /// `/media`: a room's media as tiles, over the messages.
+    pub gallery: Option<Gallery>,
+    /// The home window (`/home`, F4), over the messages.
+    pub home: Option<Home>,
+    /// Pending invitations, every server's.
+    pub invites: Vec<Invitation>,
+    /// Gallery pictures the renderer wants, fetched after the draw.
+    pub tile_requests: Vec<(OwnedEventId, Media)>,
     /// Messages to send later (`/later`), soonest first.
     later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
@@ -1013,6 +1036,12 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "part", args: "", help: "Leave the current room (alias /leave)" },
     Cmd { name: "threads", args: "", help: "List this room's threads" },
     Cmd { name: "mentions", args: "", help: "Open the window collecting messages that mention you" },
+    Cmd {
+        name: "media",
+        args: "",
+        help: "This room's pictures, videos, audio and files as tiles, newest first: Enter opens, s saves",
+    },
+    Cmd { name: "home", args: "", help: "What's waiting: the latest mentions, unread rooms and invitations (F4)" },
     Cmd { name: "pins", args: "", help: "List this room's pinned messages (p in selection mode pins)" },
     Cmd {
         name: "thread",
@@ -1222,7 +1251,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Shift+Enter, Alt+Enter", "new line in the message"),
     ("Alt+Up", "select a message (keys below)"),
     ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
-    ("F1 / F2 / F3", "this help / window list / member list"),
+    ("F1 / F2 / F3 / F4", "this help / window list / member list / home: what's waiting for you"),
     ("F6 / Shift+F6", "focus the next / previous split pane"),
     (
         "Mouse",
@@ -1259,6 +1288,21 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("u", "who sent it: their profile pane"),
     ("Enter", "vote in a poll; in the mentions window, go to the message in its room"),
     ("Esc", "leave selection mode"),
+];
+
+pub const GALLERY_KEYS: &[(&str, &str)] = &[
+    ("arrows, PgUp / PgDn, g / G", "move between tiles (older history loads as you go)"),
+    ("Enter, z", "view a picture, play audio or a video, save a file"),
+    ("s", "save it to Downloads"),
+    ("click", "choose a tile; again opens it"),
+    ("Esc", "back to the messages"),
+];
+
+pub const HOME_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓", "choose"),
+    ("Enter, 1–9, click", "go there; on an invitation, join it"),
+    ("d, d", "decline an invitation"),
+    ("Esc, F4", "back to the messages"),
 ];
 
 pub const THEME_KEYS: &[(&str, &str)] = &[
@@ -1312,6 +1356,8 @@ pub fn help_rows(filter: &str) -> Vec<HelpRow> {
         ("Selecting messages (Alt+Up)", SELECT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         ("Editing (Shift+Up)", EDIT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         ("The theme list (/theme)", THEME_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("The media gallery (/media)", GALLERY_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("Home (/home, F4)", HOME_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         ("Voting (Enter on a poll)", VOTE_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         (
             "A profile (click a name, or u)",
@@ -1439,6 +1485,10 @@ impl App {
             theme_picker: None,
             vote: None,
             profile: None,
+            gallery: None,
+            home: None,
+            invites: Vec::new(),
+            tile_requests: Vec::new(),
             custom_emoji: HashMap::new(),
             later: Vec::new(),
             editor_request: None,
@@ -1903,7 +1953,7 @@ impl App {
                     Some((version, url)) if update::newer(&version, current) => {
                         if self.released.as_deref() != Some(&version) {
                             self.status(Line::info(format!(
-                                "Textrix {version} is out (you have {current}): brew upgrade textrix, or {url}"
+                                "Textrix {version} is out (you have {current}): brew update && brew upgrade textrix, or {url}"
                             )));
                         }
                         self.released = Some(version);
@@ -2261,6 +2311,15 @@ impl App {
             AppEvent::Avatar { account, room_id, url, protocol } => {
                 let preview = protocol.map_or(Preview::Failed, Preview::Ready);
                 self.avatars.insert((account.to_string(), room_id), (url, preview));
+            }
+            AppEvent::Tile { event_id, picture } => {
+                if let Some(g) = self.gallery.as_mut() {
+                    g.store(event_id, picture);
+                }
+            }
+            AppEvent::Invites { account, invites } => {
+                self.invites.retain(|i| *i.account != *account);
+                self.invites.extend(invites);
             }
             AppEvent::ImagePreview { event_id, protocol } => {
                 let preview = protocol.map_or(Preview::Failed, Preview::Ready);
@@ -3110,6 +3169,25 @@ impl App {
                 }
             }
         }
+        if let Some(g) = &self.gallery
+            && !self.tile_requests.is_empty()
+        {
+            let (w, h) = gallery::PICTURE;
+            match (self.picker.clone(), self.connected(&g.key.account)) {
+                (Some(picker), Some(acct)) => {
+                    for (event_id, media) in std::mem::take(&mut self.tile_requests) {
+                        acct.fetch_tile(event_id, media, picker.clone(), Size::new(w, h));
+                    }
+                }
+                // Asked again once the server is back.
+                _ => {
+                    let asked = std::mem::take(&mut self.tile_requests);
+                    if let Some(g) = self.gallery.as_mut() {
+                        asked.iter().for_each(|(id, _)| drop(g.pictures.remove(id)));
+                    }
+                }
+            }
+        }
         for idx in self.screen_windows() {
             self.window_upkeep(idx);
         }
@@ -3145,7 +3223,7 @@ impl App {
             }
         }
         let retry_ok = w.history_retry.is_none_or(|t| Instant::now() >= t);
-        if (w.at_top || w.seek.is_some()) && retry_ok {
+        if (w.at_top || w.seek.is_some() || w.wants_older) && retry_ok {
             let from = match &w.history {
                 History::Unloaded => Some(None),
                 History::More(token) => Some(Some(token.clone())),
@@ -3219,6 +3297,18 @@ impl App {
             v.zoom_by(if up { 1 } else { -1 });
             return;
         }
+        if self.gallery.is_some() {
+            let Some(idx) = self.gallery_window() else { return };
+            let items = gallery::items(&self.windows[idx].lines);
+            if let Some(g) = self.gallery.as_mut() {
+                g.step(&items, if up { gallery::Move::Up } else { gallery::Move::Down });
+            }
+            return;
+        }
+        if let Some(h) = self.home.as_mut() {
+            h.selected = if up { h.selected.saturating_sub(1) } else { h.selected + 1 };
+            return;
+        }
         if let Some(sw) = self.switcher.as_mut() {
             sw.selected = if up { sw.selected.saturating_sub(1) } else { sw.selected + 1 };
             return;
@@ -3246,6 +3336,41 @@ impl App {
     fn on_click(&mut self, at: Position) {
         if self.viewer.is_some() {
             return;
+        }
+        let in_list = self.hits.sidebar.iter().any(|(r, _)| r.contains(at));
+        if self.gallery.is_some() {
+            // A tile is chosen, and opened when it already was; the window
+            // list closes the gallery and goes there.
+            if let Some(&(_, n)) = self.hits.gallery.iter().find(|(r, _)| r.contains(at)) {
+                let Some(idx) = self.gallery_window() else { return };
+                let items = gallery::items(&self.windows[idx].lines);
+                let Some(g) = self.gallery.as_mut() else { return };
+                let again = g.index(&items) == n;
+                g.selected = items.get(n).and_then(|l| l.event_id.clone());
+                if again {
+                    self.gallery_open(idx, false);
+                }
+                return;
+            }
+            if !in_list {
+                return;
+            }
+            self.close_gallery();
+        }
+        if self.home.is_some() {
+            // A row goes there (an invitation is only chosen: Enter joins).
+            if let Some(&(_, n)) = self.hits.home.iter().find(|(r, _)| r.contains(at)) {
+                match self.home_rows().get(n).cloned() {
+                    Some(home::Row::Invite(_)) => self.home.iter_mut().for_each(|h| h.selected = n),
+                    Some(row) => self.home_go(row),
+                    None => {}
+                }
+                return;
+            }
+            if !in_list {
+                return;
+            }
+            self.home = None;
         }
         if self.theme_picker.is_some() {
             // A theme shows it, again keeps it; a click outside puts back
@@ -3496,6 +3621,12 @@ impl App {
             }
             return;
         }
+        if self.gallery.is_some() {
+            return self.on_gallery_key(key);
+        }
+        if self.home.is_some() {
+            return self.on_home_key(key);
+        }
         if self.switcher.is_some() {
             return self.on_switcher_key(key);
         }
@@ -3673,6 +3804,7 @@ impl App {
             F(1) => self.help = Some(HelpView::default()),
             F(2) => self.show_sidebar = !self.show_sidebar,
             F(3) => self.show_nicklist = !self.show_nicklist,
+            F(4) => self.open_home(),
             F(6) if key.modifiers.contains(KeyModifiers::SHIFT) => self.cycle_pane(-1),
             F(6) => self.cycle_pane(1),
             _ => {}
@@ -4987,6 +5119,11 @@ impl App {
             "mentions" => {
                 let idx = self.mentions_window();
                 self.switch_to(idx);
+                Ok(())
+            }
+            "media" => self.open_gallery(),
+            "home" => {
+                self.open_home();
                 Ok(())
             }
             "pins" => self.room_ctx().map(|(acct, room_id)| acct.pins(room_id)),
@@ -6561,6 +6698,211 @@ impl App {
         acct.fetch_full_image(event.clone(), media.clone());
         self.viewer = Some(Viewer::new(event, format!("{} · {}", line.nick, media.filename)));
         Ok(())
+    }
+
+    /// `/media`: the room's media as tiles, over its messages.
+    fn open_gallery(&mut self) -> Result<(), String> {
+        let key = self.win().room.clone().ok_or("/media shows a room's pictures and files: go to the room first")?;
+        (self.home, self.select) = (None, None);
+        self.gallery = Some(Gallery::new(key));
+        // Pictures in the messages under it would linger.
+        self.redraw_all = true;
+        Ok(())
+    }
+
+    fn close_gallery(&mut self) {
+        self.gallery = None;
+        self.tile_requests.clear();
+        self.windows.iter_mut().for_each(|w| w.wants_older = false);
+        // Terminal graphics can outlive the frame they were drawn in.
+        self.redraw_all = true;
+    }
+
+    fn gallery_window(&self) -> Option<usize> {
+        let key = &self.gallery.as_ref()?.key;
+        self.windows.iter().position(|w| w.room.as_ref() == Some(key))
+    }
+
+    fn on_gallery_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        use gallery::Move;
+        let Some(idx) = self.gallery_window() else { return self.close_gallery() };
+        let way = match key.code {
+            Left | Char('h') => Some(Move::Left),
+            Right | Char('l') => Some(Move::Right),
+            Up | Char('k') => Some(Move::Up),
+            Down | Char('j') => Some(Move::Down),
+            PageUp => Some(Move::PageUp),
+            PageDown => Some(Move::PageDown),
+            Home | Char('g') => Some(Move::First),
+            End | Char('G') => Some(Move::Last),
+            _ => None,
+        };
+        if let Some(way) = way {
+            let items = gallery::items(&self.windows[idx].lines);
+            if let Some(g) = self.gallery.as_mut() {
+                g.step(&items, way);
+            }
+            return;
+        }
+        match key.code {
+            Esc | Char('q') => self.close_gallery(),
+            Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.close_gallery(),
+            Enter | Char('z' | ' ') => self.gallery_open(idx, false),
+            Char('s') => self.gallery_open(idx, true),
+            _ => {}
+        }
+    }
+
+    /// The chosen tile: a picture in the viewer, audio or video played, a
+    /// file saved; `save` saves whatever it is.
+    fn gallery_open(&mut self, idx: usize, save: bool) {
+        let line = {
+            let items = gallery::items(&self.windows[idx].lines);
+            let Some(g) = &self.gallery else { return };
+            match items.get(g.index(&items)) {
+                Some(line) => (*line).clone(),
+                None => return,
+            }
+        };
+        let Some(media) = line.media.clone() else { return };
+        let done = if save || media.kind == MediaKind::File {
+            self.room_ctx().map(|(acct, room_id)| acct.download(room_id, media))
+        } else if media.playable() {
+            self.play(&line)
+        } else {
+            self.open_viewer(&line)
+        };
+        if let Err(e) = done {
+            self.error(e);
+        }
+    }
+
+    /// `/home`, F4: what's waiting, over the messages.
+    fn open_home(&mut self) {
+        if self.gallery.is_some() {
+            self.close_gallery();
+        }
+        self.select = None;
+        self.home = Some(Home::default());
+        self.redraw_all = true;
+        for acct in self.accounts.values().filter_map(|a| a.account.as_ref()) {
+            acct.fetch_invites();
+        }
+    }
+
+    /// The home window's rows: the latest mentions, rooms with unread
+    /// messages (mentions first, then the most recent), invitations.
+    pub fn home_rows(&self) -> Vec<home::Row> {
+        let now = Local::now();
+        let mut rows = Vec::new();
+        if let Some(m) = self.windows.iter().find(|w| w.is_mentions) {
+            let recent = m.lines.iter().rev().filter(|l| l.is_message() && now - l.ts <= home::MENTIONS_FOR);
+            for line in recent.take(home::MENTIONS) {
+                let Some(event) = line.event_id.clone() else { continue };
+                let Some(key) = self.mention_origins.get(&event).cloned() else { continue };
+                let room = self
+                    .window_idx(&key.account, &key.room_id)
+                    .map_or_else(|| key.room_id.to_string(), |i| self.windows[i].title().to_owned());
+                // Copies are named "room/nick".
+                let nick = line.nick.rsplit_once('/').map_or(line.nick.as_str(), |(_, n)| n).to_owned();
+                rows.push(home::Row::Mention { key, event, room, nick, text: line.body.clone(), ts: line.ts });
+            }
+        }
+        let last = |i: usize| self.windows[i].lines.iter().rev().find(|l| l.is_message());
+        let mut unread: Vec<usize> = (1..self.windows.len())
+            .filter(|&i| self.windows[i].room.is_some() && self.windows[i].activity >= Activity::Message)
+            .collect();
+        unread.sort_by(|&a, &b| {
+            let newest = |i: usize| last(i).map(|l| l.ts);
+            self.windows[b].activity.cmp(&self.windows[a].activity).then_with(|| newest(b).cmp(&newest(a)))
+        });
+        for i in unread {
+            let w = &self.windows[i];
+            let last =
+                last(i).map(|l| (self.display_name(l.sender.as_deref(), &l.nick).to_owned(), l.body.clone(), l.ts));
+            rows.push(home::Row::Unread {
+                window: i,
+                name: w.title().to_owned(),
+                count: w.unread(),
+                activity: w.activity,
+                last,
+            });
+        }
+        rows.extend(self.invites.iter().cloned().map(home::Row::Invite));
+        rows
+    }
+
+    fn on_home_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let rows = self.home_rows();
+        let Some(h) = self.home.as_mut() else { return };
+        // `d` asks; anything else but a second `d` takes it back.
+        let declining = h.declining.take();
+        h.note = None;
+        let last = rows.len().saturating_sub(1);
+        match key.code {
+            Esc | Char('q') | F(4) => self.home = None,
+            Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.home = None,
+            Up | Char('k') => h.selected = h.selected.saturating_sub(1),
+            Down | Char('j') => h.selected = (h.selected + 1).min(last),
+            PageUp => h.selected = h.selected.saturating_sub(10),
+            PageDown => h.selected = (h.selected + 10).min(last),
+            Home | Char('g') => h.selected = 0,
+            End | Char('G') => h.selected = last,
+            Enter => {
+                if let Some(row) = rows.get(h.selected).cloned() {
+                    self.home_go(row);
+                }
+            }
+            Char(c @ '1'..='9') => {
+                if let Some(row) = rows.get(c as usize - '1' as usize).cloned() {
+                    self.home_go(row);
+                }
+            }
+            Char('d') => match rows.get(h.selected) {
+                Some(home::Row::Invite(invite)) if declining.as_ref() == Some(&invite.room_id) => {
+                    let invite = invite.clone();
+                    match self.connected(&invite.account) {
+                        Some(acct) => {
+                            acct.decline(None, invite.room_id.clone());
+                            self.invites.retain(|i| i.room_id != invite.room_id);
+                            let note = format!("declined the invitation to {}", invite.name);
+                            self.home.iter_mut().for_each(|h| h.note = Some(note.clone()));
+                            self.info(note);
+                        }
+                        None => self.error(format!("{} isn't connected", invite.account)),
+                    }
+                }
+                Some(home::Row::Invite(invite)) => h.declining = Some(invite.room_id.clone()),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Go where a home row leads (joining, for an invitation).
+    fn home_go(&mut self, row: home::Row) {
+        self.home = None;
+        let done = match row {
+            home::Row::Mention { key, event, .. } => self.jump_to(key, event),
+            home::Row::Unread { window, .. } => {
+                self.switch_to(window);
+                Ok(())
+            }
+            home::Row::Invite(invite) => match self.connected(&invite.account) {
+                Some(acct) => {
+                    acct.join(invite.room_id.to_string());
+                    self.invites.retain(|i| i.room_id != invite.room_id);
+                    self.info(format!("joining {}…", invite.name));
+                    Ok(())
+                }
+                None => Err(format!("{} isn't connected", invite.account)),
+            },
+        };
+        if let Err(e) = done {
+            self.error(e);
+        }
     }
 
     fn close_viewer(&mut self) {
@@ -8353,6 +8695,115 @@ mod tests {
         assert_eq!(last, ["/exec false: exit 1", "/exec false: no output"]);
     }
 
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_owned()).collect::<String>())
+            .collect()
+    }
+
+    fn attachment(id: &str, kind: MediaKind, name: &str) -> Line {
+        let mut line = msg(id, &format!("[file] {name}"));
+        line.media = Some(Media {
+            source: matrix_sdk::ruma::events::room::MediaSource::Plain(format!("mxc://x.org/{name}").into()),
+            filename: name.into(),
+            kind,
+            mimetype: None,
+            thumbnail: None,
+            size: Some(1_258_291),
+        });
+        line
+    }
+
+    #[test]
+    fn the_gallery_shows_a_rooms_media_as_tiles() {
+        let mut app = test_app();
+        app.picker = Some(Painter {
+            picker: ratatui_image::picker::Picker::halfblocks(),
+            text: crate::picture::TextMode::Sextants,
+            truecolor: true,
+        });
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(attachment("$1", MediaKind::Image, "sunset.png"));
+        app.windows[a].lines.push_back(msg("$2", "nice"));
+        app.windows[a].lines.push_back(attachment("$3", MediaKind::File, "notes.pdf"));
+        app.switch_to(a);
+        app.command("media");
+        let rows = screen(&mut app, 120, 30).join("\n");
+        assert!(rows.contains("media · Night Owls"), "{rows}");
+        assert!(rows.contains("1 picture, 1 file, newest first"), "{rows}");
+        let (pdf, png) = (rows.find("notes.pdf").unwrap(), rows.find("sunset.png").unwrap());
+        assert!(pdf < png, "newest first");
+        assert!(rows.contains("PDF") && rows.contains("1.2 MB"), "a file is a labelled box");
+        let asked: Vec<&str> = app.tile_requests.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(asked, ["$1"], "only pictures are fetched");
+        assert!(app.windows[a].wants_older, "and it looks further back for more");
+
+        app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.gallery.as_ref().unwrap().selected.as_ref().map(|e| e.as_str()), Some("$1"));
+        let rows = screen(&mut app, 120, 30);
+        assert!(rows.iter().any(|r| r.contains("sunset.png · 1.2 MB · from alice")), "the chosen one, in full");
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.gallery.is_none() && !app.windows[a].wants_older && app.redraw_all);
+        assert!(screen(&mut app, 120, 30).join("\n").contains("nice"), "the messages again");
+
+        app.switch_to(0);
+        app.command("media");
+        assert!(app.gallery.is_none(), "only in a room");
+    }
+
+    #[test]
+    fn home_shows_whats_waiting_and_goes_there() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        let b = room_window(&mut app, "!b:x.org", "Book Club");
+        let _c = room_window(&mut app, "!c:x.org", "Garden Club");
+        app.windows[a].lines.push_back(msg("$1", "you: look at this"));
+        app.record_mention(a, &app.windows[a].lines[0].clone(), true);
+        app.windows[a].activity = Activity::Highlight;
+        let mut said = msg("$2", "chapter 3 spoilers incoming");
+        said.nick = "bob".into();
+        app.windows[b].lines.push_back(said);
+        app.windows[b].activity = Activity::Message;
+        app.on_event(AppEvent::Invites {
+            account: "t".into(),
+            invites: vec![Invitation {
+                account: "t".into(),
+                room_id: "!d:x.org".try_into().unwrap(),
+                name: "Synth Nerds".into(),
+                inviter: Some("sam".into()),
+            }],
+        });
+        app.on_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
+        let rows = screen(&mut app, 120, 30).join("\n");
+        for want in [
+            "Mentions",
+            "alice: you: look at this",
+            "Unread",
+            "bob: chapter 3 spoilers incoming",
+            "Invites",
+            "from sam",
+        ] {
+            assert!(rows.contains(want), "{want} in {rows}");
+        }
+        let order: Vec<&str> = app.home_rows().iter().map(|r| r.section()).collect();
+        assert_eq!(order, ["Mentions", "Unread", "Unread", "Invites"], "not Garden Club: nothing new there");
+
+        // d, then anything else, keeps the invitation.
+        app.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(screen(&mut app, 120, 30).join("\n").contains("d again declines Synth Nerds"));
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.home.as_ref().unwrap().declining.is_none());
+
+        app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert!(app.home.is_none());
+        assert_eq!(app.active, b, "3 went to the third row");
+    }
+
     #[test]
     fn scripts_cant_exec() {
         let mut app = test_app();
@@ -9657,6 +10108,8 @@ mod tests {
                 "Selecting messages (Alt+Up)",
                 "Editing (Shift+Up)",
                 "The theme list (/theme)",
+                "The media gallery (/media)",
+                "Home (/home, F4)",
                 "Voting (Enter on a poll)",
                 "A profile (click a name, or u)",
                 "Commands"

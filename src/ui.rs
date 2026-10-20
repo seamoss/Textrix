@@ -22,9 +22,11 @@ use unicode_width::UnicodeWidthChar;
 use crate::{
     app::{App, ConnStatus, HelpRow, LinkTitle, Preview, help_rows},
     config::{Config, LinkTitles},
+    gallery::{self, Thumb},
+    home,
     input::display_width,
     links,
-    model::{Activity, Fold, Line, LineKind, Poll, PresenceKind},
+    model::{Activity, Fold, Line, LineKind, MediaKind, Poll, PresenceKind},
     richtext::Marks,
     switcher,
     theme::{Outlines, Theme},
@@ -49,6 +51,10 @@ pub struct Hits {
     pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The profile pane.
     pub profile: Option<Rect>,
+    /// Gallery tiles: (tile, index among the room's media).
+    pub gallery: Vec<(Rect, usize)>,
+    /// Home rows: (row, index among them).
+    pub home: Vec<(Rect, usize)>,
     /// Split panes as drawn, in order: (their whole area, their place in
     /// the split's panes).
     pub splits: Vec<(Rect, usize)>,
@@ -113,7 +119,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if side_w > 0 {
         app.hits.sidebar = draw_sidebar(f, side, app);
     }
-    draw_panes(f, main, app);
+    if app.gallery.is_some() {
+        app.hits.gallery = draw_gallery(f, main, app);
+    } else if app.home.is_some() {
+        app.hits.home = draw_home(f, main, app);
+    } else {
+        draw_panes(f, main, app);
+    }
     if nick_w > 0 {
         app.hits.nicklist = draw_nicklist(f, nicks, app);
     }
@@ -902,6 +914,266 @@ fn draw_panes(f: &mut Frame, area: Rect, app: &mut App) {
         app.windows[idx].width = body.width;
         draw_messages(f, body, app, idx);
     }
+}
+
+/// A view over the messages (the gallery, home): framed like a pane, with
+/// its keys at the bottom; without outlines, a bar on top says both.
+fn view_frame(f: &mut Frame, area: Rect, t: &Theme, title: &str, keys: &str) -> Rect {
+    let keys: String = keys.chars().filter(|c| !c.is_control()).collect();
+    match outline(t, title, true) {
+        Some(block) => {
+            let block = block.title_bottom(TLine::from(format!(" {keys} ")).right_aligned());
+            let body = block.inner(area);
+            f.render_widget(block, area);
+            body
+        }
+        None => {
+            let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+            let text = fit(&format!(" {title} · {keys}"), bar.width as usize);
+            f.render_widget(Paragraph::new(text).style(t.bar.add_modifier(Modifier::BOLD)), bar);
+            body
+        }
+    }
+}
+
+/// The first line of `text`, cut to `width` columns and padded out to it.
+fn fit(text: &str, width: usize) -> String {
+    let text: String = text.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).collect();
+    let text = cut(&text, width);
+    let pad = width.saturating_sub(display_len(&text));
+    format!("{text}{}", " ".repeat(pad))
+}
+
+/// `/media`: the room's pictures, videos, audio and files as tiles, newest
+/// first, over its messages.
+fn draw_gallery(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> {
+    let t = app.cfg.palette.clone();
+    let images = app.picker.is_some();
+    let nicknames = app.nicknames().clone();
+    let Some(g) = app.gallery.as_mut() else { return Vec::new() };
+    let Some(idx) = app.windows.iter().position(|w| w.room.as_ref() == Some(&g.key)) else { return Vec::new() };
+    let w = &app.windows[idx];
+    let items = gallery::items(&w.lines);
+    let keys = "←↑↓→ move · Enter open · s save · Esc close";
+    let body = view_frame(f, area, &t, &format!("media · {}", w.title()), keys);
+    let (cols, rows) = gallery::TILE;
+    let (pw, ph) = gallery::PICTURE;
+    if body.height < rows + 3 || body.width < pw {
+        f.render_widget(Paragraph::new(Span::styled(" too small for tiles", t.dim)), body);
+        return Vec::new();
+    }
+    // A line saying what's here, the tiles, and a line about the chosen one.
+    let grid = Rect { y: body.y + 2, height: body.height - 3, ..body };
+    g.across = usize::from((grid.width + 2) / cols).max(1);
+    g.rows = usize::from((grid.height + 1) / rows).max(1);
+    let at = g.index(&items);
+    g.selected = items.get(at).and_then(|l| l.event_id.clone());
+    g.follow(at);
+
+    let mut counts = [0usize; 4];
+    for media in items.iter().filter_map(|l| l.media.as_ref()) {
+        counts[match media.kind {
+            MediaKind::Image => 0,
+            MediaKind::Video => 1,
+            MediaKind::Audio => 2,
+            MediaKind::File => 3,
+        }] += 1;
+    }
+    let names = [("picture", "pictures"), ("video", "videos"), ("recording", "recordings"), ("file", "files")];
+    let found: Vec<String> = names
+        .iter()
+        .zip(counts)
+        .filter(|(_, n)| *n > 0)
+        .map(|((one, many), n)| format!("{n} {}", if n == 1 { one } else { many }))
+        .collect();
+    let summary = match (found.is_empty(), w.history_done(), w.loading_older()) {
+        (true, true, _) => "no pictures, videos or files here".to_owned(),
+        (true, false, _) => "looking for pictures, videos and files…".to_owned(),
+        (false, true, _) => format!("{}, newest first · that's all of them", found.join(", ")),
+        (false, false, true) => format!("{}, newest first · looking further back…", found.join(", ")),
+        (false, false, false) => format!("{}, newest first", found.join(", ")),
+    };
+    f.render_widget(Paragraph::new(Span::styled(fit(&summary, body.width as usize), t.dim)), body);
+
+    let mut hits = Vec::new();
+    let mut wanted = Vec::new();
+    let first = g.top * g.across;
+    let today = Local::now().date_naive();
+    for (n, line) in items.iter().enumerate().skip(first).take(g.across * g.rows) {
+        let Some(media) = &line.media else { continue };
+        let id = line.event_id.clone().expect("gallery items have ids");
+        let x = grid.x + ((n - first) % g.across) as u16 * cols;
+        let y = grid.y + ((n - first) / g.across) as u16 * rows;
+        let tile = Rect { x, y, width: pw, height: ph };
+        let note = if !images || !media.has_picture() {
+            None
+        } else {
+            match g.pictures.get(&id) {
+                Some(Thumb::Ready(picture)) => {
+                    let size = picture.size();
+                    let (w, h) = (size.width.min(pw), size.height.min(ph));
+                    f.render_widget(picture, Rect { x: x + (pw - w) / 2, y: y + (ph - h) / 2, width: w, height: h });
+                    Some("")
+                }
+                Some(Thumb::Failed) => Some("can't show it"),
+                Some(Thumb::Loading) => Some("loading…"),
+                None => {
+                    g.pictures.insert(id.clone(), Thumb::Loading);
+                    wanted.push((id.clone(), media.clone()));
+                    Some("loading…")
+                }
+            }
+        };
+        if note != Some("") {
+            tile_placeholder(f, &t, tile, line, note);
+        }
+        let who = line.sender.as_ref().and_then(|u| nicknames.get(u)).unwrap_or(&line.nick);
+        let when = if line.ts.date_naive() == today { line.ts.format("%H:%M") } else { line.ts.format("%-d %b") };
+        let (top, under) = match n == at {
+            true => (
+                Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                Style::new().add_modifier(Modifier::REVERSED),
+            ),
+            false => (Style::new(), t.dim),
+        };
+        let caption = vec![
+            TLine::from(Span::styled(fit(&media.filename, pw as usize), top)),
+            TLine::from(Span::styled(fit(&format!("{who} · {when}"), pw as usize), under)),
+        ];
+        f.render_widget(Paragraph::new(caption), Rect { x, y: y + ph, width: pw, height: 2 });
+        hits.push((Rect { height: ph + 2, ..tile }, n));
+    }
+
+    // At the bottom: what Textrix said since this opened (saved, playing…),
+    // or else about the chosen one.
+    let opened = g.opened;
+    let said = [idx, 0]
+        .iter()
+        .filter_map(|&i| {
+            let lines = app.windows[i].lines.iter().rev().take_while(|l| l.ts >= opened);
+            lines.into_iter().find(|l| matches!(l.kind, LineKind::Info | LineKind::Error))
+        })
+        .max_by_key(|l| l.ts);
+    let bottom = Rect { y: body.bottom() - 1, height: 1, ..body };
+    let about = match (said, items.get(at)) {
+        (Some(note), _) => Span::styled(
+            fit(&note.body, body.width as usize),
+            if note.kind == LineKind::Error { t.error } else { t.accent },
+        ),
+        (None, Some(line)) => {
+            let media = line.media.as_ref().expect("gallery items have media");
+            let mut parts = vec![media.filename.clone()];
+            parts.extend(media.size.map(crate::matrix::human_size));
+            let who = line.sender.as_ref().and_then(|u| nicknames.get(u)).unwrap_or(&line.nick);
+            parts.push(format!("from {who}, {}", line.ts.format("%a %-d %b %Y %H:%M")));
+            Span::raw(fit(&parts.join(" · "), body.width as usize))
+        }
+        (None, None) => Span::raw(""),
+    };
+    f.render_widget(Paragraph::new(about), bottom);
+
+    // Near the end of what's loaded, load more.
+    let all_rows = items.len().div_ceil(g.across);
+    let want = !w.history_done() && g.top + g.rows + 1 >= all_rows;
+    app.tile_requests.extend(wanted);
+    app.windows[idx].wants_older = want;
+    hits
+}
+
+/// A tile without a picture: what it is, in a box.
+fn tile_placeholder(f: &mut Frame, t: &Theme, area: Rect, line: &Line, note: Option<&str>) {
+    let block = Block::bordered().border_style(t.dim);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let size = line.media.as_ref().and_then(|m| m.size).map(crate::matrix::human_size).unwrap_or_default();
+    let text = vec![
+        TLine::from(Span::styled(gallery::label(line), t.accent)).centered(),
+        TLine::from(Span::styled(note.map_or(size, str::to_owned), t.dim)).centered(),
+    ];
+    let y = inner.y + inner.height.saturating_sub(2) / 2;
+    f.render_widget(Paragraph::new(text), Rect { y, height: inner.height.min(2), ..inner });
+}
+
+/// Home (`/home`, F4): the latest mentions, rooms with unread messages and
+/// invitations, each a key away.
+fn draw_home(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> {
+    let t = app.cfg.palette.clone();
+    let rows = app.home_rows();
+    let Some(h) = app.home.as_mut() else { return Vec::new() };
+    h.selected = h.selected.min(rows.len().saturating_sub(1));
+    let keys = match (&h.declining, &h.note, rows.get(h.selected)) {
+        (Some(room), _, Some(home::Row::Invite(i))) if i.room_id == *room => {
+            format!("d again declines {}, any other key keeps it", i.name)
+        }
+        (_, Some(note), _) => note.clone(),
+        _ => "↑↓ choose · Enter go · 1–9 jump · Esc close".to_owned(),
+    };
+    let body = view_frame(f, area, &t, "home", &keys);
+    if rows.is_empty() {
+        let text = " Nothing waiting: no mentions, unread rooms or invitations.";
+        f.render_widget(Paragraph::new(Span::styled(text, t.dim)), body);
+        return Vec::new();
+    }
+    let now = Local::now();
+    let name = |row: &home::Row| match row {
+        home::Row::Mention { room, .. } => room.clone(),
+        home::Row::Unread { name, .. } => name.clone(),
+        home::Row::Invite(invite) => invite.name.clone(),
+    };
+    let name_w = rows.iter().map(|r| display_len(&name(r))).max().unwrap_or(8).clamp(8, 24);
+    // Section headings, and the rows (with which they are) under them.
+    let mut lines: Vec<(Option<usize>, TLine<'static>)> = Vec::new();
+    for (n, row) in rows.iter().enumerate() {
+        if n == 0 || rows[n - 1].section() != row.section() {
+            if n > 0 {
+                lines.push((None, TLine::default()));
+            }
+            lines.push((None, TLine::from(Span::styled(format!(" {}", row.section()), t.accent))));
+        }
+        let selected = n == h.selected;
+        let (style, count, text, right) = match row {
+            home::Row::Mention { nick, text, ts, .. } => {
+                (activity_style(&t, Activity::Highlight), String::new(), format!("{nick}: {text}"), home::age(*ts, now))
+            }
+            home::Row::Unread { count, activity, last, .. } => (
+                activity_style(&t, *activity),
+                if *count > 0 { count.to_string() } else { String::new() },
+                last.as_ref().map(|(nick, body, _)| format!("{nick}: {body}")).unwrap_or_default(),
+                last.as_ref().map(|(_, _, ts)| home::age(*ts, now)).unwrap_or_default(),
+            ),
+            home::Row::Invite(invite) => (
+                t.activity,
+                String::new(),
+                invite.inviter.as_ref().map_or_else(|| "an invitation".to_owned(), |who| format!("from {who}")),
+                if selected { "Enter joins · d declines".to_owned() } else { String::new() },
+            ),
+        };
+        let key = if n < 9 { format!("  {} ", n + 1) } else { "    ".to_owned() };
+        let width = body.width as usize;
+        let text_w = width.saturating_sub(4 + name_w + 7 + display_len(&right) + 2);
+        let mut line = TLine::from(vec![
+            Span::styled(key, t.dim),
+            Span::styled(fit(&name(row), name_w), style),
+            Span::styled(format!(" {count:>5} "), style),
+            Span::raw(fit(&text, text_w)),
+            Span::raw("  "),
+            Span::styled(right, t.dim),
+        ]);
+        if selected {
+            line = line.patch_style(Style::new().add_modifier(Modifier::REVERSED));
+        }
+        lines.push((Some(n), line));
+    }
+    let at = lines.iter().position(|(n, _)| *n == Some(h.selected)).unwrap_or(0);
+    let height = body.height as usize;
+    let start = (at + 1).saturating_sub(height);
+    let mut hits = Vec::new();
+    for (i, (n, line)) in lines.into_iter().skip(start).take(height).enumerate() {
+        let rect = Rect { y: body.y + i as u16, height: 1, ..body };
+        f.render_widget(Paragraph::new(line), rect);
+        hits.extend(n.map(|n| (rect, n)));
+    }
+    hits
 }
 
 /// A split pane's own status line: which window it is, and whether it has

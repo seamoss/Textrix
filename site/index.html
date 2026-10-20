@@ -379,7 +379,7 @@
     <tr><td>🔐 Encryption</td><td>End-to-end encrypted rooms, emoji verification, your recovery key, key backup. Even the local store is encrypted, with its key in your keychain.</td></tr>
     <tr><td>🪟 Windows</td><td>irssi-style numbered windows, a window list, split panes you can drag to size and save as layouts, and a quick switcher (Ctrl+K) that finds anything you half-remember.</td></tr>
     <tr><td>🌙 Background mode</td><td>Like irssi in screen: <code>textrix --daemon</code> keeps you connected with no terminal, <code>textrix</code> comes back to it, <code>/detach</code> leaves it running.</td></tr>
-    <tr><td>⬆️ Upgrades</td><td><code>brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing.</td></tr>
+    <tr><td>⬆️ Upgrades</td><td><code>brew update &amp;&amp; brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing.</td></tr>
     <tr><td>🔎 Search</td><td>Every room, encrypted ones too, up to 20,000 messages back in each, found instantly from an index kept encrypted on your disk. <code>/search from:sam in:"Book Club" before:2026 pizza</code></td></tr>
     <tr><td>🧵 Threads &amp; spaces</td><td>Threads open in their own windows. Spaces group your rooms.</td></tr>
     <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. Drag a file onto the terminal to send it.</td></tr>
@@ -390,6 +390,7 @@
     <tr><td>📊 Polls, stickers &amp; emoji</td><td>Vote in Element's polls from the keyboard (results in little bars), start your own with <code>/poll</code>, see stickers, and use your image packs' custom emoji. <span class="new">NEW!</span></td></tr>
     <tr><td>👤 Who's who</td><td>Click anyone's name for their picture, presence, role and verified devices, right beside the member list. <span class="new">NEW!</span></td></tr>
     <tr><td>✍️ Writing</td><td>Ctrl+X opens your own editor for the long ones; <code>/later 18:30</code> sends it while you're at dinner; nicks line up in a column like irssi's. <span class="new">NEW!</span></td></tr>
+    <tr><td>🏠 Home &amp; gallery</td><td>F4 shows everything waiting for you (mentions, unread rooms, invitations), a key away. <code>/media</code> lays out a room's pictures, videos and files as tiles to flick through. <span class="new">NEW!</span></td></tr>
     <tr><td>🔗 Links &amp; edits</td><td>Links show the page's title and picture, fetched by your homeserver so the site never sees you. Edited messages keep what they said before (<code>i</code>), <code>||spoilers||</code> stay hidden until revealed, and irssi's <code>/exec -o uptime</code> is back. <span class="new">NEW!</span></td></tr>
     <tr><td>🏖️ Away log</td><td>Go <code>/away</code>, come back to "while you were away: 3 mentions and 2 DMs", all in one window. And a status bar you arrange yourself. <span class="new">NEW!</span></td></tr>
     <tr><td>📜 Scripts</td><td>Like irssi's Perl scripts, but in Rhai: drop a file in <code>~/.textrix/scripts</code> to add commands, answer messages, run timers and put things in the status bar. The examples include dice.</td></tr>
@@ -405,6 +406,8 @@
   <img class="shot" src="screenshots/main.svg" alt="Textrix: the window list with unread rooms on top, a conversation with a code block, a voice message and a picture, and the member list" width="1144" height="673">
   <img class="shot" src="screenshots/panes.svg" alt="Two rooms side by side in the blue-tron theme, framed in neon lines on pure black; a link in Book Club shows its title and picture" width="1144" height="616" loading="lazy">
   <img class="shot" src="screenshots/picker.svg" alt="The /themes list at the right, trying turbo: the whole screen in yellow on DOS blue" width="1144" height="673" loading="lazy">
+  <img class="shot" src="screenshots/gallery.svg" alt="/media in Night Owls: tiles of pictures, a PDF, a video and a text file, newest first" width="1144" height="673" loading="lazy">
+  <img class="shot" src="screenshots/home.svg" alt="Home (F4): the latest mention, unread rooms with their last message, and an invitation" width="1144" height="616" loading="lazy">
   <img class="shot" src="screenshots/profile.svg" alt="sam's profile beside the member list: picture, names, presence, role and verified devices" width="1144" height="616" loading="lazy">
 
   <h2 id="themes">🎨 The Theme-O-Rama</h2>
@@ -465,13 +468,13 @@
   <h2>💾 Download it!!</h2>
   <center>
     <a class="download" href="https://github.com/seamoss/Textrix/releases">⬇ DOWNLOAD NOW ⬇</a><br>
-    <span class="small">*about 22 MB, or 55 minutes on a good day with a 56k modem</span><br>
+    <span class="small">*about 19 MB, or 47 minutes on a good day with a 56k modem</span><br>
     Latest version: <b>v{{VERSION}}</b> · <a href="changelog.html">📜 what's new?</a>
   </center>
   <pre class="cmd">brew install seamoss/textrix/textrix
 cargo install --git https://github.com/seamoss/Textrix
 
-brew upgrade textrix      # later, for the next one</pre>
+brew update &amp;&amp; brew upgrade textrix   # later, for the next one</pre>
   <p>
     Then put your server in <code>~/.textrix/.env</code> (copy
     <a href="https://github.com/seamoss/Textrix/blob/master/.env.example">.env.example</a>), run

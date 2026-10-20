@@ -767,6 +767,64 @@ fn screenshots() {
     profile.app.on_event(AppEvent::UserPicture { user: user("sam"), picture });
     save(&dir, "profile", &mut profile, (124, 30));
 
+    // /media: Night Owls' pictures and files.
+    let mut media = night_owls(ThemeName::Default, true);
+    let extra = [
+        (8, "dee", "[file] keymap.txt", "keymap.txt", MediaKind::File, 2_048),
+        (7, "carol", "[image] sunrise.png", "sunrise.png", MediaKind::Image, 51_002),
+        (6, "bob", "[video] demo.mp4", "demo.mp4", MediaKind::Video, 12_400_000),
+        (5, "you", "[voice] 0:12 ▁▂▄▆█▆▅▃▂", "voice.ogg", MediaKind::Audio, 19_310),
+        (4, "alice", "[image] neon-grid.png", "neon-grid.png", MediaKind::Image, 64_900),
+        (3, "sam", "[file] setlist.pdf", "setlist.pdf", MediaKind::File, 84_211),
+        (2, "jo_bloggs", "[image] smile.png", "smile.png", MediaKind::Image, 9_812),
+    ];
+    let lines: Vec<Line> = extra
+        .into_iter()
+        .map(|(mins, nick, body, name, kind, size)| {
+            let mut line = media.line(mins, nick, body);
+            line.media = Some(Media {
+                source: MediaSource::Plain(format!("mxc://{SERVER}/{name}").into()),
+                filename: name.into(),
+                kind,
+                mimetype: None,
+                thumbnail: None,
+                size: Some(size),
+            });
+            line
+        })
+        .collect();
+    media.post("Night Owls", lines);
+    media.app.open_gallery().unwrap();
+    media.draw(124, 33);
+    let painter = media.app.picker.clone().unwrap();
+    let (w, h) = gallery::PICTURE;
+    for (event_id, m) in std::mem::take(&mut media.app.tile_requests) {
+        let image = match m.filename.as_str() {
+            "smile.png" => face(),
+            "neon-grid.png" => sunset().huerotate(150),
+            "sunrise.png" => sunset().huerotate(60).fliph(),
+            _ => sunset(),
+        };
+        let picture = painter.fit(image, Size::new(w, h)).ok();
+        media.app.on_event(AppEvent::Tile { event_id, picture });
+    }
+    media.app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    save(&dir, "gallery", &mut media, (124, 33));
+
+    // Home (F4): what's waiting.
+    let mut home = night_owls(ThemeName::Default, false);
+    home.app.on_event(AppEvent::Invites {
+        account: ACCOUNT.into(),
+        invites: vec![crate::home::Invitation {
+            account: ACCOUNT.into(),
+            room_id: room_id("Chess Club"),
+            name: "Chess Club".into(),
+            inviter: Some("alex".into()),
+        }],
+    });
+    home.app.open_home();
+    save(&dir, "home", &mut home, (124, 30));
+
     for (name, theme) in ThemeName::ALL {
         save(&dir.join("themes"), name, &mut night_owls(theme, true), (100, 32));
     }

@@ -18,9 +18,13 @@ cargo install --git https://github.com/seamoss/Textrix   # anywhere with Rust 1.
 repository). Once it's installed, the short name works:
 
 ```sh
-brew upgrade textrix
+brew update && brew upgrade textrix
 cargo install --git https://github.com/seamoss/Textrix --force   # the cargo way
 ```
+
+`brew update` first: on its own, Homebrew looks at taps like this one
+only about once a day, so a release from the last few hours wouldn't
+show up yet.
 
 A Textrix that's running then offers to switch to the new version in
 place (see [Upgrading while it runs](#upgrading-while-it-runs)).
@@ -150,7 +154,7 @@ unencrypted too.
 | Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `u` who sent it, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details (and what an edited message said before), Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
-| F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
+| F1 / F2 / F3 / F4 | full-screen help (type to filter) / window list / member list / home (what's waiting) |
 | F6 / Shift+F6 | focus the next / previous split pane |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Alt+B / Alt+F, Ctrl+← / Ctrl+→, Home / End | back / forward a word; start / end of the line |
@@ -178,6 +182,15 @@ under **Unreads** at the top, mentions first; once you've read them they
 go back to **Rooms** (grouped under their spaces, if you're in any) or
 **DMs**, each by name. A window's number stays the same wherever it's
 listed, so Alt+1..0 and `/window N` always find it.
+
+![Home over the messages: the latest mention, the rooms with unread messages and what was said last in each, and an invitation](site/screenshots/home.svg)
+
+Home (F4, or `/home`) shows what's waiting in one place, over the
+messages: your mentions from the last day (the latest five), every room
+with unread messages and what was said there last (mentions first, then
+the most recent), and your invitations. ↑/↓ and Enter, a click, or the
+row's number (1–9) goes there: to the message, the room, or, for an
+invitation, joining it; `d` twice declines one. Esc or F4 goes back.
 
 While you type a command, its usage appears in dim text after the cursor.
 
@@ -207,8 +220,8 @@ bindings.
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Thread roots show `[N replies]`; replies also appear in the room with their context |
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is, `/poll <question> \| <answer> \| <answer>…` and `/poll end` (see [Polls](#polls)), `/later <when> <text>` (see [Sending later](#sending-later)), `\|\|spoiler\|\|` hides that part until it's revealed (not inside code), `/exec <command>` runs a shell command and shows what it printed here, `/exec -o <command>` sends that to the room (30 seconds at most, 500 lines; scripts can't use it) |
-| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? Enter/y uploads, n keeps it as text"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
+| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? Enter/y uploads, n keeps it as text"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below), `/media` (the room's pictures, videos and files as tiles; see [The media gallery](#the-media-gallery)) |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/home` (F4), `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
@@ -375,6 +388,19 @@ in mpv if you have it, otherwise in the app your system uses for that
 kind of file (QuickTime Player on macOS, which can't play `.webm`; set
 `video_player`, e.g. to `"mpv"`, for one that can). The decrypted copy
 stays in a private folder until Textrix closes.
+
+### The media gallery
+
+![/media in Night Owls: tiles of pictures, a PDF, a video and a text file, newest first, the chosen one described at the bottom](site/screenshots/gallery.svg)
+
+`/media` shows the room's pictures, videos, voice messages and files as
+tiles, newest first, over its messages: pictures as small pictures, the
+rest as boxes saying what they are. Arrow keys (or the mouse) move
+through them, Enter opens one (a picture in the viewer, audio and video
+played, a file saved) and `s` saves any of them to Downloads; Esc goes
+back. As you get near the end of what's loaded it fetches more of the
+room's history, back to the beginning if you keep going; the line at the
+top says how far it's got.
 
 ### Who's who
 

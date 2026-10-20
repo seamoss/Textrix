@@ -7,6 +7,31 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.14.0] - 2026-10-20
+
+### Added
+- Home (F4, or `/home`): what's waiting for you in one place, over the
+  messages. Your mentions from the last day (the latest five), every room
+  with unread messages and what was said there last (mentions first,
+  then the most recent), and your invitations. ↑/↓ and Enter, a click, or
+  the row's number (1–9) goes there: to the message, the room, or, for an
+  invitation, joining it; `d` twice declines one. Esc or F4 goes back.
+- The media gallery (`/media`): the room's pictures, videos, voice
+  messages and files as tiles, newest first. Pictures show as small
+  pictures, the rest as boxes saying what they are and how big. Arrow
+  keys or the mouse move through them; Enter opens one (a picture in the
+  viewer, audio and video played, a file saved) and `s` saves any of them.
+  Near the end of what's loaded, it fetches more of the room's history.
+- Themes: `purple`, `purple-deep` and `purple-tron` join the monitor
+  themes, and `synthwave` (or `outrun`) is the 80s as remembered: neon pink
+  and cyan on a midnight-purple sky, the sun setting in yellow and orange.
+  Thirty-four in all.
+
+### Changed
+- Upgrade instructions say `brew update && brew upgrade textrix`. On its
+  own, Homebrew looks at taps like Textrix's only about once a day, so
+  `brew upgrade` alone can miss a release from the last few hours.
+
 ## [0.13.0] - 2026-10-20
 
 ### Added
