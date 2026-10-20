@@ -197,7 +197,16 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
         rows.push((Some(n), entry.id.name()));
     }
     let width = screen.width.saturating_sub(2).min(34);
-    let height = (rows.len().max(1) as u16 + 4).min(screen.height.saturating_sub(2));
+    // In a room, a row says who it's for: everywhere, or just the room.
+    let scope = p.room.as_ref().map(|room| {
+        if p.just_here {
+            TLine::from(vec![Span::styled(format!("just {room}"), t.accent), Span::styled(" · ^T all", t.dim)])
+        } else {
+            TLine::from(vec![Span::styled("everywhere", t.accent), Span::styled(" · ^T just here", t.dim)])
+        }
+    });
+    let extra = u16::from(scope.is_some());
+    let height = (rows.len().max(1) as u16 + 4 + extra).min(screen.height.saturating_sub(2));
     let area = Rect { x: screen.right().saturating_sub(width), y: screen.y + 1, width, height };
     let block = Block::bordered()
         .style(t.base)
@@ -223,7 +232,10 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
     let bottom = Rect { y: inner.bottom().saturating_sub(1), height: 1, ..inner };
     f.render_widget(Paragraph::new(about), bottom);
 
-    let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(2), ..inner };
+    if let Some(scope) = scope {
+        f.render_widget(Paragraph::new(scope), Rect { y: inner.y + 1, height: 1, ..inner });
+    }
+    let list = Rect { y: inner.y + 1 + extra, height: inner.height.saturating_sub(2 + extra), ..inner };
     let at = rows.iter().position(|(n, _)| *n == Some(p.selected)).unwrap_or(0);
     let start = (at + 1).saturating_sub(list.height as usize);
     let mut hits = Vec::new();

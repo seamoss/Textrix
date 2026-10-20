@@ -569,7 +569,7 @@ pub enum LinkTitle {
 
 /// What `/theme` does other than pick a theme, so no theme file can be
 /// called these.
-const THEME_WORDS: [&str; 3] = ["list", "save", "import"];
+const THEME_WORDS: [&str; 5] = ["list", "save", "import", "here", "space"];
 
 /// `/themes` (or `/theme` on its own): every theme in a list, each tried
 /// on the whole screen as you move to it.
@@ -581,6 +581,10 @@ pub struct ThemePicker {
     pub selected: usize,
     /// Why the chosen theme can't be shown (a broken theme file).
     pub error: Option<String>,
+    /// The room in focus, when there is one: Ctrl+T picks for just it.
+    pub room: Option<String>,
+    /// Picking for just that room, not everywhere.
+    pub just_here: bool,
     /// The theme you had, and its colours, for Esc.
     before: (ThemeId, Theme),
 }
@@ -673,6 +677,9 @@ struct Layout {
     /// `/layout save <name>`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     layouts: BTreeMap<String, SavedLayout>,
+    /// Rooms' and spaces' own themes (`/theme here`, `/theme space`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    themes: Vec<(WinKey, ThemeId)>,
 }
 
 /// Something for scripts to hear about, from a room's timeline.
@@ -850,6 +857,8 @@ pub struct App {
     pub editor_request: Option<String>,
     /// When you went /away: from then, DMs collect with your mentions.
     away_since: Option<chrono::DateTime<Local>>,
+    /// The theme `cfg.palette` is: yours, or the focused room's own.
+    palette_for: ThemeId,
     /// The terminal reports keys the enhanced way (kitty's protocol).
     pub enhanced_keys: bool,
     /// Windows you were in, most recent first (for the switcher).
@@ -1227,6 +1236,7 @@ impl App {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         let (bell_mode, bell_style) = (cfg.bell, cfg.bell_style);
+        let palette_for = cfg.theme.clone();
         let layout: Layout = std::fs::read(paths.layout_file())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -1312,6 +1322,7 @@ impl App {
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
+            palette_for,
             recent: Vec::new(),
             push_modes: HashMap::new(),
             hits: ui::Hits::default(),
@@ -1803,7 +1814,7 @@ impl App {
                 self.notify_mode = notify::resolve(self.cfg.notifications);
                 // This terminal may have more colours, or fewer.
                 if let Ok(palette) = Theme::load(&self.cfg.theme, &self.cfg.colors, &self.paths.themes_dir()) {
-                    self.cfg.palette = palette;
+                    (self.cfg.palette, self.palette_for) = (palette, self.cfg.theme.clone());
                 }
                 (self.redraw_all, self.last_title) = (true, None);
                 if self.cfg.mouse {
@@ -2335,7 +2346,8 @@ impl App {
             }
             // While you're away, DMs collect with your mentions too: the
             // away log.
-            let away_dm = live && self.away_since.is_some() && self.windows[idx].is_dm && !line.own && line.is_message();
+            let away_dm =
+                live && self.away_since.is_some() && self.windows[idx].is_dm && !line.own && line.is_message();
             if is_mention(&line) || away_dm {
                 mentions.push(line.clone());
             }
@@ -2458,7 +2470,8 @@ impl App {
         let back = self.cfg.theme == green;
         let id = if back { ThemeId::default() } else { green };
         if let Ok(palette) = Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()) {
-            (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, id, true);
+            (self.cfg.palette, self.cfg.theme, self.redraw_all) = (palette, id.clone(), true);
+            self.palette_for = id;
         }
         self.info(if back {
             "Phosphor off. The code still works."
@@ -2779,6 +2792,7 @@ impl App {
             nicknames: self.layout.nicknames.clone(),
             split,
             layouts: self.layout.layouts.clone(),
+            themes: self.layout.themes.clone(),
         };
         if let Ok(json) = serde_json::to_vec_pretty(&layout)
             && let Err(e) = std::fs::write(self.paths.layout_file(), json)
@@ -5586,9 +5600,13 @@ impl App {
             };
             entries.push(ThemeChoice { id: ThemeId::File(name), shelf: "yours", about });
         }
-        let selected = entries.iter().position(|e| e.id == self.cfg.theme).unwrap_or(0);
+        // At the theme on screen; for just this room if it has its own.
+        let selected = entries.iter().position(|e| e.id == self.palette_for).unwrap_or(0);
+        let room = self.win().room.as_ref().map(|_| self.win().title().to_owned());
+        let just_here = self.own_theme(self.active).is_some();
         let before = (self.cfg.theme.clone(), self.cfg.palette.clone());
-        self.theme_picker = Some(ThemePicker { entries, query: String::new(), selected, error: None, before });
+        self.theme_picker =
+            Some(ThemePicker { entries, query: String::new(), selected, error: None, room, just_here, before });
     }
 
     fn on_theme_picker_key(&mut self, key: KeyEvent) {
@@ -5606,6 +5624,10 @@ impl App {
         match key.code {
             Esc => return self.close_theme_picker(false),
             Char('c') if ctrl => return self.close_theme_picker(false),
+            Char('t') if ctrl => {
+                p.just_here = p.room.is_some() && !p.just_here;
+                return;
+            }
             Enter => return self.close_theme_picker(true),
             Up | BackTab => p.selected = p.selected.saturating_sub(1),
             Char('p') if ctrl => p.selected = p.selected.saturating_sub(1),
@@ -5643,9 +5665,16 @@ impl App {
     /// one you had.
     fn close_theme_picker(&mut self, keep: bool) {
         let Some(p) = self.theme_picker.take() else { return };
-        if keep && p.error.is_none() {
+        if keep && p.error.is_none() && p.just_here {
+            // The room keeps it; your own theme stays as it was.
+            let chosen = std::mem::replace(&mut self.cfg.theme, p.before.0);
+            self.palette_for = chosen.clone();
+            let _ = self.set_own_theme(self.active, Some(chosen));
+        } else if keep && p.error.is_none() {
             let changed = if *p.had() == self.cfg.theme { "" } else { " for this session; /save keeps it" };
             self.info(format!("theme: {}{changed}", self.cfg.theme));
+            self.palette_for = self.cfg.theme.clone();
+            self.note_room_theme();
         } else {
             if let Some(error) = &p.error {
                 self.error(error.clone());
@@ -5653,6 +5682,71 @@ impl App {
             (self.cfg.theme, self.cfg.palette) = p.before;
         }
         self.redraw_all = true;
+    }
+
+    /// The theme window `idx`'s room has of its own, or a space it's in.
+    fn own_theme(&self, idx: usize) -> Option<ThemeId> {
+        let key = self.windows.get(idx)?.room.clone()?;
+        let key = WinKey { thread: None, ..key };
+        let find = |key: &WinKey| self.layout.themes.iter().find(|(k, _)| k == key).map(|(_, t)| t.clone());
+        find(&key).or_else(|| {
+            let spaces = self.spaces.get(key.account.as_str())?;
+            spaces
+                .iter()
+                .filter(|s| s.children.contains(&key.room_id))
+                .find_map(|s| find(&WinKey { account: key.account.clone(), room_id: s.room_id.clone(), thread: None }))
+        })
+    }
+
+    /// Give window `idx`'s room a theme of its own (`None` takes it away),
+    /// kept in layout.json.
+    fn set_own_theme(&mut self, idx: usize, theme: Option<ThemeId>) -> Result<(), String> {
+        let key = self.windows[idx].room.clone().ok_or("that's for a room: go to one first")?;
+        let key = WinKey { thread: None, ..key };
+        self.set_theme_for(key, theme.clone());
+        let name = self.windows[idx].title().to_owned();
+        match theme {
+            Some(theme) => self.info(format!("{name}: theme {theme}, here only (/theme here off puts yours back)")),
+            None => self.info(format!("{name}: your own theme again")),
+        }
+        Ok(())
+    }
+
+    fn set_theme_for(&mut self, key: WinKey, theme: Option<ThemeId>) {
+        self.layout.themes.retain(|(k, _)| *k != key);
+        if let Some(theme) = theme {
+            self.layout.themes.push((key, theme));
+        }
+        self.save_layout();
+        self.follow_room_theme();
+    }
+
+    /// The colours for the window in focus: its room's own theme, or yours.
+    pub fn follow_room_theme(&mut self) {
+        if self.theme_picker.is_some() {
+            return;
+        }
+        let want = self.own_theme(self.active).unwrap_or_else(|| self.cfg.theme.clone());
+        if want == self.palette_for {
+            return;
+        }
+        let palette = Theme::load(&want, &self.cfg.colors, &self.paths.themes_dir());
+        let palette = palette.or_else(|e| {
+            // A room's theme file that's gone or broken: yours instead.
+            self.error(format!("this room's theme {want}: {e:#}"));
+            Theme::load(&self.cfg.theme, &self.cfg.colors, &self.paths.themes_dir())
+        });
+        if let Ok(palette) = palette {
+            (self.cfg.palette, self.palette_for, self.redraw_all) = (palette, want, true);
+        }
+    }
+
+    /// After your own theme changed: say so if this room keeps its own.
+    fn note_room_theme(&mut self) {
+        if let Some(own) = self.own_theme(self.active) {
+            let name = self.win().title().to_owned();
+            self.info(format!("{name} has a theme of its own, {own}: /theme here off gives it yours"));
+        }
     }
 
     fn cmd_theme(&mut self, args: &str) -> Result<(), String> {
@@ -5667,6 +5761,8 @@ impl App {
                 self.list_themes();
                 return Ok(());
             }
+            "here" => return self.cmd_theme_here(rest),
+            "space" => return self.cmd_theme_space(rest),
             "save" => return self.save_theme(rest),
             "import" => return self.import_theme(rest),
             _ => {}
@@ -5674,8 +5770,68 @@ impl App {
         let id = ThemeId::parse(args).map_err(|e| format!("{e:#}"))?;
         self.cfg.palette =
             Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()).map_err(|e| format!("{e:#}"))?;
-        self.cfg.theme = id;
+        self.cfg.theme = id.clone();
+        self.palette_for = id;
         self.redraw_all = true;
+        self.note_room_theme();
+        Ok(())
+    }
+
+    /// `/theme here [name|off]`: this room's own theme.
+    fn cmd_theme_here(&mut self, name: &str) -> Result<(), String> {
+        if self.win().room.is_none() {
+            return Err("/theme here is for a room: go to one first".into());
+        }
+        match name {
+            "" => {
+                let text = match self.own_theme(self.active) {
+                    Some(own) => format!("{}: theme {own}, its own", self.win().title()),
+                    None => format!(
+                        "{}: your theme ({}); /theme here <name> gives it its own",
+                        self.win().title(),
+                        self.cfg.theme
+                    ),
+                };
+                self.info(text);
+                Ok(())
+            }
+            "off" => self.set_own_theme(self.active, None),
+            name => {
+                let id = ThemeId::parse(name).map_err(|e| format!("{e:#}"))?;
+                Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()).map_err(|e| format!("{e:#}"))?;
+                self.set_own_theme(self.active, Some(id))
+            }
+        }
+    }
+
+    /// `/theme space <space> <name|off>`: a theme for every room in a
+    /// space (each room's own still wins).
+    fn cmd_theme_space(&mut self, args: &str) -> Result<(), String> {
+        let usage = "usage: /theme space <space> <theme|off>";
+        let (space, theme) = args.rsplit_once(' ').ok_or(usage)?;
+        let (space, theme) = (space.trim().trim_matches('"'), theme.trim());
+        let account =
+            self.win().account().map(ToOwned::to_owned).or_else(|| self.accounts.keys().next().map(|a| a.to_string()));
+        let account = account.ok_or("no server")?;
+        let found = self.spaces.get(account.as_str()).and_then(|spaces| {
+            let lower = space.to_lowercase();
+            spaces.iter().find(|s| s.name.to_lowercase() == lower).map(|s| (s.room_id.clone(), s.name.clone()))
+        });
+        let (room_id, name) = found.ok_or_else(|| format!("no space {space}; /spaces lists them"))?;
+        let id = match theme {
+            "off" => None,
+            theme => {
+                let id = ThemeId::parse(theme).map_err(|e| format!("{e:#}"))?;
+                Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()).map_err(|e| format!("{e:#}"))?;
+                Some(id)
+            }
+        };
+        let text = match &id {
+            Some(id) => format!("{name}: its rooms in {id}, unless they have their own"),
+            None => format!("{name}: its rooms back to your theme"),
+        };
+        self.set_theme_for(WinKey { account, room_id, thread: None }, id);
+        self.info(text);
         Ok(())
     }
 
@@ -6258,6 +6414,7 @@ impl App {
         }
         self.scripts.configure(&cfg.script_settings);
         self.cfg = cfg;
+        self.palette_for = self.cfg.theme.clone();
         self.apply_logging();
     }
 
@@ -6756,6 +6913,7 @@ where
     loop {
         // In the background with no terminal attached, nothing is drawn.
         let shown = crate::term::attached();
+        app.follow_room_theme();
         if shown {
             if std::mem::take(&mut app.redraw_all) {
                 // Everything afresh. Not Terminal::clear, which first asks
@@ -7057,6 +7215,65 @@ mod tests {
     }
 
     #[test]
+    fn rooms_and_spaces_can_keep_their_own_theme() {
+        use crate::theme::ThemeName;
+        let dir = std::env::temp_dir().join(format!("textrix-room-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = test_app();
+        app.paths.base = dir.clone();
+        let owls = room_window(&mut app, "!a:x.org", "Night Owls");
+        let tests = room_window(&mut app, "!b:x.org", "Team Tests");
+        let showing = |app: &mut App, idx: usize| {
+            app.switch_to(idx);
+            app.follow_room_theme();
+            app.palette_for.clone()
+        };
+        let yours = ThemeId::default();
+
+        app.switch_to(owls);
+        app.command("theme here amber-deep");
+        assert_eq!(showing(&mut app, owls), ThemeName::AmberDeep.into());
+        assert_eq!(app.cfg.theme, yours, "yours stays as it was");
+        assert_eq!(showing(&mut app, tests), yours, "other rooms show yours");
+
+        app.spaces.insert(
+            "t".into(),
+            vec![SpaceInfo {
+                room_id: "!work:x.org".try_into().unwrap(),
+                name: "Work".into(),
+                children: vec!["!b:x.org".try_into().unwrap()],
+            }],
+        );
+        app.command("theme space Work turbo");
+        assert_eq!(showing(&mut app, tests), ThemeName::Turbo.into(), "a space's rooms take its theme");
+        assert_eq!(showing(&mut app, owls), ThemeName::AmberDeep.into());
+
+        // Changing yours in a room with its own keeps the room's, and says so.
+        app.command("theme dracula");
+        assert_eq!(
+            (showing(&mut app, owls), &app.cfg.theme),
+            (ThemeName::AmberDeep.into(), &ThemeName::Dracula.into())
+        );
+        assert!(app.windows[owls].lines.back().unwrap().body.contains("has a theme of its own"));
+
+        // The picker starts on "just here" in a room with a theme, and keeps
+        // its pick for the room only.
+        app.command("theme");
+        assert!(app.theme_picker.as_ref().unwrap().just_here);
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cfg.theme, ThemeName::Dracula.into(), "yours untouched");
+        assert_eq!(showing(&mut app, owls), ThemeName::AmberTron.into(), "the next one, for Night Owls");
+
+        app.command("theme here off");
+        assert_eq!(showing(&mut app, owls), ThemeName::Dracula.into());
+        assert!(app.layout.themes.iter().any(|(k, t)| k.room_id == "!work:x.org" && *t == ThemeName::Turbo.into()));
+        let saved = std::fs::read_to_string(app.paths.layout_file()).unwrap();
+        assert!(saved.contains("turbo") && !saved.contains("amber"), "kept in layout.json: {saved}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn coming_back_from_away_says_what_came_in() {
         let mut app = test_app();
         let room = room_window(&mut app, "!a:x.org", "Team Tests");
@@ -7082,7 +7299,10 @@ mod tests {
         app.on_event(AppEvent::Away { account: "t".into(), message: None });
 
         let said = &app.windows[0].lines.back().unwrap().body;
-        assert!(said.contains("while you were away") && said.contains("1 mention (Team Tests) and 1 DM (sam)"), "{said}");
+        assert!(
+            said.contains("while you were away") && said.contains("1 mention (Team Tests) and 1 DM (sam)"),
+            "{said}"
+        );
         assert!(app.win().is_mentions, "and there it is");
         let collected: Vec<&str> = app.win().lines.iter().map(|l| l.body.as_str()).collect();
         assert!(collected.contains(&"lunch?") && !collected.contains(&"before you went"), "{collected:?}");

@@ -45,7 +45,12 @@ use crate::{
 
 #[derive(Serialize, Deserialize)]
 pub enum ToDaemon {
-    Hello { version: String, size: (u16, u16), picker: Option<PickerInfo>, term: TermInfo },
+    Hello {
+        version: String,
+        size: (u16, u16),
+        picker: Option<PickerInfo>,
+        term: TermInfo,
+    },
     Event(Event),
     /// What the editor saved (Ctrl+X), or why it didn't.
     Edited(Result<String, String>),
@@ -67,7 +72,10 @@ pub enum ToClient {
     Restart,
     /// Open this editor on this text in the terminal (Ctrl+X), and say what
     /// it saved.
-    Edit { text: String, editor: String },
+    Edit {
+        text: String,
+        editor: String,
+    },
 }
 
 /// What the attached terminal can draw images with.

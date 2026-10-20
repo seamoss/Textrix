@@ -49,10 +49,8 @@ pub fn edit(editor: &str, text: &str, enhanced_keys: bool) -> Result<String> {
     let _ = enable_raw_mode();
     let _ = crossterm::execute!(out, EnterAlternateScreen, EnableBracketedPaste, EnableFocusChange);
     if enhanced_keys {
-        let _ = crossterm::execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
+        let _ =
+            crossterm::execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     }
     let _ = out.flush();
 
