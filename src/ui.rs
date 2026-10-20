@@ -1851,7 +1851,7 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
     } else if app.select.is_some() && win.is_mentions {
         return Some(Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert));
     } else if app.select.is_some() {
-        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom/play  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom/play  s save  o open  v spoiler  c copy  u who  i info  Esc";
         let keys = if app.selected_poll().is_some() { format!("Enter vote  {keys}") } else { keys.to_owned() };
         return Some(Span::styled(keys, t.bar_alert));
     } else if app.is_editing() {

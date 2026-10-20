@@ -142,8 +142,10 @@ straight away.
 
 ### The status bar
 
-`status("text")` puts an item in the status bar, after the others, until
-the script changes it, clears it with `status("")`, or unloads. Given a
+`status("text")` puts an item in the status bar where `scripts` sits in
+your `statusbar` (or `statusbar2`; by default after who's typing), until
+the script changes it, clears it with `status("")`, or unloads. Leaving
+`scripts` out of both bars hides scripts' items. Given a
 function, Textrix asks it once a second:
 
 ```rhai

@@ -1015,7 +1015,7 @@ const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "edit",
         args: "[text]",
-        help: "Edit a message: no text opens the editor (also Shift+Up, or Ctrl+E on an empty line)",
+        help: "Edit a message: no text picks one of yours to edit (also Shift+Up, or Ctrl+E on an empty line)",
     },
     Cmd { name: "redact", args: "", help: "Delete your last message (alias /del)" },
     Cmd {
@@ -1037,7 +1037,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "poll",
-        args: "<question> | <answer> | <answer>… | end",
+        args: "<question> | <answer> | <answer>…  or  end",
         help: "Start a poll here (Enter on one in selection mode votes), or end your latest",
     },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
@@ -1108,9 +1108,9 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[name | list | save <name> | import <file>]",
-        help: "Colours: no name opens the list, each shown as you move to it; list prints them; save writes this look \
-               to a theme file, import adds one",
+        args: "[name | list | here [name|off] | space <space> <name|off> | save <name> | import <file>]",
+        help: "Colours: no name opens the list, each shown as you move to it; list prints them; here and space give a \
+               room or a space's rooms their own; save writes this look to a theme file, import adds one",
     },
     Cmd {
         name: "themes",
@@ -1119,7 +1119,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "nicklist", args: "", help: "Toggle the member list (F3)" },
     Cmd { name: "servers", args: "", help: "List dotfile servers and their status" },
-    Cmd { name: "log", args: "[on|off]", help: "Chat logging for this session (log = true in config makes it stick)" },
+    Cmd { name: "log", args: "[on|off]", help: "Chat logging for this session (/save keeps it)" },
     Cmd {
         name: "set",
         args: "[name [value]]",
@@ -1213,7 +1213,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Home / End, Ctrl+D", "start / end of the line; delete the character under the cursor"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line; on an empty one, twice quits (detaches, in the background)"),
-    ("Ctrl+X", "write the message in your editor ($EDITOR); quitting it brings the text back here"),
+    (
+        "Ctrl+X",
+        "write the message in your editor (editor in config.toml, $VISUAL, $EDITOR or vi); quitting it brings the text back",
+    ),
     ("Ctrl+L", "redraw the screen"),
 ];
 
@@ -1234,8 +1237,32 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("c", "copy the text"),
     ("i", "sender, time and event ID"),
     ("u", "who sent it: their profile pane"),
-    ("Enter", "in the mentions window: go to the message in its room"),
+    ("Enter", "vote in a poll; in the mentions window, go to the message in its room"),
     ("Esc", "leave selection mode"),
+];
+
+pub const THEME_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓, PgUp / PgDn, Home / End", "move: each theme shows on the whole screen"),
+    ("type", "narrow the list"),
+    ("Ctrl+T", "pick for just this room, or everywhere"),
+    ("Enter", "keep it (for the session: /save keeps it for good)"),
+    ("Esc", "put back the one you had"),
+];
+
+pub const VOTE_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓", "choose an answer"),
+    ("1…9", "that answer (and vote, where you pick one)"),
+    ("Space", "tick or untick one, where you can pick several"),
+    ("Enter", "vote"),
+    ("Esc", "close without voting"),
+];
+
+pub const PROFILE_KEYS: &[(&str, &str)] = &[
+    ("↑ / ↓", "the next member in the list"),
+    ("m", "message them (a DM)"),
+    ("@", "mention them"),
+    ("n / i / v", "/nickname, /ignore or /verify them, in the input line to send"),
+    ("Esc", "close"),
 ];
 
 pub const EDIT_KEYS: &[(&str, &str)] = &[
@@ -1264,6 +1291,12 @@ pub fn help_rows(filter: &str) -> Vec<HelpRow> {
         ("Keys", KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         ("Selecting messages (Alt+Up)", SELECT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
         ("Editing (Shift+Up)", EDIT_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("The theme list (/theme)", THEME_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        ("Voting (Enter on a poll)", VOTE_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect()),
+        (
+            "A profile (click a name, or u)",
+            PROFILE_KEYS.iter().map(|(k, d)| ((*k).to_owned(), (*d).to_owned())).collect(),
+        ),
     ];
     let commands = COMMANDS
         .iter()
@@ -3311,8 +3344,6 @@ impl App {
         url.map(ToOwned::to_owned)
     }
 
-    /// A click on the member list: add that person to your message as a
-    /// mention, like completing their name.
     /// Open the profile pane on someone in this room's member list.
     fn open_member(&mut self, n: usize) {
         let Some(m) = self.win().members.get(n) else { return };
@@ -3323,6 +3354,11 @@ impl App {
     /// The profile pane, on `user` (on this window's server).
     pub fn open_profile(&mut self, user: OwnedUserId, name: String, member: Option<usize>) {
         let Some(account) = self.win().account().map(ToOwned::to_owned) else { return };
+        self.open_profile_on(account, user, name, member);
+    }
+
+    /// The profile pane, on `user` on `account`.
+    fn open_profile_on(&mut self, account: String, user: OwnedUserId, name: String, member: Option<usize>) {
         // Opened afresh unless it's already them (moving through the list
         // keeps what's loaded).
         if self.profile.as_ref().is_some_and(|p| p.user == user) {
@@ -4263,8 +4299,17 @@ impl App {
             Char('u') => match line.sender.clone() {
                 Some(sender) => {
                     let member = self.win().members.iter().position(|m| m.user_id == sender);
+                    // In the mentions window, the server is the message's own.
+                    let account = self
+                        .win()
+                        .account()
+                        .map(ToOwned::to_owned)
+                        .or_else(|| self.mention_origins.get(&event).map(|k| k.account.clone()));
                     self.select = None;
-                    self.open_profile(sender, line.nick.clone(), member);
+                    match account {
+                        Some(account) => self.open_profile_on(account, sender, line.nick.clone(), member),
+                        None => self.error("can't tell which server that's from"),
+                    }
                 }
                 None => self.error("that message has no sender to show"),
             },
@@ -6055,7 +6100,7 @@ impl App {
         for name in crate::theme::files(&dir) {
             let about = match ThemeFile::read(&ThemeFile::path(&dir, &name)) {
                 Ok(file) => file.description.unwrap_or_else(|| "one of yours".into()),
-                Err(_) => "can't be used (/theme says why)".into(),
+                Err(_) => "can't be used (/theme list says why)".into(),
             };
             entries.push(ThemeChoice { id: ThemeId::File(name), shelf: "yours", about });
         }
@@ -6320,9 +6365,10 @@ impl App {
             self.info(format!("    {name}{about}"));
         }
         self.info(
-            "/theme on its own picks one with a preview; /theme <name> tries one (theme = \"<name>\" in \
-             config.toml keeps it); /theme save <name> writes this look to a theme file to share, /theme import \
-             <file> adds one",
+            "/theme on its own picks one with a preview (Ctrl+T there: just this room); /theme <name> tries one \
+             (theme = \"<name>\" in config.toml keeps it); /theme here <name> and /theme space <space> <name> give \
+             a room or a space's rooms their own; /theme save <name> writes this look to a theme file to share, \
+             /theme import <file> adds one",
         );
     }
 
@@ -6366,8 +6412,13 @@ impl App {
         let stem = from.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
         let name = file.name.as_deref().unwrap_or(stem);
         match ThemeId::parse(name).map_err(|e| format!("{e:#}"))? {
-            ThemeId::File(_) if !THEME_WORDS.contains(&name) => {}
-            _ => return Err(format!("{name} is a built-in theme's name; change the file's name = line")),
+            ThemeId::File(_) if THEME_WORDS.contains(&name) => {
+                return Err(format!("“{name}” is a word /theme uses; change the file's name = line"));
+            }
+            ThemeId::File(_) => {}
+            ThemeId::Builtin(_) => {
+                return Err(format!("{name} is a built-in theme's name; change the file's name = line"));
+            }
         }
         let dir = self.paths.themes_dir();
         let to = ThemeFile::path(&dir, name);
@@ -6696,7 +6747,7 @@ impl App {
                 self.info(format!("layout {name} deleted"));
             }
             (name, "") if self.layout.layouts.contains_key(name) => return self.cmd_layout(&format!("load {name}")),
-            _ => return Err("usage: /layout [save <name> | load <name> | delete <name>]".into()),
+            _ => return Err("usage: /layout [<name> | save <name> | load <name> | delete <name>]".into()),
         }
         Ok(())
     }
@@ -7973,6 +8024,36 @@ mod tests {
         app.input.set_text(":blob");
         let offered: Vec<String> = app.candidates().into_iter().take(2).map(|c| c.text).collect();
         assert_eq!(offered, [":blobcat:", ":blobfox:"]);
+    }
+
+    #[test]
+    fn u_in_the_mentions_window_knows_the_server() {
+        let mut app = test_app();
+        let room = room_window(&mut app, "!a:x.org", "Team Tests");
+        let mut ping = msg("$m", "you: look");
+        (ping.highlight, ping.sender) = (true, Some("@carol:x.org".try_into().unwrap()));
+        let room_id: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        app.on_event(AppEvent::Timeline {
+            account: "t".into(),
+            room_id,
+            items: vec![Item::Line(ping)],
+            live: true,
+            limited: false,
+        });
+        let mentions = app.windows.iter().position(|w| w.is_mentions).unwrap();
+        assert_ne!(mentions, room);
+        app.switch_to(mentions);
+        app.enter_select();
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        let p = app.profile.as_ref().expect("their profile");
+        assert_eq!((p.account.as_str(), p.user.as_str()), ("t", "@carol:x.org"));
+
+        let help: Vec<String> = help_rows("ctrl+t")
+            .into_iter()
+            .filter_map(|r| if let HelpRow::Entry(k, _) = r { Some(k) } else { None })
+            .collect();
+        assert!(help.contains(&"Ctrl+T".to_owned()), "F1 has the theme list's keys: {help:?}");
+        assert!(!help_rows("ignore").is_empty() && !help_rows("tick").is_empty(), "and the profile's and voting's");
     }
 
     #[test]
@@ -9280,7 +9361,18 @@ mod tests {
             rows.iter().filter_map(|r| if let HelpRow::Section(t) = r { Some(*t) } else { None }).collect()
         };
         let all = help_rows("");
-        assert_eq!(titles(&all), vec!["Keys", "Selecting messages (Alt+Up)", "Editing (Shift+Up)", "Commands"]);
+        assert_eq!(
+            titles(&all),
+            vec![
+                "Keys",
+                "Selecting messages (Alt+Up)",
+                "Editing (Shift+Up)",
+                "The theme list (/theme)",
+                "Voting (Enter on a poll)",
+                "A profile (click a name, or u)",
+                "Commands"
+            ]
+        );
         let upgrade = help_rows("upgrade");
         assert_eq!(titles(&upgrade), vec!["Commands"]);
         assert!(upgrade.iter().any(|r| matches!(r, HelpRow::Entry(k, _) if k.starts_with("/upgrade"))));

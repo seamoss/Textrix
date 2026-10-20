@@ -7,6 +7,24 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.12.1] - 2026-10-20
+
+### Fixed
+- `u` on a message in the mentions window opens the sender's profile
+  (it did nothing there).
+- `/theme import` of a file named like a word `/theme` takes (`list`,
+  `here`…) says so, instead of calling it a built-in theme's name.
+
+### Changed
+- F1 lists the keys of the theme list, voting and the profile pane, and
+  `/help` describes `/theme here` and `/theme space`, Enter on a poll,
+  where Ctrl+X finds your editor, and `/layout <name>`. The status bar's
+  selection-mode keys include `u`.
+- The website: the features of 0.10–0.12, the profile screenshot, the
+  nick column in its drawn screen, and the version of the latest release
+  that's out (not one still building). The README and SCRIPTING.md
+  brought up to date with them.
+
 ## [0.12.0] - 2026-10-20
 
 ### Added

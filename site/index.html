@@ -192,6 +192,8 @@
   .info { color: #00afaf; }
   .hl { color: #ff5fff; font-weight: bold; }
   .rx { color: #888; }
+  .bcol { color: #555; }
+  .sys { color: #999; }
   .cursor { background: #ddd; color: #000; animation: blink 1s steps(1) infinite; }
   .input { padding: 0 6px; white-space: pre; }
   .input .p { color: #00afaf; }
@@ -346,7 +348,7 @@
 
   <div class="term-wrap" aria-label="A screenshot of Textrix, drawn with HTML">
     <div class="term">
-      <div class="titlebar"><span>Team Tests — Textrix</span><span class="btns" aria-hidden="true"><span>_</span><span>□</span><span>×</span></span></div>
+      <div class="titlebar"><span>Team Tests [2] — Textrix</span><span class="btns" aria-hidden="true"><span>_</span><span>□</span><span>×</span></span></div>
       <div class="bar"> Scratch room for testing things                                  📌 1 pinned · /pins </div>
       <div class="screen">
         <div class="side"> 1    status
@@ -359,13 +361,13 @@
 <span class="sec"> DMs</span>
  4 S  ● sam
 </div>
-        <div class="msgs"><span class="ts">21:00</span> <span class="info">-!-</span> Textrix {{VERSION}} — irssi-style Matrix client. Hack the planet!
-<span class="ts">21:02</span> <span class="rx">&lt;</span><span class="n1">sam</span><span class="rx">&gt;</span> did you see the new release?
-<span class="ts">21:02</span> <span class="rx">&lt;</span><span class="me">you</span><span class="rx">&gt;</span> it has a <b>full-screen image viewer</b> now
-<span class="ts">21:03</span> <span class="rx">&lt;</span><span class="n2">jo</span><span class="rx">&gt;</span> <span class="hl">you</span>: does it do threads? <span class="rx">[2 replies]</span>
-<span class="ts">21:03</span> <span class="info">-!-</span> alice, bob and 5 others joined · dave left
-<span class="ts">21:04</span> <span class="n3">* sam</span> slaps jo around a bit with a large trout
-<span class="ts">21:04</span> <span class="rx">&lt;</span><span class="n2">jo</span><span class="rx">&gt;</span> ¯\_(ツ)_/¯ <span class="rx">[🐟 3]  ✓ sam</span></div>
+        <div class="msgs"><span class="ts">21:00</span> <span class="info">-!-</span>            <span class="bcol">│</span> <i class="sys">Textrix {{VERSION}}. Hack the planet!</i>
+<span class="ts">21:02</span> <span class="rx">&lt;</span><span class="n1">sam</span><span class="rx">&gt;</span>          <span class="bcol">│</span> did you see the new release?
+<span class="ts">21:02</span> <span class="rx">&lt;</span><span class="me">you</span><span class="rx">&gt;</span>          <span class="bcol">│</span> it has <b>polls</b> now. and click anyone's name
+<span class="ts">21:03</span> <span class="rx">&lt;</span><span class="n2">jo</span><span class="rx">&gt;</span>           <span class="bcol">│</span> <span class="hl">you</span>: does it do threads? <span class="rx">[2 replies]</span>
+<span class="ts">21:03</span> <span class="info">--&gt;</span>            <span class="bcol">│</span> <i class="sys">alice, bob and 5 others joined</i>
+<span class="ts">21:04</span> <span class="n3">* sam</span>          <span class="bcol">│</span> sam slaps jo around a bit with a large trout
+<span class="ts">21:04</span> <span class="rx">&lt;</span><span class="n2">jo</span><span class="rx">&gt;</span>           <span class="bcol">│</span> ¯\_(ツ)_/¯ <span class="rx">[🐟 3]  ✓ sam</span></div>
       </div>
       <div class="bar"><span class="br">[</span>21:04<span class="br">]</span> <span class="br">[</span>you<span class="br">]</span> <span class="br">[</span>10:Team Tests(+E)<span class="br">]</span> <span class="br">[</span>Act: <b style="color:#ff5fff">2</b>,<b>3</b><span class="br">]</span> <span class="br">[</span>typing: sam<span class="br">]</span></div>
       <div class="input"><span class="p">[Team Tests]</span> brb, the 8-ball says <span class="cursor"> </span></div>
@@ -377,14 +379,18 @@
     <tr><td>🔐 Encryption</td><td>End-to-end encrypted rooms, emoji verification, your recovery key, key backup. Even the local store is encrypted, with its key in your keychain.</td></tr>
     <tr><td>🪟 Windows</td><td>irssi-style numbered windows, a window list, split panes you can drag to size and save as layouts, and a quick switcher (Ctrl+K) that finds anything you half-remember.</td></tr>
     <tr><td>🌙 Background mode</td><td>Like irssi in screen: <code>textrix --daemon</code> keeps you connected with no terminal, <code>textrix</code> comes back to it, <code>/detach</code> leaves it running.</td></tr>
-    <tr><td>⬆️ Upgrades</td><td><code>brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing. <span class="new">NEW!</span></td></tr>
+    <tr><td>⬆️ Upgrades</td><td><code>brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing.</td></tr>
     <tr><td>🔎 Search</td><td>Every room, encrypted ones too, up to 20,000 messages back in each, found instantly from an index kept encrypted on your disk. <code>/search from:sam in:"Book Club" before:2026 pizza</code></td></tr>
     <tr><td>🧵 Threads &amp; spaces</td><td>Threads open in their own windows. Spaces group your rooms.</td></tr>
     <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. Drag a file onto the terminal to send it.</td></tr>
     <tr><td>🎤 Voice &amp; video</td><td>See the waveform ▁▃▅▇▅▃▁, press <code>z</code> to hear it; videos open in your player.</td></tr>
     <tr><td>🌈 Code</td><td>Code blocks in colour, even on a green-screen monitor (in shades of green).</td></tr>
     <tr><td>🔔 Bells</td><td>Mentions, highlight words, per-room notification levels that sync with your other clients, a visual bell, and a mentions inbox.</td></tr>
-    <tr><td>🎨 Themes</td><td>Thirty! Turbo Pascal blue, Procomm, C64, Amiga Workbench, Delphi 7, mIRC, Solarized, Monokai, Dracula, Nord, Gruvbox, Catppuccin, an IBM 5151 framed in ASCII, and monochrome monitors in green, blue, red or amber (on black, on 80s-airport blue, or Tron neon on pure black). Make your own and send it to a friend. There's also a secret way to get the green one. Ask a 1986 video game. <span class="new">NEW!</span> <a href="#themes">See them all</a></td></tr>
+    <tr><td>🎨 Themes</td><td>Thirty! Turbo Pascal blue, Procomm, C64, Amiga Workbench, Delphi 7, mIRC, Solarized, Monokai, Dracula, Nord, Gruvbox, Catppuccin, an IBM 5151 framed in ASCII, and monochrome monitors in green, blue, red or amber (on black, on 80s-airport blue, or Tron neon on pure black). Make your own and send it to a friend, and give each room its own so work looks like work. There's also a secret way to get the green one. Ask a 1986 video game. <a href="#themes">See them all</a></td></tr>
+    <tr><td>📊 Polls, stickers &amp; emoji</td><td>Vote in Element's polls from the keyboard (results in little bars), start your own with <code>/poll</code>, see stickers, and use your image packs' custom emoji. <span class="new">NEW!</span></td></tr>
+    <tr><td>👤 Who's who</td><td>Click anyone's name for their picture, presence, role and verified devices, right beside the member list. <span class="new">NEW!</span></td></tr>
+    <tr><td>✍️ Writing</td><td>Ctrl+X opens your own editor for the long ones; <code>/later 18:30</code> sends it while you're at dinner; nicks line up in a column like irssi's. <span class="new">NEW!</span></td></tr>
+    <tr><td>🏖️ Away log</td><td>Go <code>/away</code>, come back to "while you were away: 3 mentions and 2 DMs", all in one window. And a status bar you arrange yourself. <span class="new">NEW!</span></td></tr>
     <tr><td>📜 Scripts</td><td>Like irssi's Perl scripts, but in Rhai: drop a file in <code>~/.textrix/scripts</code> to add commands, answer messages, run timers and put things in the status bar. The examples include dice.</td></tr>
     <tr><td>⌨️ Commands</td><td>/join /msg /me /away /ignore /lastlog /search /alias … and a few that aren't in <code>/help</code>.</td></tr>
   </table>
@@ -398,13 +404,15 @@
   <img class="shot" src="screenshots/main.svg" alt="Textrix: the window list with unread rooms on top, a conversation with a code block, a voice message and a picture, and the member list" width="1144" height="673">
   <img class="shot" src="screenshots/panes.svg" alt="Two rooms side by side in the blue-tron theme, framed in neon lines on pure black" width="1144" height="616" loading="lazy">
   <img class="shot" src="screenshots/picker.svg" alt="The /themes list at the right, trying turbo: the whole screen in yellow on DOS blue" width="1144" height="673" loading="lazy">
+  <img class="shot" src="screenshots/profile.svg" alt="sam's profile beside the member list: picture, names, presence, role and verified devices" width="1144" height="616" loading="lazy">
 
   <h2 id="themes">🎨 The Theme-O-Rama</h2>
   <p>
     All thirty. Type <code>/themes</code> and flick through them with the
     arrow keys, the whole screen changing as you go (Enter keeps one,
-    <code>/save</code> keeps it for good), or <code>/theme save mine</code> to
-    bottle your own and send it to a friend on a floppy.
+    <code>/save</code> keeps it for good; Ctrl+T there gives just the room
+    you're in its own), or <code>/theme save mine</code> to bottle your own
+    and send it to a friend on a floppy.
   </p>
   <p class="shelf">» Classic</p>
   <div class="gallery">

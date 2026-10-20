@@ -109,7 +109,7 @@ impl ThemeName {
     ];
 
     /// A theme by name (also "dark", "phosphor", "virtualboy",
-    /// "solarized", "catppuccin-mocha", "ibm").
+    /// "solarized", "catppuccin-mocha", "mocha", "ibm", "5151").
     pub fn parse(name: &str) -> Option<ThemeName> {
         match name {
             "dark" => Some(ThemeName::Default),
@@ -328,7 +328,7 @@ impl ThemeFile {
         match self.base.as_deref() {
             None => Ok(ThemeName::Default),
             Some(name) => ThemeName::parse(name)
-                .with_context(|| format!("base: “{name}” isn't a built-in theme (they're listed by /theme)")),
+                .with_context(|| format!("base: “{name}” isn't a built-in theme (/theme list lists them)")),
         }
     }
 
@@ -985,7 +985,7 @@ impl Theme {
             ThemeId::File(name) => {
                 let path = ThemeFile::path(dir, name);
                 if !path.exists() {
-                    bail!("there's no theme {name} (no {}); /theme lists them", path.display());
+                    bail!("there's no theme {name} (no {}); /theme list lists them", path.display());
                 }
                 ThemeFile::read(&path)?.theme()?
             }

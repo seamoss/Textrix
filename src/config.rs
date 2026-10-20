@@ -214,7 +214,7 @@ pub struct Config {
     /// title alone.
     pub title: String,
     /// Colours: a built-in theme ("default", "light", "green-tron",
-    /// "turbo", "dracula"… /theme lists them) or a theme file's name, from
+    /// "turbo", "dracula"… /theme list lists them) or a theme file's name, from
     /// `themes/<name>.toml` next to this file.
     pub theme: ThemeId,
     /// Your own commands (`/alias`): name -> what it runs.

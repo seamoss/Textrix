@@ -153,6 +153,7 @@ unencrypted too.
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
 | F6 / Shift+F6 | focus the next / previous split pane |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
+| Alt+B / Alt+F, Ctrl+← / Ctrl+→, Home / End | back / forward a word; start / end of the line |
 | Ctrl+C twice | on an empty line, quits ("press Ctrl+C again to quit"); in the background, detaches instead |
 | Ctrl+X | write the message in your editor (`editor` in config.toml, else `$VISUAL`, else `$EDITOR`, else vi); save and quit, and the text is back in the input line to send. The editor works on a private temporary file, deleted when it closes, and in background mode it runs in the attached terminal |
 | Ctrl+L | redraw |
@@ -206,7 +207,7 @@ bindings.
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Thread roots show `[N replies]`; replies also appear in the room with their context |
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is, `/poll <question> \| <answer> \| <answer>…` and `/poll end` (see [Polls](#polls)), `/later <when> <text>` (see [Sending later](#sending-later)) |
-| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
+| Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? Enter/y uploads, n keeps it as text"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
@@ -215,7 +216,7 @@ bindings.
 | Split panes | `/split <window>` (below) or `/vsplit <window>` (beside) shows another window at the same time, up to 4; each pane has its own title bar, and `▶` marks the one you're typing in. Going to a window that's already in a pane focuses it; any other window replaces the focused pane's. `/unsplit` closes the focused pane (the window stays open), `/unsplit all` keeps only it. Drag the line between two panes (or the upper one's title bar) to resize them, or `/resize +5`, `/resize -5` (rows, or columns side by side), `/resize =` to even them up. The split you quit with is back next time, sizes and all. `/layout save <name>` keeps the panes (and whether the window and member lists show) to bring back with `/layout load <name>` or `/layout <name>`; `/layout` lists them, `/layout delete <name>` removes one |
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
-| Scripts | `/script` lists them, `/script load\|unload\|reload <name>`, `/script exec <code>`; see [Scripts](#scripts) |
+| Scripts | `/script` (or `/script list`) lists them, `/script load\|unload <name>`, `/script reload [name]` (no name: every file), `/script exec <code>`; see [Scripts](#scripts) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 ![Two rooms side by side (/vsplit Book Club) in blue-tron, every panel framed in thin neon lines on pure black](site/screenshots/panes.svg)
@@ -347,7 +348,7 @@ your latest open one here, saying how it came out.
 ### Sending later
 
 `/later 10m <text>` sends it in ten minutes, `/later 1h30m <text>` in an
-hour and a half; `/later 18:30 <text>` at the next 18:30, `/later tomorrow
+hour and a half (`90s` and `2d` work too); `/later 18:30 <text>` at the next 18:30, `/later tomorrow
 9:00 <text>` tomorrow morning. `/later` lists what's waiting, `/later
 cancel 2` (or `all`) takes it back. Textrix sends them, so it has to be
 running then (in the background is fine); one that falls due while
@@ -380,7 +381,8 @@ stays in a private folder until Textrix closes.
 ![sam's profile beside the member list: picture, names, presence, role, verified devices](site/screenshots/profile.svg)
 
 Click a name in the member list, or a nick on a message (`u` in selection
-mode), and their profile opens beside the member list: their picture,
+mode; in the mentions window, where a click goes to the message, `u` is
+the way), and their profile opens beside the member list: their picture,
 their name and yours for them, Matrix ID, presence, role in the room,
 whether you've verified them and their devices. ↑/↓ goes through the
 member list. `m` opens a DM with them and `@` mentions them; `n`
@@ -401,7 +403,7 @@ line for you to send. Esc closes it.
   45 seconds without an update.
 - Like irssi's "is away": when you write to someone who's away (in your DM
   with them, by mentioning them, or replying to them), a line says so
-  ("sam is away: lunch"), when it's news: they set a status, or they've
+  ("sam is away: lunch"), when it's news: they're away with a status, or they've
   been gone half an hour or more ("sam is offline, last seen 3h ago").
   Presence is only a guess (a missed heartbeat reads as offline, and some
   people and servers don't share it), so a bare "offline", a few idle
@@ -480,7 +482,10 @@ the mouse) shows each theme on the whole screen, typing narrows the list,
 Enter keeps the one you're on for the session and Esc puts back the one
 you had. `/save` keeps it for good, like `theme = "<name>"` in
 config.toml. `/theme <name>` goes straight to one, `/theme list` lists
-them in the status window, and `--theme <name>` picks one for a run.
+them in the status window, and `--theme <name>` picks one for a run. A
+few have other names too: `dark` (default), `phosphor` (green),
+`virtualboy` (red), `solarized` (solarized-dark), `mocha` (catppuccin),
+`ibm` (ibm5151).
 
 A room can keep a theme of its own, so work and play look different at
 a glance: `/theme here amber-deep` (or Ctrl+T in the list, for "just
@@ -594,8 +599,8 @@ DM counter and `/remind` to start from.
 `~/.textrix/config.toml` holds your preferences (all keys optional).
 `/set` lists them and `/set <name> <value>` changes one for the session
 (`/set theme blue-deep`; `sync`, `encrypt_store`, `search_index`,
-`history_cache`, `check_updates` and `scripts` take effect at the next
-start); `/save` writes the session's settings back into
+`history_cache`, `check_updates`, `scripts` and turning `image_previews`
+on take effect at the next start); `/save` writes the session's settings back into
 the file, including what `/theme`, `/bell`, `/log`, F2 and F3 changed,
 leaving your comments alone. After editing the file by hand, `/reload`
 applies it (and picks up servers added to or removed from the dotfile):
@@ -633,7 +638,7 @@ sidebar_avatars = true     # room avatars there (coloured initials without graph
 nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
-theme = "default"          # or one of the others /theme lists, or your own; [colors] overrides
+theme = "default"          # or one of the others /theme list lists, or your own; [colors] overrides
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain

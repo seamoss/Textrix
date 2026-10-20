@@ -253,7 +253,7 @@ where Textrix is installed (Homebrew: $(brew --prefix)/share/textrix). \
 Secrets are read only for the call that needs them, and environment \
 variables of the same name override the file. Preferences live in \
 ~/.textrix/config.toml and your own themes in ~/.textrix/themes; inside \
-Textrix, /set and /save change preferences, /theme lists the themes, and F1 \
+Textrix, /set and /save change preferences, /theme picks a theme with a live preview, and F1 \
 lists every key and command.";
 
 /// `--theme`: any theme name, with the built-in ones offered to shell
