@@ -98,10 +98,14 @@ jobs:
           path: textrix-*.tar.gz*
           if-no-files-found: error
 
-  # One macOS binary for both chips, for the Homebrew formula.
+  # One macOS binary for both chips, for the Homebrew formula. Joining
+  # the two builds needs no Mac (LLVM's lipo makes the same file: each
+  # chip's part as built, signatures and all), and Linux runners don't
+  # keep it waiting: on macOS ones it was cancelled after 15 minutes in
+  # the queue, twice.
   universal:
     needs: [check, build]
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
@@ -111,15 +115,21 @@ jobs:
           merge-multiple: true
       - name: Combine
         run: |
+          lipo=$(ls /usr/lib/llvm-*/bin/llvm-lipo 2>/dev/null | sort -V | tail -1)
+          if [ -z "$lipo" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq llvm
+            lipo=$(ls /usr/lib/llvm-*/bin/llvm-lipo | sort -V | tail -1)
+          fi
           for arch in aarch64 x86_64; do tar -xzf "textrix-v$VERSION-$arch-apple-darwin.tar.gz"; done
           name="textrix-v$VERSION-universal-apple-darwin"
           mkdir "$name"
-          lipo -create -output "$name/textrix" \
+          "$lipo" -create -output "$name/textrix" \
             "textrix-v$VERSION-aarch64-apple-darwin/textrix" "textrix-v$VERSION-x86_64-apple-darwin/textrix"
-          lipo -archs "$name/textrix"
+          "$lipo" "$name/textrix" -verify_arch x86_64 arm64
+          "$lipo" -archs "$name/textrix"
           cp "textrix-v$VERSION-aarch64-apple-darwin"/{README.md,LICENSE,.env.example} "$name/"
           tar -czf "$name.tar.gz" "$name"
-          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v7
         with:
           name: universal-apple-darwin
