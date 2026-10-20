@@ -13,6 +13,8 @@ release notes.
 - A nick cut short in the nick column ends in "… " with a space before
   the `>`, so fonts whose "…" spills out of its cell don't draw it over
   the `>`.
+- 0.9.5 wasn't built as a release of its own; this release includes it
+  ("is away" notes only when they're news).
 
 ## [0.9.5] - 2026-10-20
 
