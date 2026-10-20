@@ -258,6 +258,17 @@ impl Poll {
     }
 }
 
+/// A message to send later (`/later`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Scheduled {
+    pub room_id: OwnedRoomId,
+    /// The room's name when it was scheduled, for the list.
+    pub room: String,
+    /// When to send it (seconds since 1970).
+    pub due: i64,
+    pub text: String,
+}
+
 /// One converted timeline event.
 #[derive(Clone, Debug)]
 pub enum Item {

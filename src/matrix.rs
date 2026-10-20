@@ -221,6 +221,12 @@ pub enum AppEvent {
     Quit,
     /// The attached terminal's editor (Ctrl+X) finished: what it saved.
     Edited(Result<String, String>),
+    /// Messages scheduled with `/later` on this server, from where they're
+    /// kept.
+    Scheduled {
+        account: AccountName,
+        items: Vec<crate::model::Scheduled>,
+    },
     /// Custom emoji from image packs: yours and the ones you've made
     /// global, and each room's own. (shortcode, picture).
     CustomEmoji {
@@ -403,6 +409,9 @@ pub struct Account {
     history_cache: bool,
     /// Decrypted messages for `/search` (with an encrypted store only).
     index: Arc<std::sync::Mutex<Option<SearchIndex>>>,
+    /// Seals files kept for later (scheduled messages), with an encrypted
+    /// store only.
+    sealer: Option<Arc<crate::sealed::Sealer>>,
 }
 
 /// Settings [`connect`] takes from the config.
@@ -490,6 +499,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         },
     };
 
+    let sealer = if keychain && enc_store.exists() { open_sealer(&dir, &vault_name).await } else { None };
     let index = if opts.search_index && keychain && enc_store.exists() {
         open_index(&dir, &vault_name, &notify).await
     } else {
@@ -514,7 +524,24 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         fresh_login: !restored,
         history_cache: opts.history_cache,
         index: Arc::new(std::sync::Mutex::new(index)),
+        sealer: sealer.map(Arc::new),
     })
+}
+
+/// The account's sealer for files kept for later, unlocked like the index.
+async fn open_sealer(dir: &Path, vault_name: &str) -> Option<crate::sealed::Sealer> {
+    let item = vault::get(vault_name).ok().flatten()?;
+    let passphrase = serde_json::from_str::<Vaulted>(&item).ok()?.passphrase;
+    let dir = dir.to_owned();
+    let opened = tokio::task::spawn_blocking(move || crate::sealed::Sealer::open(&dir, passphrase.as_bytes())).await;
+    match opened {
+        Ok(Ok(sealer)) => Some(sealer),
+        Ok(Err(e)) => {
+            tracing::warn!("sealed files: {e:#}");
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 /// The account's search index, unlocked with its store's keychain secret.
@@ -1955,6 +1982,43 @@ impl Account {
             let content = NewUnstablePollStartEventContent::plain_text(fallback, block);
             acct.room(&room_id)?.send(content).await?;
             Ok(())
+        });
+    }
+
+    /// Whether scheduled messages can be kept on disk (sealed), not only
+    /// until Textrix closes.
+    pub fn keeps_later(&self) -> bool {
+        self.sealer.is_some()
+    }
+
+    /// Read the messages scheduled with `/later` back from disk.
+    pub fn load_later(&self) {
+        let Some(sealer) = self.sealer.clone() else { return };
+        let (path, name, notify) = (self.dir.join("later"), self.name.clone(), self.notify.clone());
+        tokio::task::spawn_blocking(move || {
+            let items: Vec<crate::model::Scheduled> =
+                sealer.read(&path).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+            if !items.is_empty() {
+                let _ = notify.send(AppEvent::Scheduled { account: name, items });
+            }
+        });
+    }
+
+    /// Keep `items` (this server's scheduled messages) on disk, sealed.
+    pub fn save_later(&self, items: Vec<crate::model::Scheduled>) {
+        let Some(sealer) = self.sealer.clone() else { return };
+        let path = self.dir.join("later");
+        tokio::task::spawn_blocking(move || {
+            let result = if items.is_empty() {
+                std::fs::remove_file(&path)
+                    .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+                    .map_err(Into::into)
+            } else {
+                serde_json::to_vec(&items).map_err(anyhow::Error::from).and_then(|bytes| sealer.write(&path, &bytes))
+            };
+            if let Err(e) = result {
+                tracing::warn!("keeping scheduled messages: {e:#}");
+            }
         });
     }
 

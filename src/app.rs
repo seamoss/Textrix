@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::Result;
-use chrono::Local;
+use chrono::{Local, TimeZone};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use futures_util::{Stream, StreamExt};
 use matrix_sdk::notification_settings::RoomNotificationMode;
@@ -43,7 +43,7 @@ use crate::{
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
     model::{
         AccountName, Activity, Fold, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Poll, Presence,
-        PresenceKind, RoomMeta, SpaceInfo, ago,
+        PresenceKind, RoomMeta, Scheduled, SpaceInfo, ago,
     },
     notify,
     picture::{Painter, Picture},
@@ -880,6 +880,8 @@ pub struct App {
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
     pub vote: Option<VotePicker>,
+    /// Messages to send later (`/later`), soonest first.
+    later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
     custom_emoji: HashMap<AccountName, (Vec<(String, OwnedMxcUri)>, HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>>)>,
     /// Ctrl+X: this text, to open in your editor.
@@ -1007,6 +1009,11 @@ const COMMANDS: &[Cmd] = &[
         name: "play",
         args: "[nick | stop]",
         help: "Play the last voice message, audio or video (from nick); stop stops audio",
+    },
+    Cmd {
+        name: "later",
+        args: "[<10m|1h30m|18:30|tomorrow 9:00> <text> | cancel <N|all>]",
+        help: "Send a message here later (while Textrix runs); no text lists what's waiting",
     },
     Cmd {
         name: "poll",
@@ -1355,6 +1362,7 @@ impl App {
             theme_picker: None,
             vote: None,
             custom_emoji: HashMap::new(),
+            later: Vec::new(),
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
@@ -1858,6 +1866,14 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::Scheduled { account, items } => {
+                for item in items {
+                    if !self.later.iter().any(|(a, s)| *a == account && *s == item) {
+                        self.later.push((account.clone(), item));
+                    }
+                }
+                self.later.sort_by_key(|(_, s)| s.due);
+            }
             AppEvent::CustomEmoji { account, global, rooms } => {
                 self.custom_emoji.insert(account, (global, rooms));
             }
@@ -1928,6 +1944,7 @@ impl App {
                 if let Some(state) = self.accounts.get_mut(&name) {
                     state.status = ConnStatus::Syncing;
                     account.start();
+                    account.load_later();
                     state.account = Some(account);
                 }
             }
@@ -2940,6 +2957,7 @@ impl App {
     pub fn on_clock(&mut self) {
         // A server that never connects shouldn't hold the split back.
         self.restore_split();
+        self.send_due_later();
         self.clock_ticks += 1;
         if self.clock_ticks.is_multiple_of(30) {
             self.watch_install();
@@ -3882,6 +3900,116 @@ impl App {
         }
     }
 
+    /// `/later <when> <text>` sends it then; `/later` lists what's
+    /// waiting, `/later cancel <N|all>` takes it back.
+    fn cmd_later(&mut self, args: &str) -> Result<(), String> {
+        let usage =
+            "usage: /later <10m | 1h30m | 18:30 | tomorrow 9:00> <text>; /later lists them; /later cancel <N|all>";
+        let args = args.trim();
+        if args.is_empty() {
+            if self.later.is_empty() {
+                self.info("nothing scheduled; /later 10m <text> sends it in 10 minutes");
+            }
+            let now = Local::now();
+            let rows: Vec<String> = self
+                .later
+                .iter()
+                .enumerate()
+                .map(|(n, (_, s))| {
+                    let due = Local.timestamp_opt(s.due, 0).single().unwrap_or(now);
+                    let when = if due <= now {
+                        "as soon as it's connected".to_owned()
+                    } else {
+                        format!(
+                            "at {} (in {})",
+                            due.format("%a %H:%M"),
+                            short_duration((due - now).to_std().unwrap_or_default())
+                        )
+                    };
+                    format!("{:>2}. {} {when}: {}", n + 1, s.room, snippet(&s.text))
+                })
+                .collect();
+            for row in rows {
+                self.info(row);
+            }
+            return Ok(());
+        }
+        if let Some(which) = args.strip_prefix("cancel") {
+            let which = which.trim();
+            let gone: Vec<AccountName> = if which == "all" {
+                self.later.drain(..).map(|(a, _)| a).collect()
+            } else {
+                let n: usize = which.parse().map_err(|_| usage.to_owned())?;
+                if n == 0 || n > self.later.len() {
+                    return Err(format!("there's no {n}; /later lists them"));
+                }
+                vec![self.later.remove(n - 1).0]
+            };
+            self.info(match gone.len() {
+                0 => "nothing to cancel".to_owned(),
+                1 => "cancelled".to_owned(),
+                n => format!("cancelled {n}"),
+            });
+            for account in gone {
+                self.keep_later(&account);
+            }
+            return Ok(());
+        }
+        let (due, text) = parse_later(args, Local::now()).ok_or(usage)?;
+        let (acct, room_id) = self.room_ctx()?;
+        let room = self.win().title().to_owned();
+        let account = acct.name.clone();
+        self.later.push((
+            account.clone(),
+            Scheduled { room_id, room: room.clone(), due: due.timestamp(), text: text.to_owned() },
+        ));
+        self.later.sort_by_key(|(_, s)| s.due);
+        let kept = if acct.keeps_later() {
+            ""
+        } else {
+            " (kept until Textrix closes: there's no keychain to keep it safe on disk)"
+        };
+        self.info(format!("{room} gets it {}{kept}; /later lists what's waiting", due.format("at %a %H:%M")));
+        self.keep_later(&account);
+        Ok(())
+    }
+
+    /// Save `account`'s scheduled messages (sealed, where it can).
+    fn keep_later(&self, account: &AccountName) {
+        if let Some(acct) = self.connected(account) {
+            acct.save_later(self.later.iter().filter(|(a, _)| a == account).map(|(_, s)| s.clone()).collect());
+        }
+    }
+
+    /// Send scheduled messages that are due, on servers that are connected.
+    fn send_due_later(&mut self) {
+        let now = Local::now().timestamp();
+        let due: Vec<usize> = (0..self.later.len())
+            .filter(|&i| self.later[i].1.due <= now && self.connected(&self.later[i].0).is_some())
+            .collect();
+        let mut accounts = Vec::new();
+        for i in due.into_iter().rev() {
+            let (account, item) = self.later.remove(i);
+            let Some(acct) = self.connected(&account) else { continue };
+            let content =
+                self.with_custom_emoji(&account, &item.room_id, compose(&item.text, Say::Text, &[], self.cfg.markdown));
+            acct.send(item.room_id.clone(), content, TransactionId::new());
+            let note = Line::info(format!("sent your scheduled message: {}", snippet(&item.text)));
+            match self.window_idx(&account, &item.room_id) {
+                Some(idx) => {
+                    let cap = self.cfg.scrollback;
+                    self.windows[idx].push(note, cap);
+                }
+                None => self.status(note),
+            }
+            accounts.push(account);
+        }
+        accounts.dedup();
+        for account in accounts {
+            self.keep_later(&account);
+        }
+    }
+
     /// `/poll <question> | <answer> | <answer>…` starts one; `/poll end`
     /// ends your latest open one here.
     fn cmd_poll(&mut self, args: &str) -> Result<(), String> {
@@ -4519,6 +4647,7 @@ impl App {
             "markread" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
             "poll" => self.cmd_poll(args),
+            "later" => self.cmd_later(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
                 Ok(())
@@ -6925,6 +7054,54 @@ fn is_mention(line: &Line) -> bool {
     line.highlight && !line.own && line.is_message()
 }
 
+/// `/later`'s time: `10m`, `1h30m`, `90s`, `2d` from now; `18:30` (the
+/// next one); `tomorrow 9:00`. With the text after it.
+fn parse_later(args: &str, now: chrono::DateTime<Local>) -> Option<(chrono::DateTime<Local>, &str)> {
+    let (first, rest) = args.split_once(char::is_whitespace)?;
+    let (when, text) =
+        if first == "tomorrow" { rest.trim_start().split_once(char::is_whitespace)? } else { (first, rest) };
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some((h, m)) = when.split_once(':') {
+        let time = chrono::NaiveTime::from_hms_opt(h.parse().ok()?, m.parse().ok()?, 0)?;
+        let mut day = now.date_naive();
+        if first == "tomorrow" {
+            day = day.succ_opt()?;
+        }
+        let mut due = Local.from_local_datetime(&day.and_time(time)).earliest()?;
+        if due <= now {
+            due = Local.from_local_datetime(&day.succ_opt()?.and_time(time)).earliest()?;
+        }
+        return Some((due, text));
+    }
+    if first == "tomorrow" {
+        return None;
+    }
+    // 1h30m: numbers each with a unit.
+    let mut secs = 0i64;
+    let mut number = String::new();
+    for c in when.chars() {
+        if c.is_ascii_digit() {
+            number.push(c);
+            continue;
+        }
+        let n: i64 = std::mem::take(&mut number).parse().ok()?;
+        secs += n * match c {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            'd' => 86400,
+            _ => return None,
+        };
+    }
+    if !number.is_empty() || secs <= 0 {
+        return None;
+    }
+    Some((now + chrono::TimeDelta::seconds(secs), text))
+}
+
 /// "45s", "2m 13s", "1h 5m".
 fn short_duration(d: Duration) -> String {
     let s = d.as_secs();
@@ -7599,6 +7776,59 @@ mod tests {
 
         assert!(app.cmd_poll("Lunch? | soup").unwrap_err().contains("usage"), "two answers at least");
         assert!(app.cmd_poll("end").is_err(), "not connected, nothing to end");
+    }
+
+    #[test]
+    fn later_takes_durations_and_times() {
+        let now = Local.with_ymd_and_hms(2026, 10, 20, 17, 0, 0).unwrap();
+        let at = |args: &str| {
+            parse_later(args, now).map(|(due, text)| (due.format("%d %H:%M:%S").to_string(), text.to_owned()))
+        };
+        assert_eq!(at("10m stretch"), Some(("20 17:10:00".into(), "stretch".into())));
+        assert_eq!(at("1h30m call mum"), Some(("20 18:30:00".into(), "call mum".into())));
+        assert_eq!(at("90s go"), Some(("20 17:01:30".into(), "go".into())));
+        assert_eq!(at("18:30 dinner?"), Some(("20 18:30:00".into(), "dinner?".into())), "later today");
+        assert_eq!(
+            at("9:00 morning all"),
+            Some(("21 09:00:00".into(), "morning all".into())),
+            "passed today: tomorrow"
+        );
+        assert_eq!(at("tomorrow 18:30 dinner"), Some(("21 18:30:00".into(), "dinner".into())));
+        for bad in ["10m", "soon hello", "10x hi", "25:00 hi", "tomorrow hi", "0m hi", "10"] {
+            assert_eq!(at(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn scheduled_messages_list_and_cancel() {
+        let mut app = test_app();
+        let soon = Local::now().timestamp() + 600;
+        for (n, text) in ["first", "second"].into_iter().enumerate() {
+            let item = Scheduled {
+                room_id: "!a:x.org".try_into().unwrap(),
+                room: "Night Owls".into(),
+                due: soon + n as i64,
+                text: text.into(),
+            };
+            app.later.push(("t".into(), item));
+        }
+        app.cmd_later("").unwrap();
+        let shown: Vec<&str> = app.windows[0].lines.iter().rev().take(2).map(|l| l.body.as_str()).collect();
+        assert!(shown[1].starts_with(" 1. Night Owls at ") && shown[1].ends_with(": first"), "{shown:?}");
+        app.cmd_later("cancel 1").unwrap();
+        assert_eq!(app.later.len(), 1);
+        assert_eq!(app.later[0].1.text, "second");
+        assert!(app.cmd_later("cancel 5").is_err());
+        app.cmd_later("cancel all").unwrap();
+        assert!(app.later.is_empty());
+        assert!(app.cmd_later("in a bit hello").unwrap_err().starts_with("usage"));
+        // Due, but not connected: it waits.
+        app.later.push((
+            "t".into(),
+            Scheduled { room_id: "!a:x.org".try_into().unwrap(), room: "x".into(), due: 0, text: "hi".into() },
+        ));
+        app.on_clock();
+        assert_eq!(app.later.len(), 1, "sent once the server's connected");
     }
 
     #[test]

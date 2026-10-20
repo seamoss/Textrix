@@ -22,6 +22,7 @@ mod picture;
 mod remote;
 mod richtext;
 mod script;
+mod sealed;
 mod search;
 mod servers;
 mod switcher;
