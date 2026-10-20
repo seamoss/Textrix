@@ -7,6 +7,13 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.4] - 2026-10-19
+
+### Fixed
+- "Day changed" lines are laid out like Textrix's other lines: `-!-` in
+  the nick column under the timestamps, the bar in line with the rest,
+  and quieter in rooms.
+
 ## [0.9.3] - 2026-10-19
 
 ### Changed

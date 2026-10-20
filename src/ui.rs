@@ -894,7 +894,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             need = height + win.scroll;
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
-            rows.push(day_changed(&cfg.palette, line.ts));
+            rows.push(day_changed(cfg, width, line.ts, set_apart));
             row_events.push((None, false));
             divided = true;
         }
@@ -1130,8 +1130,28 @@ fn new_messages(t: &Theme, width: usize) -> TLine<'static> {
     TLine::from(Span::styled(format!("{rule}{label}{rule}"), t.divider))
 }
 
-fn day_changed(t: &Theme, ts: DateTime<Local>) -> TLine<'static> {
-    TLine::from(vec![Span::styled("-!- ", t.accent), Span::raw(format!("Day changed to {}", ts.format("%a %d %b %Y")))])
+/// "-!- Day changed to …", laid out like Textrix's other lines (in the
+/// nick column, when there is one) with no time of its own; `quiet` in
+/// rooms, as they are.
+fn day_changed(cfg: &Config, width: usize, ts: DateTime<Local>, quiet: bool) -> TLine<'static> {
+    let t = &cfg.palette;
+    let stamp = display_len(&ts.format(&cfg.timestamp_format).to_string());
+    let mut spans = vec![Span::raw(" ".repeat(stamp + 1)), Span::styled("-!-", t.accent)];
+    match nick_column(cfg, width) {
+        Some(n) => {
+            spans.push(Span::raw(" ".repeat(n)));
+            spans.push(Span::styled(format!("{} ", column_bar(t)), t.border));
+        }
+        None => spans.push(Span::raw(" ")),
+    }
+    spans.push(Span::raw(format!("Day changed to {}", ts.format("%a %d %b %Y"))));
+    if quiet {
+        let style = t.dim.add_modifier(Modifier::ITALIC);
+        for span in &mut spans {
+            span.style = span.style.patch(style);
+        }
+    }
+    TLine::from(spans)
 }
 
 /// Format one scrollback line and wrap it to `width`, indenting
@@ -1642,6 +1662,11 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("-->            │ bbartek joined")));
         assert!(rows.iter().any(|r| r.contains("* sam          │ sam slaps jo")));
         assert!(rows.iter().any(|r| r.contains("-!-            │ theme: dracula")));
+
+        // The day changing is one of Textrix's lines too.
+        let day = text(&[day_changed(&cfg, 60, lines[0].ts, false)])[0].clone();
+        assert_eq!(bar(&day), Some(21), "{day}");
+        assert!(day.starts_with("      -!-") && day.contains("│ Day changed to"), "{day}");
 
         // Narrow panes, and nick_column = 0, keep nicks inline.
         assert!(text(&render_line(&lines[1], 40, &cfg))[0].contains("<a_very_long_nickname> hi"));
