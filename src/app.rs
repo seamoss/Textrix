@@ -848,6 +848,8 @@ pub struct App {
     pub theme_picker: Option<ThemePicker>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
+    /// When you went /away: from then, DMs collect with your mentions.
+    away_since: Option<chrono::DateTime<Local>>,
     /// The terminal reports keys the enhanced way (kitty's protocol).
     pub enhanced_keys: bool,
     /// Windows you were in, most recent first (for the switcher).
@@ -1309,6 +1311,7 @@ impl App {
             theme_picker: None,
             editor_request: None,
             enhanced_keys: false,
+            away_since: None,
             recent: Vec::new(),
             push_modes: HashMap::new(),
             hits: ui::Hits::default(),
@@ -2210,10 +2213,16 @@ impl App {
                     Some(msg) => format!("{account}: you are now away: {msg}"),
                     None => format!("{account}: you are back"),
                 };
+                let away = message.is_some();
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.away = message;
                 }
                 self.status(Line::info(text));
+                if away {
+                    self.away_since.get_or_insert_with(Local::now);
+                } else if !self.accounts.values().any(|s| s.away.is_some()) {
+                    self.back_from_away();
+                }
             }
             AppEvent::Ignored { account, user_id } => {
                 for w in self.windows.iter_mut().filter(|w| w.account() == Some(&*account)) {
@@ -2324,7 +2333,10 @@ impl App {
             {
                 root_line.thread_count = Some(root_line.thread_count.unwrap_or(0) + 1);
             }
-            if is_mention(&line) {
+            // While you're away, DMs collect with your mentions too: the
+            // away log.
+            let away_dm = live && self.away_since.is_some() && self.windows[idx].is_dm && !line.own && line.is_message();
+            if is_mention(&line) || away_dm {
                 mentions.push(line.clone());
             }
             if live
@@ -2603,6 +2615,45 @@ impl App {
             {
                 self.record_mention(idx, line, false);
             }
+        }
+    }
+
+    /// Back from /away, irssi's awaylog: what came in meanwhile, and the
+    /// mentions window, which collected it, to read it in.
+    fn back_from_away(&mut self) {
+        let Some(since) = self.away_since.take() else { return };
+        let gone = short_duration((Local::now() - since).to_std().unwrap_or_default());
+        let (mut mentions, mut dms) = (0, 0);
+        let (mut rooms, mut people): (Vec<String>, Vec<String>) = Default::default();
+        let mentions_idx = self.windows.iter().position(|w| w.is_mentions);
+        let caught = mentions_idx.map(|i| &self.windows[i].lines).into_iter().flatten();
+        for line in caught.filter(|l| l.ts >= since) {
+            let Some(from) = line.event_id.as_ref().and_then(|e| self.mention_origins.get(e)) else { continue };
+            let Some(w) = self.window_idx(&from.account, &from.room_id).map(|i| &self.windows[i]) else { continue };
+            // A DM's window is named for the person.
+            let (count, names) = if w.is_dm { (&mut dms, &mut people) } else { (&mut mentions, &mut rooms) };
+            *count += 1;
+            if !names.iter().any(|n| n == w.title()) {
+                names.push(w.title().to_owned());
+            }
+        }
+        let part = |n: usize, one: &str, many: &str, names: &[String]| match n {
+            0 => None,
+            1 => Some(format!("1 {one} ({})", names.join(", "))),
+            n => Some(format!("{n} {many} ({})", names.join(", "))),
+        };
+        let parts: Vec<String> = [part(mentions, "mention", "mentions", &rooms), part(dms, "DM", "DMs", &people)]
+            .into_iter()
+            .flatten()
+            .collect();
+        if parts.is_empty() {
+            self.status(Line::info(format!("while you were away ({gone}): nothing for you")));
+            return;
+        }
+        let text = format!("while you were away ({gone}): {}, in the mentions window", parts.join(" and "));
+        self.status(Line::info(text));
+        if let Some(idx) = mentions_idx {
+            self.switch_to(idx);
         }
     }
 
@@ -7003,6 +7054,45 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn coming_back_from_away_says_what_came_in() {
+        let mut app = test_app();
+        let room = room_window(&mut app, "!a:x.org", "Team Tests");
+        let dm = room_window(&mut app, "!dm:x.org", "sam");
+        app.windows[dm].is_dm = true;
+        let post = |app: &mut App, room: &str, line: Line| {
+            let room_id: OwnedRoomId = room.try_into().unwrap();
+            let items = vec![Item::Line(line)];
+            app.on_event(AppEvent::Timeline { account: "t".into(), room_id, items, live: true, limited: false });
+        };
+        let from_sam = |id: &str, body: &str| {
+            let mut line = msg(id, body);
+            (line.nick, line.sender) = ("sam".into(), Some("@sam:x.org".try_into().unwrap()));
+            line
+        };
+        post(&mut app, "!dm:x.org", from_sam("$0", "before you went"));
+        app.on_event(AppEvent::Away { account: "t".into(), message: Some("lunch".into()) });
+        let mut ping = msg("$1", "you: flaky test again");
+        ping.highlight = true;
+        post(&mut app, "!a:x.org", ping);
+        post(&mut app, "!dm:x.org", from_sam("$2", "lunch?"));
+        app.switch_to(room);
+        app.on_event(AppEvent::Away { account: "t".into(), message: None });
+
+        let said = &app.windows[0].lines.back().unwrap().body;
+        assert!(said.contains("while you were away") && said.contains("1 mention (Team Tests) and 1 DM (sam)"), "{said}");
+        assert!(app.win().is_mentions, "and there it is");
+        let collected: Vec<&str> = app.win().lines.iter().map(|l| l.body.as_str()).collect();
+        assert!(collected.contains(&"lunch?") && !collected.contains(&"before you went"), "{collected:?}");
+
+        // Back, DMs don't collect there any more.
+        post(&mut app, "!dm:x.org", from_sam("$3", "after"));
+        assert!(!app.win().lines.iter().any(|l| l.body == "after"));
+        app.on_event(AppEvent::Away { account: "t".into(), message: Some("again".into()) });
+        app.on_event(AppEvent::Away { account: "t".into(), message: None });
+        assert!(app.windows[0].lines.back().unwrap().body.ends_with("nothing for you"));
     }
 
     #[test]
