@@ -129,6 +129,8 @@ pub struct Config {
     /// Page titles under links, fetched by your homeserver: "unencrypted"
     /// (rooms the server can read anyway), "all", or "off".
     pub link_titles: LinkTitles,
+    /// The page's preview picture under a link's title (where titles show).
+    pub link_images: bool,
     /// Make links real hyperlinks (OSC 8) in terminals that have them.
     pub hyperlinks: bool,
     /// Fold runs of joins, leaves and renames into one summary line.
@@ -234,6 +236,7 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             nick_column: 12,
+            link_images: true,
             statusbar: DEFAULT_STATUSBAR.map(String::from).to_vec(),
             statusbar2: Vec::new(),
             editor: String::new(),

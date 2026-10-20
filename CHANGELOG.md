@@ -7,6 +7,25 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.13.0] - 2026-10-20
+
+### Added
+- Link pictures: under a link's title, the page's picture (its
+  `og:image`), up to 24×6 cells and lined up with the message. It comes
+  from the homeserver's URL preview along with the title, so the site
+  still never sees you, and it shows wherever titles do (`link_titles`).
+  `link_images = false` keeps the titles and leaves the pictures out.
+- Edit history: `i` on an edited message in selection mode lists what it
+  said before each edit, oldest first, with when, then what it says now.
+- Spoilers when sending: `||the butler did it||` sends that part as a
+  spoiler, hidden until revealed (in Textrix, `v`; in Element, a click).
+  Bars inside code are left as they are.
+- `/exec <command>`, as in irssi: runs a shell command and shows what it
+  printed in the current window; `/exec -o <command>` sends it to the room
+  instead (several lines go as a code block). Commands get no input, are
+  stopped after 30 seconds, and their output is cut at 500 lines; colour
+  codes are taken out. Scripts can't run it.
+
 ## [0.12.2] - 2026-10-20
 
 ### Changed

@@ -721,9 +721,20 @@ fn screenshots() {
         panes.line(16, "bob", "ok who else finished it"),
         panes.line(15, "dee", "the ending!! no spoilers but wow"),
         panes.line(13, "you", "the sky above the port, etc"),
-        panes.line(2, "carol", "next month: Snow Crash?"),
+        panes.line(2, "carol", "next month: Snow Crash? https://example.org/books/snow-crash"),
     ];
     panes.post("Book Club", club.to_vec());
+    // Unencrypted, so its links get titles (the server reads it anyway).
+    let book_club = panes.window("Book Club");
+    panes.app.windows[book_club].encrypted = false;
+    // The link's title and picture, from the homeserver's preview.
+    let painter = panes.app.picker.clone().unwrap();
+    let (w, h) = super::LINK_PICTURE;
+    panes.app.on_event(AppEvent::LinkTitle {
+        url: "https://example.org/books/snow-crash".into(),
+        title: Some("Snow Crash, by Neal Stephenson — Example Books".into()),
+        picture: painter.fit(sunset(), Size::new(w, h)).ok(),
+    });
     panes.app.cmd_split("Book Club", true).unwrap();
     save(&dir, "panes", &mut panes, (124, 30));
 

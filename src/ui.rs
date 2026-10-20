@@ -953,6 +953,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         LinkTitles::All => win.room.is_some(),
     };
     let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
+    // Link pictures, by the link: the same, but under the title.
+    let mut link_placements: Vec<(String, usize, u16)> = Vec::new();
     let shown_lines: Vec<&Line> =
         win.lines.iter().filter(|l| cfg.show_joins || l.kind != LineKind::Membership).collect();
     let visible =
@@ -1029,7 +1031,14 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && let Some(url) = links::urls(&line.body).into_iter().find(|u| links::is_safe(u))
         {
             match titles.get(url) {
-                Some(LinkTitle::Ready(title)) => {
+                Some(LinkTitle::Ready(title, picture)) => {
+                    // Bottom up: the picture's rows first, then the title.
+                    if let Some(picture) = picture.as_ref().filter(|_| images && cfg.link_images) {
+                        let height = picture.size().height;
+                        link_placements.push((url.to_owned(), rows.len(), height));
+                        rows.extend((0..height).map(|_| TLine::from(under.1.clone())));
+                        row_events.extend((0..height).map(|_| (line.event_id.clone(), false, None)));
+                    }
                     rows.push(link_title_row(&cfg.palette, title, width, &under));
                     row_events.push((line.event_id.clone(), false, None));
                 }
@@ -1125,8 +1134,17 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     f.render_widget(Paragraph::new(shown), area);
 
     // Draw previews whose reserved rows are fully on screen.
-    for (id, below, rows_tall) in placements {
-        let Some(Preview::Ready(protocol)) = app.previews.get(&id) else { continue };
+    let pictures = placements
+        .iter()
+        .filter_map(|(id, below, tall)| match app.previews.get(id) {
+            Some(Preview::Ready(protocol)) => Some((protocol, *below, *tall)),
+            _ => None,
+        })
+        .chain(link_placements.iter().filter_map(|(url, below, tall)| match app.link_titles.get(url) {
+            Some(LinkTitle::Ready(_, Some(picture))) => Some((picture, *below, *tall)),
+            _ => None,
+        }));
+    for (protocol, below, rows_tall) in pictures {
         let top = total - (below + rows_tall as usize);
         let bottom = total - 1 - below;
         if top < start || bottom >= end {

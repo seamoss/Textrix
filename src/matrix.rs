@@ -201,10 +201,12 @@ pub enum AppEvent {
         latest: Option<(String, String)>,
         asked: bool,
     },
-    /// A link's title (`None`: it has none, or the preview failed).
+    /// A link's title (`None`: it has none, or the preview failed), and
+    /// its preview picture, drawn for under it.
     LinkTitle {
         url: String,
         title: Option<String>,
+        picture: Option<Picture>,
     },
     /// The server doesn't offer link previews.
     LinkTitlesOff {
@@ -823,6 +825,13 @@ fn link_title(json: &str) -> Option<String> {
         Some(site) => format!("{title} — {site}"),
         None => title,
     })
+}
+
+/// A preview's picture: `og:image`, which the homeserver has copied to
+/// its own media (an `mxc://` address).
+fn link_image(json: &str) -> Option<OwnedMxcUri> {
+    let og: serde_json::Value = serde_json::from_str(json).ok()?;
+    og.get("og:image")?.as_str().filter(|u| u.starts_with("mxc://")).map(OwnedMxcUri::from)
 }
 
 /// Rooms with their own notification mode, for [`AppEvent::PushRules`].
@@ -1903,7 +1912,9 @@ impl Account {
     }
 
     /// A link's page title (and site), from the homeserver's preview of it.
-    pub fn fetch_link_title(&self, url: String) {
+    /// A link's title from the homeserver's preview, and, given a painter,
+    /// its picture (`og:image`, which the homeserver keeps) at `cells`.
+    pub fn fetch_link_title(&self, url: String, picture: Option<(Painter, Size)>) {
         let acct = self.clone();
         tokio::spawn(async move {
             let data = match acct.client.media().get_media_preview(&url, None).await {
@@ -1920,8 +1931,26 @@ impl Account {
                     None
                 }
             };
-            let title = data.and_then(|raw| link_title(raw.get()));
-            acct.notify.send(AppEvent::LinkTitle { url, title });
+            let title = data.as_ref().and_then(|raw| link_title(raw.get()));
+            let image = data.as_ref().and_then(|raw| link_image(raw.get())).filter(|_| title.is_some());
+            let picture = match (image, picture) {
+                (Some(mxc), Some((painter, cells))) => {
+                    let settings = MediaThumbnailSettings::new(UInt::from(320u32), UInt::from(240u32));
+                    let request = MediaRequestParameters {
+                        source: MediaSource::Plain(mxc),
+                        format: MediaFormat::Thumbnail(settings),
+                    };
+                    match acct.client.media().get_media_content(&request, true).await {
+                        Ok(bytes) => encode_image(bytes, painter, cells).await.ok(),
+                        Err(e) => {
+                            tracing::debug!("no preview picture for {url}: {e}");
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+            acct.notify.send(AppEvent::LinkTitle { url, title, picture });
         });
     }
 
@@ -3742,7 +3771,7 @@ mod avatar_tests {
 
 #[cfg(test)]
 mod link_title_tests {
-    use super::link_title;
+    use super::{link_image, link_title};
 
     #[test]
     fn titles_come_from_opengraph() {
@@ -3756,6 +3785,17 @@ mod link_title_tests {
         );
         assert!(link_title(r#"{"og:description": "no title"}"#).is_none());
         assert!(link_title("not json").is_none());
+    }
+
+    #[test]
+    fn pictures_are_the_homeservers_copy() {
+        assert_eq!(
+            link_image(r#"{"og:title": "Docs", "og:image": "mxc://example.org/abc"}"#).map(|u| u.to_string()),
+            Some("mxc://example.org/abc".to_owned())
+        );
+        // Never the site's own address: that would show the site who's looking.
+        assert!(link_image(r#"{"og:image": "https://example.org/a.png"}"#).is_none());
+        assert!(link_image(r#"{"og:title": "Docs"}"#).is_none());
     }
 }
 

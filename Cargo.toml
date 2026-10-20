@@ -1,6 +1,6 @@
 [package]
 name = "textrix"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2024"
 rust-version = "1.96"
 description = "An irssi-style terminal client for Matrix"

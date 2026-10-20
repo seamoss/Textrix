@@ -582,7 +582,8 @@ fn annotate(line: &mut Line, item: &Item) {
 /// An inline image preview's state.
 pub enum LinkTitle {
     Loading,
-    Ready(String),
+    /// Its title, and its preview picture when there is one.
+    Ready(String, Option<Picture>),
     /// The page has no title, or it couldn't be fetched.
     None,
 }
@@ -599,6 +600,9 @@ pub struct ProfileView {
     /// moves through it.
     pub member: Option<usize>,
 }
+
+/// A link's preview picture, at most this many cells.
+pub const LINK_PICTURE: (u16, u16) = (24, 6);
 
 /// The profile pane's picture, in cells.
 pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
@@ -1251,7 +1255,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("o", "open the link"),
     ("v", "show spoilers"),
     ("c", "copy the text"),
-    ("i", "sender, time and event ID"),
+    ("i", "sender, time and event ID, and what an edited one said before"),
     ("u", "who sent it: their profile pane"),
     ("Enter", "vote in a poll; in the mentions window, go to the message in its room"),
     ("Esc", "leave selection mode"),
@@ -1909,11 +1913,11 @@ impl App {
                     _ => {}
                 }
             }
-            AppEvent::LinkTitle { url, title } => {
+            AppEvent::LinkTitle { url, title, picture } => {
                 if self.link_titles.len() > LINK_TITLES_MAX {
                     self.link_titles.clear();
                 }
-                self.link_titles.insert(url, title.map_or(LinkTitle::None, LinkTitle::Ready));
+                self.link_titles.insert(url, title.map_or(LinkTitle::None, |t| LinkTitle::Ready(t, picture)));
             }
             AppEvent::LinkTitlesOff { account } => {
                 if self.link_titles_off.insert(account.to_string()) {
@@ -3069,7 +3073,11 @@ impl App {
         self.request_avatars();
         for (account, url) in std::mem::take(&mut self.link_title_requests) {
             match self.connected(&account) {
-                Some(acct) if !self.link_titles_off.contains(&account) => acct.fetch_link_title(url),
+                Some(acct) if !self.link_titles_off.contains(&account) => {
+                    let (w, h) = LINK_PICTURE;
+                    let picture = self.picker.clone().filter(|_| self.cfg.link_images).map(|p| (p, Size::new(w, h)));
+                    acct.fetch_link_title(url, picture)
+                }
                 _ => drop(self.link_titles.remove(&url)),
             }
         }
@@ -8812,11 +8820,57 @@ mod tests {
         app.on_event(AppEvent::LinkTitle {
             url: "https://matrix.org/docs".into(),
             title: Some("Docs — Matrix".into()),
+            picture: None,
         });
         assert!(draw(&mut app).contains("↳ Docs — Matrix"));
 
         app.windows[a].encrypted = true;
         assert!(!draw(&mut app).contains("↳ Docs"), "not in encrypted rooms unless link_titles = \"all\"");
+    }
+
+    #[test]
+    fn a_links_picture_sits_under_its_title() {
+        let mut app = test_app();
+        let painter = Painter {
+            picker: ratatui_image::picker::Picker::halfblocks(),
+            text: crate::picture::TextMode::Sextants,
+            truecolor: true,
+        };
+        app.picker = Some(painter.clone());
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        app.windows[a].lines.push_back(msg("$1", "docs at https://matrix.org/docs today"));
+        app.windows[a].lines.push_back(msg("$2", "thanks"));
+        app.switch_to(a);
+        let draw = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let rows = (0..buffer.area.height)
+                .map(|y| (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_owned()).collect::<String>())
+                .collect::<Vec<_>>();
+            (rows, buffer)
+        };
+        draw(&mut app);
+        let red = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 0, 0, 255])));
+        let picture = painter.fit(red, ratatui::layout::Size::new(24, 6)).unwrap();
+        let tall = picture.size().height as usize;
+        app.on_event(AppEvent::LinkTitle {
+            url: "https://matrix.org/docs".into(),
+            title: Some("Docs — Matrix".into()),
+            picture: Some(picture),
+        });
+        let (rows, buffer) = draw(&mut app);
+        let title = rows.iter().position(|r| r.contains("↳ Docs — Matrix")).expect("the title");
+        let next = rows.iter().position(|r| r.contains("thanks")).expect("the next message");
+        assert_eq!(next, title + 1 + tall, "the picture's rows between the title and the next message");
+        // Lined up with the title, under it.
+        let x = rows[title].chars().position(|c| c == '↳').unwrap() as u16;
+        assert_eq!(buffer[(x, title as u16 + 1)].bg, ratatui::style::Color::Rgb(200, 0, 0));
+
+        app.cfg.link_images = false;
+        let (rows, _) = draw(&mut app);
+        let title = rows.iter().position(|r| r.contains("↳ Docs — Matrix")).unwrap();
+        assert!(rows[title + 1].contains("thanks"), "no room kept without pictures");
     }
 
     #[test]
