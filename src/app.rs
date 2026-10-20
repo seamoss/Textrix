@@ -846,6 +846,10 @@ pub struct App {
     konami: usize,
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
+    /// Ctrl+X: this text, to open in your editor.
+    pub editor_request: Option<String>,
+    /// The terminal reports keys the enhanced way (kitty's protocol).
+    pub enhanced_keys: bool,
     /// Windows you were in, most recent first (for the switcher).
     recent: Vec<WinRef>,
     /// Rooms with their own notification mode, per server.
@@ -1134,6 +1138,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Home / End, Ctrl+D", "start / end of the line; delete the character under the cursor"),
     ("Ctrl+U / Ctrl+K / Ctrl+W / Ctrl+Y", "cut to start / cut to end / cut word / paste cut"),
     ("Ctrl+C", "clear the input line; on an empty one, twice quits (detaches, in the background)"),
+    ("Ctrl+X", "write the message in your editor ($EDITOR); quitting it brings the text back here"),
     ("Ctrl+L", "redraw the screen"),
 ];
 
@@ -1302,6 +1307,8 @@ impl App {
             konami: 0,
             switcher: None,
             theme_picker: None,
+            editor_request: None,
+            enhanced_keys: false,
             recent: Vec::new(),
             push_modes: HashMap::new(),
             hits: ui::Hits::default(),
@@ -1801,6 +1808,17 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::Edited(saved) => {
+                match saved {
+                    Ok(text) => self.input.set_text(&text),
+                    Err(e) => self.error(e),
+                }
+                // The editor had the screen: draw it all again.
+                (self.redraw_all, self.last_title) = (true, None);
+                if self.cfg.mouse {
+                    set_mouse_capture(true);
+                }
+            }
             AppEvent::Installed { version } => {
                 self.probing = false;
                 let current = env!("CARGO_PKG_VERSION");
@@ -3301,6 +3319,7 @@ impl App {
                 'n' => self.cycle_window(1),
                 'p' => self.cycle_window(-1),
                 'l' => self.redraw_all = true,
+                'x' => self.editor_request = Some(self.input.text()),
                 // With nothing after the cursor to cut, Ctrl+K opens the
                 // switcher.
                 'k' if self.input.cursor() == self.input.chars().len() => {
@@ -6667,24 +6686,33 @@ async fn flash_end(until: Option<Instant>) {
 
 /// `keys` is the terminal's input: this terminal's, or in the background,
 /// the attached one's.
-pub async fn run<B>(
+/// `new_keys` makes the stream of terminal events: again after the editor
+/// (Ctrl+X) has had the keyboard.
+pub async fn run<B, K>(
     terminal: &mut Terminal<B>,
     mut app: App,
     mut rx: UnboundedReceiver<AppEvent>,
-    mut keys: impl Stream<Item = std::io::Result<Event>> + Unpin,
+    mut new_keys: impl FnMut() -> K,
 ) -> Result<bool>
 where
     B: Backend,
     B::Error: std::error::Error + Send + Sync + 'static,
+    K: Stream<Item = std::io::Result<Event>> + Unpin,
 {
     let mut clock = tokio::time::interval(Duration::from_secs(1));
+    let mut keys = new_keys();
     app.start();
     loop {
         // In the background with no terminal attached, nothing is drawn.
         let shown = crate::term::attached();
         if shown {
             if std::mem::take(&mut app.redraw_all) {
-                terminal.clear()?;
+                // Everything afresh. Not Terminal::clear, which first asks
+                // the terminal where its cursor is: a full screen doesn't
+                // need to know, and right after the editor the answer can
+                // go astray.
+                let size = terminal.size()?;
+                terminal.resize(Rect::new(0, 0, size.width, size.height))?;
                 app.last_links.clear();
             }
             let frame = terminal.draw(|f| ui::draw(f, &mut app))?;
@@ -6727,6 +6755,23 @@ where
         app.after_draw();
         if app.quit {
             break;
+        }
+        if let Some(text) = app.editor_request.take() {
+            let editor = crate::editor::command(&app.cfg.editor);
+            match crate::term::remote_client() {
+                Some(client) => {
+                    let _ = client.send(crate::remote::ToClient::Edit { text, editor });
+                }
+                None if shown => {
+                    // The editor gets the keyboard; a new stream takes it back.
+                    drop(keys);
+                    let saved = crate::editor::edit(&editor, &text, app.enhanced_keys).map_err(|e| format!("{e:#}"));
+                    keys = new_keys();
+                    app.on_event(AppEvent::Edited(saved));
+                    continue;
+                }
+                None => {}
+            }
         }
         tokio::select! {
             ev = keys.next() => match ev {
@@ -6958,6 +7003,19 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn ctrl_x_hands_the_message_to_the_editor() {
+        let mut app = test_app();
+        app.input.set_text("draft");
+        app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(app.editor_request.as_deref(), Some("draft"));
+        app.on_event(AppEvent::Edited(Ok("draft\nwith more".into())));
+        assert_eq!(app.input.text(), "draft\nwith more");
+        assert!(app.redraw_all, "the editor had the screen");
+        app.on_event(AppEvent::Edited(Err("vi stopped".into())));
+        assert_eq!(app.input.text(), "draft\nwith more", "a failed edit leaves it as it was");
     }
 
     #[test]

@@ -219,6 +219,8 @@ pub enum AppEvent {
     Detached,
     /// Asked to quit from outside (`textrix --stop`).
     Quit,
+    /// The attached terminal's editor (Ctrl+X) finished: what it saved.
+    Edited(Result<String, String>),
     /// The textrix on disk changed: its version, if it said.
     Installed {
         version: Option<String>,

@@ -113,6 +113,9 @@ pub struct Config {
     /// System messages (`-!-` lines: Textrix's own, joins and leaves,
     /// topic changes, day changes) in italic, in every theme.
     pub system_italic: bool,
+    /// The editor Ctrl+X opens on your message; empty uses $VISUAL, then
+    /// $EDITOR, then vi.
+    pub editor: String,
     /// Nicks in a column this many characters wide (longer ones are cut
     /// short), so every message starts in line; 0 puts them inline,
     /// `<nick> text`.
@@ -227,6 +230,7 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             nick_column: 12,
+            editor: String::new(),
             system_italic: true,
             away_notes: true,
             show_joins: true,

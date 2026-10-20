@@ -47,6 +47,8 @@ use crate::{
 pub enum ToDaemon {
     Hello { version: String, size: (u16, u16), picker: Option<PickerInfo>, term: TermInfo },
     Event(Event),
+    /// What the editor saved (Ctrl+X), or why it didn't.
+    Edited(Result<String, String>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,6 +65,9 @@ pub enum ToClient {
     Bye(String),
     /// The background Textrix is restarting (`/restart`): come back to it.
     Restart,
+    /// Open this editor on this text in the terminal (Ctrl+X), and say what
+    /// it saved.
+    Edit { text: String, editor: String },
 }
 
 /// What the attached terminal can draw images with.
@@ -284,12 +289,20 @@ async fn attachment(stream: UnixStream, screen: Screen, input: UnboundedSender<E
     term::set_remote(Some(tx), Some(info));
     let _ = app.send(AppEvent::Attached { picker: picker.map(|p| p.picker()) });
 
-    while let Ok(Some(ToDaemon::Event(event))) = recv::<ToDaemon>(&mut from).await {
-        if let Event::Resize(width, height) = event {
-            *screen.0.lock().unwrap() = (width, height);
-        }
-        if input.send(event).is_err() {
-            break;
+    loop {
+        match recv::<ToDaemon>(&mut from).await {
+            Ok(Some(ToDaemon::Event(event))) => {
+                if let Event::Resize(width, height) = event {
+                    *screen.0.lock().unwrap() = (width, height);
+                }
+                if input.send(event).is_err() {
+                    break;
+                }
+            }
+            Ok(Some(ToDaemon::Edited(result))) => {
+                let _ = app.send(AppEvent::Edited(result));
+            }
+            _ => break,
         }
     }
     if ATTACHMENT.load(Ordering::SeqCst) == me {
@@ -439,6 +452,13 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<bool> {
                         let mut out = std::io::stdout();
                         out.write_all(&bytes)?;
                         out.flush()?;
+                    }
+                    Some(Ok(Some(ToClient::Edit { text, editor }))) => {
+                        // The editor gets the keyboard: this stream lets go
+                        // of it until the editor's done.
+                        drop(std::mem::replace(&mut events, EventStream::new()));
+                        let saved = crate::editor::edit(&editor, &text, enhanced_keys).map_err(|e| format!("{e:#}"));
+                        send(&mut to, &ToDaemon::Edited(saved)).await?;
                     }
                     Some(Ok(Some(ToClient::Bye(why)))) => return Ok(Some(why)),
                     Some(Ok(Some(ToClient::Restart))) => return Ok(None),

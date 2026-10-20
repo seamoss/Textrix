@@ -26,6 +26,7 @@ mod servers;
 mod switcher;
 mod term;
 mod theme;
+mod editor;
 mod ui;
 mod update;
 mod upload;
@@ -193,9 +194,15 @@ async fn run_daemon(
     term::set_remote(None, None);
     let screen = remote::Screen::new();
     let mut terminal = ratatui::Terminal::new(remote::RemoteBackend::new(screen.clone()))?;
-    let (input, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (input, input_rx) = tokio::sync::mpsc::unbounded_channel();
     remote::serve(listener, screen, input, tx);
-    let keys = futures_util::stream::poll_fn(move |cx| input_rx.poll_recv(cx).map(|event| event.map(Ok)));
+    // The editor runs in the attached terminal, so this one is never made
+    // again; it just has to be makeable.
+    let input_rx = std::sync::Arc::new(std::sync::Mutex::new(input_rx));
+    let keys = move || {
+        let input_rx = input_rx.clone();
+        futures_util::stream::poll_fn(move |cx| input_rx.lock().unwrap().poll_recv(cx).map(|event| event.map(Ok)))
+    };
     let result = app::run(&mut terminal, app, rx, keys).await;
     let restart = matches!(result, Ok(true));
     // Gone from the socket first, so nothing attaches to this one again.
@@ -393,7 +400,8 @@ async fn run() -> Result<()> {
         notify::pop_title();
         restore(info);
     }));
-    let result = app::run(&mut terminal, app, rx, crossterm::event::EventStream::new()).await;
+    app.enhanced_keys = enhanced_keys;
+    let result = app::run(&mut terminal, app, rx, crossterm::event::EventStream::new).await;
     app::set_mouse_capture(false);
     notify::pop_title();
     if enhanced_keys {
