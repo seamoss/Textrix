@@ -247,6 +247,26 @@ fn night_owls(theme: ThemeName, picture: bool) -> Scene {
     s
 }
 
+/// Someone's picture: a smiling face on a teal ground.
+fn face() -> image::DynamicImage {
+    let size = 160u32;
+    let image = image::RgbImage::from_fn(size, size, |x, y| {
+        let (fx, fy) = (x as f32 - 80.0, y as f32 - 80.0);
+        let d = (fx * fx + fy * fy).sqrt();
+        let eye = |cx: f32| ((x as f32 - cx).powi(2) + (y as f32 - 64.0).powi(2)).sqrt() < 9.0;
+        let smile = (d - 38.0).abs() < 5.0 && fy > 14.0;
+        let rgb = if d > 62.0 {
+            [20, 120, 120]
+        } else if eye(58.0) || eye(102.0) || smile {
+            [40, 30, 30]
+        } else {
+            [250, 200, 90]
+        };
+        image::Rgb(rgb)
+    });
+    image::DynamicImage::ImageRgb8(image)
+}
+
 /// A picture to show inline: a sunset over a grid, in the colours of 1986.
 fn sunset() -> image::DynamicImage {
     let (w, h) = (480u32, 240u32);
@@ -714,6 +734,27 @@ fn screenshots() {
     picker.selected = picker.shown().iter().position(|e| e.id == ThemeName::Turbo.into()).unwrap();
     picking.app.try_picked_theme();
     save(&dir, "picker", &mut picking, (124, 33));
+
+    // Someone's profile, from the member list.
+    let mut profile = night_owls(ThemeName::Default, false);
+    let sam = profile.app.windows[profile.window("Night Owls")].members.iter().position(|m| m.name == "sam");
+    profile.app.open_profile(user("sam"), "sam".into(), sam);
+    let painter = profile.app.picker.clone().unwrap();
+    let (w, h) = super::PROFILE_PICTURE;
+    profile.app.on_event(AppEvent::UserInfo {
+        account: ACCOUNT.into(),
+        user: user("sam"),
+        info: crate::matrix::UserInfo {
+            display: Some("Sam Okafor".into()),
+            identity: Some(true),
+            devices: vec![("QWERTYUIOP".into(), "phone".into(), true), ("ASDFGHJKLZ".into(), "laptop".into(), true)],
+            fetched: true,
+            ..Default::default()
+        },
+    });
+    let picture = painter.fit(face(), Size::new(w, h)).ok();
+    profile.app.on_event(AppEvent::UserPicture { user: user("sam"), picture });
+    save(&dir, "profile", &mut profile, (124, 30));
 
     for (name, theme) in ThemeName::ALL {
         save(&dir.join("themes"), name, &mut night_owls(theme, true), (100, 32));

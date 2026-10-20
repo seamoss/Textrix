@@ -147,7 +147,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `u` who sent it, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
@@ -161,7 +161,8 @@ unencrypted too.
 (older history loads at the top) or, in selection mode, moves the
 selection. Click a window in the list to go there, a pane to focus it, a
 message to select it (click again to unselect), a link to open it, a name
-in the member list to mention them, or the input line to move the cursor.
+in the member list or a nick on a message to see who they are (see
+[Who's who](#whos-who)), or the input line to move the cursor.
 While the mouse is on, hold Shift (Option in iTerm2 and Terminal.app) and
 drag to select text, or use `c` in selection mode to copy a message.
 
@@ -373,6 +374,18 @@ in mpv if you have it, otherwise in the app your system uses for that
 kind of file (QuickTime Player on macOS, which can't play `.webm`; set
 `video_player`, e.g. to `"mpv"`, for one that can). The decrypted copy
 stays in a private folder until Textrix closes.
+
+### Who's who
+
+![sam's profile beside the member list: picture, names, presence, role, verified devices](site/screenshots/profile.svg)
+
+Click a name in the member list, or a nick on a message (`u` in selection
+mode), and their profile opens beside the member list: their picture,
+their name and yours for them, Matrix ID, presence, role in the room,
+whether you've verified them and their devices. ↑/↓ goes through the
+member list. `m` opens a DM with them and `@` mentions them; `n`
+(nickname), `i` (ignore) and `v` (verify) put the command in the input
+line for you to send. Esc closes it.
 
 ### Reading state
 

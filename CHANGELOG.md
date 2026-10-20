@@ -7,6 +7,23 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.12.0] - 2026-10-20
+
+### Added
+- A profile pane: click a name in the member list or a nick on a message
+  (or press `u` on a message in selection mode) to see who they are,
+  beside the member list: their picture, their name and yours for them,
+  Matrix ID, presence, role in the room, and whether you've verified them
+  and their devices. ↑/↓ goes through the member list; `m` opens a DM,
+  `@` mentions them, and `n`, `i` and `v` put `/nickname`, `/ignore` and
+  `/verify` in the input line to send. Esc closes it.
+
+### Changed
+- Clicking a name in the member list opens their profile instead of
+  mentioning them; `@` in the profile mentions them.
+- Releases join the universal macOS build on Linux (llvm-lipo), where it
+  doesn't wait in the macOS runners' queue.
+
 ## [0.11.0] - 2026-10-20
 
 ### Added

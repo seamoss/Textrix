@@ -221,6 +221,18 @@ pub enum AppEvent {
     Quit,
     /// The attached terminal's editor (Ctrl+X) finished: what it saved.
     Edited(Result<String, String>),
+    /// What the profile pane shows about someone.
+    UserInfo {
+        account: AccountName,
+        user: OwnedUserId,
+        info: UserInfo,
+    },
+    /// Their picture, drawn for the profile pane (`None`: they have none,
+    /// or it couldn't be shown).
+    UserPicture {
+        user: OwnedUserId,
+        picture: Option<Picture>,
+    },
     /// Messages scheduled with `/later` on this server, from where they're
     /// kept.
     Scheduled {
@@ -3205,6 +3217,60 @@ impl Account {
         });
     }
 
+    /// Someone's profile, identity and devices, for the profile pane (and
+    /// their presence, which updates the dots too).
+    pub fn user_info(&self, user: OwnedUserId) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let profile = acct.client.account().fetch_user_profile_of(&user).await.ok();
+            let field =
+                |name: &str| profile.as_ref().and_then(|p| p.get(name)).and_then(|v| v.as_str()).map(str::to_owned);
+            let enc = acct.client.encryption();
+            let identity = match enc.get_user_identity(&user).await {
+                Ok(Some(identity)) => Some(identity.is_verified()),
+                _ => None,
+            };
+            let devices = match enc.get_user_devices(&user).await {
+                Ok(devices) => devices
+                    .devices()
+                    .map(|d| (d.device_id().to_string(), d.display_name().unwrap_or("").to_owned(), d.is_verified()))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            if let Ok(p) = acct.client.send(get_presence::v3::Request::new(user.clone())).await {
+                let presence = presence_from(&p.presence, p.status_msg.clone(), p.last_active_ago);
+                acct.notify
+                    .send(AppEvent::Presence { account: acct.name.clone(), updates: vec![(user.clone(), presence)] });
+            }
+            let info = UserInfo {
+                display: field("displayname"),
+                avatar: field("avatar_url").filter(|u| u.starts_with("mxc://")).map(OwnedMxcUri::from),
+                identity,
+                devices,
+                fetched: true,
+            };
+            acct.notify.send(AppEvent::UserInfo { account: acct.name.clone(), user, info });
+        });
+    }
+
+    /// Someone's picture, drawn at `cells` for the profile pane.
+    pub fn fetch_user_picture(&self, user: OwnedUserId, url: OwnedMxcUri, picker: Painter, cells: Size) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let settings = MediaThumbnailSettings::new(UInt::from(256u32), UInt::from(256u32));
+            let request =
+                MediaRequestParameters { source: MediaSource::Plain(url), format: MediaFormat::Thumbnail(settings) };
+            let picture = match acct.client.media().get_media_content(&request, true).await {
+                Ok(bytes) => encode_image(bytes, picker, cells).await.ok(),
+                Err(e) => {
+                    tracing::debug!("no picture for {user}: {e}");
+                    None
+                }
+            };
+            acct.notify.send(AppEvent::UserPicture { user, picture });
+        });
+    }
+
     pub fn whois(&self, room_id: Option<OwnedRoomId>, user: OwnedUserId) {
         let acct = self.clone();
         self.spawn_op(room_id.clone(), async move {
@@ -3536,6 +3602,20 @@ fn create_unique(dir: &Path, name: &str) -> Result<(PathBuf, std::fs::File)> {
         }
     }
     bail!("too many files named {name} in {}", dir.display())
+}
+
+/// What the profile pane knows about someone.
+#[derive(Clone, Debug, Default)]
+pub struct UserInfo {
+    pub display: Option<String>,
+    pub avatar: Option<OwnedMxcUri>,
+    /// Their cross-signing identity: verified by you, or not; `None` when
+    /// they have none.
+    pub identity: Option<bool>,
+    /// (device ID, its name, verified).
+    pub devices: Vec<(String, String, bool)>,
+    /// The server answered (until then the pane says it's looking).
+    pub fetched: bool,
 }
 
 /// An image pack's emoji: (shortcode, picture), leaving out images meant

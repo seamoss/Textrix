@@ -578,6 +578,22 @@ pub enum LinkTitle {
     None,
 }
 
+/// The profile pane: someone, and what's known about them so far.
+pub struct ProfileView {
+    pub account: String,
+    pub user: OwnedUserId,
+    /// Their name here (the member list's, or the message's).
+    pub name: String,
+    pub info: crate::matrix::UserInfo,
+    pub picture: Option<Picture>,
+    /// Their place in the member list, when it was opened from there: ↑/↓
+    /// moves through it.
+    pub member: Option<usize>,
+}
+
+/// The profile pane's picture, in cells.
+pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
+
 /// Custom emoji: (shortcode, picture).
 type Emoji = Vec<(String, OwnedMxcUri)>;
 
@@ -883,6 +899,7 @@ pub struct App {
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
     pub vote: Option<VotePicker>,
+    pub profile: Option<ProfileView>,
     /// Messages to send later (`/later`), soonest first.
     later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
@@ -1187,7 +1204,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Shift+Up, Ctrl+E on an empty line", "edit your messages (keys below)"),
     ("F1 / F2 / F3", "this help / window list / member list"),
     ("F6 / Shift+F6", "focus the next / previous split pane"),
-    ("Mouse", "wheel scrolls; click a window, pane, message (selects), link (opens), image (views), name or the input"),
+    (
+        "Mouse",
+        "wheel scrolls; click a window, pane, message (selects), link (opens), image (views), a name or nick (who they are), or the input",
+    ),
     ("Ctrl+A / Ctrl+E / Ctrl+B / Ctrl+F", "start / end / left / right in the input line"),
     ("Alt+B / Alt+F, Ctrl+← / Ctrl+→", "back / forward a word"),
     ("Home / End, Ctrl+D", "start / end of the line; delete the character under the cursor"),
@@ -1213,6 +1233,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("v", "show spoilers"),
     ("c", "copy the text"),
     ("i", "sender, time and event ID"),
+    ("u", "who sent it: their profile pane"),
     ("Enter", "in the mentions window: go to the message in its room"),
     ("Esc", "leave selection mode"),
 ];
@@ -1364,6 +1385,7 @@ impl App {
             switcher: None,
             theme_picker: None,
             vote: None,
+            profile: None,
             custom_emoji: HashMap::new(),
             later: Vec::new(),
             editor_request: None,
@@ -1869,6 +1891,22 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::UserInfo { account, user, info } => {
+                let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
+                    return;
+                };
+                let wants_picture = info.avatar.clone().zip(self.picker.clone());
+                p.info = info;
+                if let (Some((url, painter)), Some(acct)) = (wants_picture, self.connected(&account)) {
+                    let (w, h) = PROFILE_PICTURE;
+                    acct.fetch_user_picture(user, url, painter, Size::new(w, h));
+                }
+            }
+            AppEvent::UserPicture { user, picture } => {
+                if let Some(p) = self.profile.as_mut().filter(|p| p.user == user) {
+                    p.picture = picture;
+                }
+            }
             AppEvent::Scheduled { account, items } => {
                 for item in items {
                     if !self.later.iter().any(|(a, s)| *a == account && *s == item) {
@@ -3190,7 +3228,10 @@ impl App {
             return self.switch_to(idx);
         }
         if let Some(&(_, n)) = self.hits.nicklist.iter().find(|(r, _)| r.contains(at)) {
-            return self.mention_member(n);
+            return self.open_member(n);
+        }
+        if self.hits.profile.is_some_and(|area| area.contains(at)) {
+            return;
         }
         if let Some((area, text_x, skip)) = self.hits.input
             && area.contains(at)
@@ -3205,6 +3246,19 @@ impl App {
         }
         if self.is_editing() {
             return;
+        }
+        // A nick: who's that?
+        if let Some((from, to, user)) = row.nick.clone()
+            && (from..to).contains(&at.x)
+            && !self.win().is_mentions
+        {
+            let name = row
+                .event
+                .as_ref()
+                .and_then(|e| self.win().lines.iter().rev().find(|l| l.event_id.as_ref() == Some(e)))
+                .map_or_else(|| user.localpart().to_owned(), |l| l.nick.clone());
+            let member = self.win().members.iter().position(|m| m.user_id == user);
+            return self.open_profile(user, name, member);
         }
         if row.image
             && let Some(line) = row
@@ -3259,9 +3313,65 @@ impl App {
 
     /// A click on the member list: add that person to your message as a
     /// mention, like completing their name.
-    fn mention_member(&mut self, n: usize) {
+    /// Open the profile pane on someone in this room's member list.
+    fn open_member(&mut self, n: usize) {
         let Some(m) = self.win().members.get(n) else { return };
-        let (name, user) = (m.name.clone(), m.user_id.clone());
+        let (user, name) = (m.user_id.clone(), m.name.clone());
+        self.open_profile(user, name, Some(n));
+    }
+
+    /// The profile pane, on `user` (on this window's server).
+    pub fn open_profile(&mut self, user: OwnedUserId, name: String, member: Option<usize>) {
+        let Some(account) = self.win().account().map(ToOwned::to_owned) else { return };
+        // Opened afresh unless it's already them (moving through the list
+        // keeps what's loaded).
+        if self.profile.as_ref().is_some_and(|p| p.user == user) {
+            if let Some(p) = self.profile.as_mut() {
+                p.member = member;
+            }
+            return;
+        }
+        if let Some(acct) = self.connected(&account) {
+            acct.user_info(user.clone());
+        }
+        let info = crate::matrix::UserInfo::default();
+        self.profile = Some(ProfileView { account, user, name, info, picture: None, member });
+    }
+
+    fn on_profile_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let Some(p) = self.profile.as_ref() else { return };
+        let (user, name, member) = (p.user.clone(), p.name.clone(), p.member);
+        let count = self.win().members.len();
+        match key.code {
+            Esc | Char('q') => self.profile = None,
+            Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.profile = None,
+            Up | Char('k') if count > 0 => self.open_member(member.map_or(0, |n| n.saturating_sub(1))),
+            Down | Char('j') if count > 0 => self.open_member(member.map_or(0, |n| (n + 1).min(count - 1))),
+            Char('m') => {
+                self.profile = None;
+                self.command(&format!("query {user}"));
+            }
+            Char('@') => {
+                self.profile = None;
+                self.mention_user(name, user);
+            }
+            // These change things, so they wait in the input line for Enter.
+            Char('n') => self.prefill(&format!("/nickname {user} ")),
+            Char('i') => self.prefill(&format!("/ignore {user}")),
+            Char('v') => self.prefill(&format!("/verify {user}")),
+            _ => {}
+        }
+    }
+
+    /// Close the profile pane with `command` in the input line to send.
+    fn prefill(&mut self, command: &str) {
+        self.profile = None;
+        self.input.set_text(command);
+    }
+
+    /// Add a mention of `user` (as `name`) to what you're typing.
+    fn mention_user(&mut self, name: String, user: OwnedUserId) {
         self.input.end_completion();
         let text = if self.input.is_empty() {
             format!("{name}{} ", self.cfg.completion_char)
@@ -3332,6 +3442,9 @@ impl App {
         }
         if self.vote.is_some() {
             return self.on_vote_key(key);
+        }
+        if self.profile.is_some() {
+            return self.on_profile_key(key);
         }
         if self.select.is_none() && (key.modifiers - KeyModifiers::SHIFT).is_empty() {
             self.konami = eggs::konami_step(self.konami, key.code);
@@ -4147,6 +4260,14 @@ impl App {
                 self.clipboard = Some(line.body.clone());
                 self.info(format!("copied {} characters to the clipboard", line.body.chars().count()));
             }
+            Char('u') => match line.sender.clone() {
+                Some(sender) => {
+                    let member = self.win().members.iter().position(|m| m.user_id == sender);
+                    self.select = None;
+                    self.open_profile(sender, line.nick.clone(), member);
+                }
+                None => self.error("that message has no sender to show"),
+            },
             Char('i') => {
                 let sender = line.sender.as_ref().map(|s| s.to_string()).unwrap_or_default();
                 self.info(format!("{} [{sender}] at {}", line.nick, line.ts.format("%Y-%m-%d %H:%M:%S")));
@@ -7855,6 +7976,100 @@ mod tests {
     }
 
     #[test]
+    fn names_open_a_profile_pane() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let user = |n: &str| OwnedUserId::try_from(format!("@{n}:x.org")).unwrap();
+        app.windows[a].members = ["alice", "bob", "carol", "dee"]
+            .iter()
+            .map(|n| Member { name: (*n).into(), user_id: user(n), prefix: if *n == "alice" { '@' } else { ' ' } })
+            .collect();
+        let mut said = msg("$1", "hello there");
+        said.sender = Some(user("bob"));
+        said.nick = "bob".into();
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        app.on_event(AppEvent::Timeline {
+            account: "t".into(),
+            room_id: room,
+            items: vec![Item::Line(said)],
+            live: true,
+            limited: false,
+        });
+        let screen = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 24)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..24).map(|y| (0..140).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        };
+        let click = |app: &mut App, column: u16, row: u16| {
+            app.on_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+        };
+        screen(&mut app);
+
+        // A name in the member list: their profile, the list kept beside it.
+        let (rect, _) = app.hits.nicklist.iter().find(|(_, n)| *n == 0).copied().unwrap();
+        click(&mut app, rect.x + 3, rect.y);
+        assert_eq!(app.profile.as_ref().map(|p| (p.user.as_str(), p.member)), Some(("@alice:x.org", Some(0))));
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("@alice:x.org") && shown.contains("admin here") && shown.contains("asking their server"),
+            "{shown}"
+        );
+        assert!(!app.hits.nicklist.is_empty(), "the list stays to pick from");
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.profile.as_ref().unwrap().user, user("bob"), "↓: the next member");
+
+        app.on_event(AppEvent::UserInfo {
+            account: "t".into(),
+            user: user("bob"),
+            info: crate::matrix::UserInfo {
+                display: Some("Bob Builder".into()),
+                identity: Some(true),
+                devices: vec![("ABC".into(), "phone".into(), true), ("XYZ".into(), String::new(), false)],
+                fetched: true,
+                ..Default::default()
+            },
+        });
+        let shown = screen(&mut app);
+        assert!(
+            shown.contains("verified by you")
+                && shown.contains("2 devices, 1 verified")
+                && shown.contains("phone (ABC)"),
+            "{shown}"
+        );
+        assert!(shown.contains("(they're Bob Builder)"), "{shown}");
+
+        app.on_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+        assert!(app.profile.is_none() && app.input.text() == "bob: ", "@ mentions them: {:?}", app.input.text());
+        app.input.clear();
+
+        // A nick in the chat.
+        screen(&mut app);
+        let pane = app.hits.panes.iter().find(|p| p.window == a).unwrap();
+        let (y, (from, _, _)) = pane.rows.iter().enumerate().find_map(|(y, r)| r.nick.clone().map(|n| (y, n))).unwrap();
+        let (x, top) = (from + 1, pane.area.y + y as u16);
+        click(&mut app, x, top);
+        assert_eq!(app.profile.as_ref().map(|p| p.user.clone()), Some(user("bob")));
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(app.input.text(), "/nickname @bob:x.org ", "changes wait in the input line");
+        app.input.clear();
+
+        // u in selection mode.
+        app.enter_select();
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(app.profile.as_ref().map(|p| p.user.clone()), Some(user("bob")));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.profile.is_none());
+    }
+
+    #[test]
     fn ctrl_x_hands_the_message_to_the_editor() {
         let mut app = test_app();
         app.input.set_text("draft");
@@ -8116,7 +8331,7 @@ mod tests {
         assert_eq!(app.link_in(&event, "(https://en.wikipedia"), Some(url.to_owned()));
         assert_eq!(app.link_in(&event, "alice"), None, "underlined text that isn't a link");
 
-        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new(), image: false };
+        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new(), image: false, nick: None };
         let area = ratatui::layout::Rect::new(0, 0, 40, 5);
         app.hits.panes.push(ui::PaneHits { area, window: a, rows: vec![ui::RowHit::default(), row] });
         app.on_click(Position::new(10, 1));
@@ -8135,8 +8350,8 @@ mod tests {
         let pieces =
             [(30, 40, "https://en.wikipedia".to_owned()), (2, 34, "wiki/Rust_(programming_language)".to_owned())];
         let rows = vec![
-            ui::RowHit { event: Some(event.clone()), links: vec![pieces[0].clone()], image: false },
-            ui::RowHit { event: Some(event.clone()), links: vec![pieces[1].clone()], image: false },
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[0].clone()], image: false, nick: None },
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[1].clone()], image: false, nick: None },
         ];
         app.hits.panes = vec![ui::PaneHits { area: ratatui::layout::Rect::new(0, 3, 40, 2), window: a, rows }];
         let links = app.screen_links();

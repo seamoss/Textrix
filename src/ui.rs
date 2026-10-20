@@ -47,6 +47,8 @@ pub struct Hits {
     pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The theme picker's box, and its rows: (row, theme index).
     pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// The profile pane.
+    pub profile: Option<Rect>,
     /// Split panes as drawn, in order: (their whole area, their place in
     /// the split's panes).
     pub splits: Vec<(Rect, usize)>,
@@ -67,7 +69,12 @@ pub struct RowHit {
     pub links: Vec<(u16, u16, String)>,
     /// Part of an image preview.
     pub image: bool,
+    /// The sender's nick on it, to click.
+    pub nick: Option<NickHit>,
 }
+
+/// Where a nick is on a row: (from column, to column, who).
+pub type NickHit = (u16, u16, OwnedUserId);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits = Hits::default();
@@ -84,9 +91,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let side_w = if app.show_sidebar && total >= 60 { sidebar_width(app) } else { 0 };
     let win = &app.windows[app.active];
     let wants_nicks = app.show_nicklist && win.room.is_some() && !win.is_dm && win.members.len() > 2;
-    let nick_w = if wants_nicks && total >= side_w + 70 { nicklist_width(app) } else { 0 };
-    let [side, main, nicks] =
-        Layout::horizontal([Constraint::Length(side_w), Constraint::Min(20), Constraint::Length(nick_w)]).areas(middle);
+    // The profile pane goes beside the member list, which stays to pick
+    // from; on narrow screens the list gives way first.
+    let profile_w = if app.profile.is_some() { 36.min(total.saturating_sub(side_w) / 2) } else { 0 };
+    // With the pane open, the messages make do with 50 columns to keep
+    // the list beside it.
+    let fits = match profile_w {
+        0 => total >= side_w + 70,
+        _ => total >= side_w + profile_w + nicklist_width(app) + 50,
+    };
+    let nick_w = if wants_nicks && fits { nicklist_width(app) } else { 0 };
+    let [side, main, profile, nicks] = Layout::horizontal([
+        Constraint::Length(side_w),
+        Constraint::Min(20),
+        Constraint::Length(profile_w),
+        Constraint::Length(nick_w),
+    ])
+    .areas(middle);
 
     draw_topic(f, topic, app);
     if side_w > 0 {
@@ -95,6 +116,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_panes(f, main, app);
     if nick_w > 0 {
         app.hits.nicklist = draw_nicklist(f, nicks, app);
+    }
+    if profile_w > 0 {
+        app.hits.profile = Some(profile);
+        draw_profile(f, profile, app);
     }
     draw_status(f, status, app);
     app.hits.input = Some(draw_input(f, input, app));
@@ -653,7 +678,10 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
     let room = height.saturating_sub(header);
     let overflow = win.members.len() > room;
     let take = if overflow { room.saturating_sub(1) } else { room };
-    for m in win.members.iter().take(take) {
+    // The one the profile pane shows, kept in view.
+    let chosen = app.profile.as_ref().and_then(|p| p.member).filter(|n| *n < win.members.len());
+    let start = chosen.map_or(0, |n| (n + 1).saturating_sub(take));
+    for (n, m) in win.members.iter().enumerate().skip(start).take(take) {
         let prefix_style = match m.prefix {
             '@' => t.op,
             '+' => t.voice,
@@ -669,14 +697,16 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
             Some(p) => presence_dot(t, p.kind),
             None => (' ', Color::Reset),
         };
-        rows.push(TLine::from(vec![
+        let row = TLine::from(vec![
             Span::styled(m.prefix.to_string(), prefix_style),
             Span::styled(format!("{symbol} "), Style::new().fg(color)),
             Span::styled(name, Style::new().fg(t.nick_color(m.user_id.as_str()))),
-        ]));
+        ]);
+        rows.push(if chosen == Some(n) { row.patch_style(Style::new().add_modifier(Modifier::REVERSED)) } else { row });
     }
     if overflow {
-        rows.push(TLine::from(Span::styled(format!("… {} more", win.members.len() - take), t.dim)));
+        let more = win.members.len().saturating_sub(start + take);
+        rows.push(TLine::from(Span::styled(format!("… {more} more"), t.dim)));
     }
     match framed {
         Some(block) => {
@@ -688,7 +718,98 @@ fn draw_nicklist(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, usize)> {
             f.render_widget(Paragraph::new(rows).block(block), area);
         }
     }
-    (0..take.min(win.members.len())).map(|n| (Rect { y: body.y + (header + n) as u16, height: 1, ..body }, n)).collect()
+    (0..take.min(win.members.len().saturating_sub(start)))
+        .map(|n| (Rect { y: body.y + (header + n) as u16, height: 1, ..body }, start + n))
+        .collect()
+}
+
+/// The profile pane: someone's picture, names, presence, place in the
+/// room and devices, and what you can do from here.
+fn draw_profile(f: &mut Frame, area: Rect, app: &App) {
+    let t = &app.cfg.palette;
+    let Some(p) = app.profile.as_ref() else { return };
+    let block = outline(t, "profile", true).unwrap_or_else(|| Block::new().borders(Borders::LEFT).border_style(t.dim));
+    let block = block.style(t.base);
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    let body = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
+    let width = body.width as usize;
+    let mut y = body.y;
+    if let Some(picture) = &p.picture {
+        let size = picture.size();
+        let rect = Rect { x: body.x, y, width: size.width.min(body.width), height: size.height.min(body.height) };
+        f.render_widget(picture, rect);
+        y += rect.height + 1;
+    }
+
+    let win = &app.windows[app.active];
+    let member = win.members.iter().find(|m| m.user_id == p.user);
+    let shown = app.display_name(Some(&p.user), &p.name).to_owned();
+    let theirs = p.info.display.clone().unwrap_or_else(|| p.name.clone());
+    let mut rows: Vec<TLine> = vec![
+        TLine::from(Span::styled(
+            cut(&shown, width),
+            Style::new().fg(t.nick_color(p.user.as_str())).add_modifier(Modifier::BOLD),
+        )),
+        TLine::from(Span::styled(cut(p.user.as_str(), width), t.dim)),
+    ];
+    if shown != theirs {
+        rows.push(TLine::from(Span::styled(cut(&format!("(they're {theirs})"), width), t.dim)));
+    }
+    rows.push(TLine::default());
+    if let Some(presence) = app.presence_of(&p.account, &p.user) {
+        let (dot, color) = presence_dot(t, presence.kind);
+        rows.push(TLine::from(vec![
+            Span::styled(format!("{dot} "), Style::new().fg(color)),
+            Span::raw(cut(&presence.describe(), width.saturating_sub(2))),
+        ]));
+    }
+    let role = match member.map(|m| m.prefix) {
+        Some('@') => "admin here",
+        Some('+') => "moderator here",
+        Some(_) => "member here",
+        None if win.room.is_some() => "not in this room",
+        None => "",
+    };
+    if !role.is_empty() {
+        rows.push(TLine::from(Span::raw(role)));
+    }
+    rows.push(TLine::default());
+    if !p.info.fetched {
+        rows.push(TLine::from(Span::styled("asking their server…", t.dim)));
+    } else {
+        let (identity, style) = match p.info.identity {
+            Some(true) => ("✓ verified by you", t.accent),
+            Some(false) => ("identity not verified", t.highlight_text),
+            None => ("no cross-signing identity", t.dim),
+        };
+        rows.push(TLine::from(Span::styled(identity, style)));
+        let verified = p.info.devices.iter().filter(|d| d.2).count();
+        let devices = match p.info.devices.len() {
+            0 => "no devices known".to_owned(),
+            1 => format!("1 device, {verified} verified"),
+            n => format!("{n} devices, {verified} verified"),
+        };
+        rows.push(TLine::from(Span::styled(devices, t.dim)));
+        for (id, name, ok) in &p.info.devices {
+            let label = if name.is_empty() { id.clone() } else { format!("{name} ({id})") };
+            let mark = if *ok { Span::styled("✓ ", t.accent) } else { Span::raw("  ") };
+            rows.push(TLine::from(vec![mark, Span::raw(cut(&label, width.saturating_sub(2)))]));
+        }
+    }
+
+    let mut keys = vec!["m message  @ mention", "n nickname  i ignore", "v verify  Esc close"];
+    if p.member.is_some() {
+        keys.insert(0, "↑/↓ the next member");
+    }
+    let bottom = body.bottom().saturating_sub(keys.len() as u16);
+    let text = Rect { y, height: bottom.saturating_sub(y + 1), ..body };
+    f.render_widget(Paragraph::new(rows), text);
+    for (n, k) in keys.iter().enumerate() {
+        let row = Rect { y: bottom + n as u16, height: 1, ..body };
+        f.render_widget(Paragraph::new(Span::styled(cut(k, width), t.dim)), row);
+    }
 }
 
 /// Who's typing, by your nicknames where you've given them.
@@ -851,7 +972,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let mut rows: Vec<TLine<'static>> = Vec::new();
     // The message on each row, and whether it's part of an image, for
     // mouse clicks.
-    let mut row_events: Vec<(Option<OwnedEventId>, bool)> = Vec::new();
+    let mut row_events: Vec<(Option<OwnedEventId>, bool, Option<NickHit>)> = Vec::new();
     let mut found_selected = selected.is_none();
     // Whether the last row added was a divider.
     let mut divided = false;
@@ -866,7 +987,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && rows.last().is_none_or(|row| row.width() > 0 && !divided)
         {
             rows.push(TLine::default());
-            row_events.push((None, false));
+            row_events.push((None, false, None));
         }
         divided = false;
         let read: Vec<&str> = line
@@ -890,7 +1011,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                     let height = protocol.size().height;
                     placements.push((id.clone(), rows.len(), height));
                     rows.extend((0..height).map(|_| TLine::from(under.1.clone())));
-                    row_events.extend((0..height).map(|_| (Some(id.clone()), true)));
+                    row_events.extend((0..height).map(|_| (Some(id.clone()), true, None)));
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
                 None => {
@@ -910,7 +1031,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             match titles.get(url) {
                 Some(LinkTitle::Ready(title)) => {
                     rows.push(link_title_row(&cfg.palette, title, width, &under));
-                    row_events.push((line.event_id.clone(), false));
+                    row_events.push((line.event_id.clone(), false, None));
                 }
                 Some(_) => {}
                 None => {
@@ -923,7 +1044,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         let below = rows.len();
         let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
-        let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
+        let (mut rendered, nick_at) =
+            render_line_and_nick(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
         if set_apart && line.kind == LineKind::Info {
             for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
                 span.style = span.style.patch(cfg.palette.dim);
@@ -934,7 +1056,14 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                 *row = row.clone().patch_style(Style::new().add_modifier(Modifier::REVERSED));
             }
         }
-        row_events.extend(rendered.iter().map(|_| (line.event_id.clone(), false)));
+        // Bottom up, like the rows: the nick is on the line's first.
+        for k in (0..rendered.len()).rev() {
+            let nick = nick_at
+                .filter(|_| k == 0)
+                .zip(line.sender.clone())
+                .map(|((x, w), user)| (area.x + x as u16, area.x + (x + w) as u16, user));
+            row_events.push((line.event_id.clone(), false, nick));
+        }
         rows.extend(rendered.into_iter().rev());
         if is_selected {
             // Scroll just enough to keep the selected message on screen.
@@ -949,7 +1078,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(cfg, width, line.ts, set_apart));
-            row_events.push((None, false));
+            row_events.push((None, false, None));
             divided = true;
         }
         if i > 0
@@ -958,7 +1087,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && last_from_others.is_some_and(|j| j >= i)
         {
             rows.push(new_messages(&cfg.palette, width));
-            row_events.push((None, false));
+            row_events.push((None, false, None));
             divided = true;
         }
     }
@@ -984,10 +1113,11 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         area,
         window: idx,
         rows: std::iter::repeat_n(RowHit::default(), pad)
-            .chain(shown.iter().zip(&row_events[start..end]).map(|(row, (event, image))| RowHit {
+            .chain(shown.iter().zip(&row_events[start..end]).map(|(row, (event, image, nick))| RowHit {
                 event: event.clone(),
                 links: underlined(row, area.x),
                 image: *image,
+                nick: nick.clone(),
             }))
             .collect(),
     };
@@ -1238,6 +1368,20 @@ fn render_line_with(
     pinned: bool,
     nicknames: &BTreeMap<OwnedUserId, String>,
 ) -> Vec<TLine<'static>> {
+    render_line_and_nick(line, width, cfg, read_by, thread_window, pinned, nicknames).0
+}
+
+/// `render_line_with`, and where on the first row the sender's nick is:
+/// (column, width), for clicking.
+fn render_line_and_nick(
+    line: &Line,
+    width: usize,
+    cfg: &Config,
+    read_by: &[&str],
+    thread_window: Option<&EventId>,
+    pinned: bool,
+    nicknames: &BTreeMap<OwnedUserId, String>,
+) -> (Vec<TLine<'static>>, Option<(usize, usize)>) {
     let name_for = |user: Option<&OwnedUserId>, fallback: &str| -> String {
         user.and_then(|u| nicknames.get(u)).map_or_else(|| fallback.to_owned(), Clone::clone)
     };
@@ -1270,6 +1414,8 @@ fn render_line_with(
     }
 
     let column = nick_column(cfg, width);
+    let at = |cells: &Vec<(char, Style)>| cells.iter().map(|(c, _)| display_width(*c)).sum::<usize>();
+    let mut nick_at = None;
     if let Some(n) = column {
         // <nick>, * nick, -nick-, -->, -!-… then spaces to the bar.
         let short = cut(&nick, n);
@@ -1287,6 +1433,9 @@ fn render_line_with(
         };
         let used: usize = parts.iter().map(|(s, _)| display_len(s)).sum();
         for (text, style) in parts {
+            if text == short && nick_at.is_none() {
+                nick_at = Some((at(&cells), display_len(&short)));
+            }
             push(&mut cells, text, style);
         }
         push(&mut cells, &" ".repeat((n + 2).saturating_sub(used) + 1), Style::new());
@@ -1299,16 +1448,19 @@ fn render_line_with(
         match line.kind {
             LineKind::Message | LineKind::Utd => {
                 push(&mut cells, "<", t.dim);
+                nick_at = Some((at(&cells), display_len(&nick)));
                 push(&mut cells, &nick, nick_style);
                 push(&mut cells, "> ", t.dim);
             }
             LineKind::Emote => {
                 push(&mut cells, " * ", t.accent);
+                nick_at = Some((at(&cells), display_len(&nick)));
                 push(&mut cells, &nick, nick_style);
                 push(&mut cells, " ", Style::new());
             }
             LineKind::Notice => {
                 push(&mut cells, "-", t.dim);
+                nick_at = Some((at(&cells), display_len(&nick)));
                 push(&mut cells, &nick, nick_style);
                 push(&mut cells, "- ", t.dim);
             }
@@ -1399,7 +1551,8 @@ fn render_line_with(
             *style = style.add_modifier(Modifier::ITALIC);
         }
     }
-    wrap(&cells, width, &gutter)
+    let nick_at = nick_at.filter(|_| line.sender.is_some());
+    (wrap(&cells, width, &gutter), nick_at)
 }
 
 /// A poll's answers under its question, a row each: the results as bars
