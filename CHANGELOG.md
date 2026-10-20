@@ -7,6 +7,13 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.6] - 2026-10-20
+
+### Fixed
+- A nick cut short in the nick column ends in "… " with a space before
+  the `>`, so fonts whose "…" spills out of its cell don't draw it over
+  the `>`.
+
 ## [0.9.5] - 2026-10-20
 
 ### Changed

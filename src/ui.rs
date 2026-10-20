@@ -1104,7 +1104,8 @@ pub fn gutter(cfg: &Config, width: usize) -> (usize, Vec<Span<'static>>) {
     }
 }
 
-/// `name`, cut to `max` columns with "…" if it's longer.
+/// `name`, cut to `max` columns with "… " if it's longer: the space keeps
+/// what follows clear of fonts whose "…" spills out of its cell.
 fn cut(name: &str, max: usize) -> String {
     if display_len(name) <= max {
         return name.to_owned();
@@ -1113,13 +1114,13 @@ fn cut(name: &str, max: usize) -> String {
     let mut used = 0;
     for c in name.chars() {
         let w = c.width().unwrap_or(0);
-        if used + w + 1 > max {
+        if used + w + 2 > max {
             break;
         }
         used += w;
         out.push(c);
     }
-    out.push('…');
+    out.push_str("… ");
     out
 }
 
@@ -1658,7 +1659,7 @@ mod tests {
         assert!(rows.iter().all(|r| bar(r) == Some(21)), "every row's bar in line: {rows:#?}");
         assert!(rows[0].ends_with("<nesbitt>      │ can anyone tell me how to get my"), "{}", rows[0]);
         assert!(rows[1].trim_start().starts_with('│'), "wrapped text keeps to its side of the bar");
-        assert!(rows.iter().any(|r| r.contains("<a_very_long…> │ hi")), "long nicks are cut short");
+        assert!(rows.iter().any(|r| r.contains("<a_very_lon… > │ hi")), "long nicks are cut short, clear of the >");
         assert!(rows.iter().any(|r| r.contains("-->            │ bbartek joined")));
         assert!(rows.iter().any(|r| r.contains("* sam          │ sam slaps jo")));
         assert!(rows.iter().any(|r| r.contains("-!-            │ theme: dracula")));
