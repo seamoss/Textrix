@@ -1200,6 +1200,7 @@ const COMMANDS: &[Cmd] = &[
         help: "List your sessions, rename one, or sign one out (asks to confirm)",
     },
     Cmd { name: "version", args: "[check]", help: "Show the version; check asks GitHub for a newer one" },
+    Cmd { name: "changelog", args: "[N]", help: "What changed in the latest N releases (10), from GitHub" },
     Cmd {
         name: "script",
         args: "[list|load <name>|unload <name>|reload [name]|exec <code>]",
@@ -1996,6 +1997,7 @@ impl App {
             }
             AppEvent::Quit => self.quit = true,
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
+            AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
                     return;
@@ -4210,6 +4212,60 @@ impl App {
         }
     }
 
+    /// `/changelog [N]`: what changed in the latest N releases, from GitHub.
+    fn cmd_changelog(&mut self, args: &str) -> Result<(), String> {
+        let count = match args.trim() {
+            "" => 10,
+            n => n.parse().ok().filter(|n| (1..=50).contains(n)).ok_or("usage: /changelog [1–50]")?,
+        };
+        let (tx, into) = (self.tx.clone(), self.win().room.clone());
+        self.info(format!("asking GitHub for the latest {count} releases…"));
+        tokio::spawn(async move {
+            let releases = update::releases(count).await.map_err(|e| format!("{e:#}"));
+            let _ = tx.send(AppEvent::Changelog { into, releases });
+        });
+        Ok(())
+    }
+
+    /// The releases `/changelog` asked for, oldest first, so the newest is
+    /// at the bottom where you're reading; each its notes as formatted.
+    fn changelog_done(&mut self, into: Option<WinKey>, releases: Result<Vec<update::Release>, String>) {
+        let idx = into.as_ref().and_then(|k| self.windows.iter().position(|w| w.room.as_ref() == Some(k))).unwrap_or(0);
+        let cap = self.cfg.scrollback;
+        let releases = match releases {
+            Ok(releases) if !releases.is_empty() => releases,
+            Ok(_) => {
+                self.windows[idx].push(Line::info("GitHub lists no releases"), cap);
+                return;
+            }
+            Err(e) => {
+                self.windows[idx].push(Line::error(format!("couldn't get the changelog: {e}")), cap);
+                return;
+            }
+        };
+        let current = env!("CARGO_PKG_VERSION");
+        let intro = format!(
+            "the latest {} releases, oldest first (all of them: https://github.com/seamoss/Textrix/releases)",
+            releases.len()
+        );
+        self.windows[idx].push(Line::info(intro), cap);
+        for release in releases.iter().rev() {
+            let note = if release.version == current {
+                " · the one you're running"
+            } else if update::newer(&release.version, current) {
+                " · newer than yours: brew update && brew upgrade textrix"
+            } else {
+                ""
+            };
+            let notes = update::unwrapped(&release.notes);
+            let text = format!("**Textrix {}** · {}{note}\n\n{notes}", release.version, release.date);
+            let mut line = Line::info(text.clone());
+            line.rich = matrix_sdk::ruma::events::room::message::FormattedBody::markdown(&text)
+                .and_then(|html| crate::richtext::render(&html.body));
+            self.windows[idx].push(line, cap);
+        }
+    }
+
     /// `/exec [-o] <command>`, irssi's: run it with `sh -c`, and show what
     /// it prints in this window, or (`-o`) send that to the room. Not for
     /// scripts, which don't run programs.
@@ -5062,6 +5118,7 @@ impl App {
             "poll" => self.cmd_poll(args),
             "later" => self.cmd_later(args),
             "exec" => self.cmd_exec(args),
+            "changelog" => self.cmd_changelog(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
                 Ok(())
@@ -8802,6 +8859,34 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
         assert!(app.home.is_none());
         assert_eq!(app.active, b, "3 went to the third row");
+    }
+
+    #[test]
+    fn the_changelog_reads_like_the_release_notes() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Team Tests");
+        app.switch_to(a);
+        let current = env!("CARGO_PKG_VERSION");
+        let release = |version: &str, notes: &str| update::Release {
+            version: version.into(),
+            date: "2026-10-20".into(),
+            notes: notes.into(),
+        };
+        let releases = vec![
+            release("99.0.0", "### Added\n- Home (F4, or `/home`): what's waiting\n  for you in one place."),
+            release(current, "### Fixed\n- `u` opens the profile."),
+        ];
+        app.changelog_done(app.windows[a].room.clone(), Ok(releases));
+        let rows = screen(&mut app, 200, 30);
+        let find =
+            |text: &str| rows.iter().position(|r| r.contains(text)).unwrap_or_else(|| panic!("{text}: {rows:#?}"));
+        assert!(find(&format!("Textrix {current} · 2026-10-20 · the one you're running")) < find("Textrix 99.0.0"));
+        assert!(find("newer than yours: brew update && brew upgrade textrix") == find("Textrix 99.0.0"));
+        assert!(rows[find("Added") + 1].contains("• Home (F4, or /home): what's waiting for you in one place."));
+
+        app.changelog_done(None, Err("rate limited".into()));
+        assert_eq!(app.windows[0].lines.back().unwrap().body, "couldn't get the changelog: rate limited");
+        assert!(app.cmd_changelog("0").is_err() && app.cmd_changelog("many").is_err());
     }
 
     #[test]

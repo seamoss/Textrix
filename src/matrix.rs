@@ -231,6 +231,12 @@ pub enum AppEvent {
         command: String,
         output: Result<(String, Option<i32>), String>,
     },
+    /// `/changelog`'s releases from GitHub, for the window it was typed in
+    /// (the status window when `into` is `None`).
+    Changelog {
+        into: Option<crate::app::WinKey>,
+        releases: Result<Vec<crate::update::Release>, String>,
+    },
     /// The attached terminal's editor (Ctrl+X) finished: what it saved.
     Edited(Result<String, String>),
     /// What the profile pane shows about someone.

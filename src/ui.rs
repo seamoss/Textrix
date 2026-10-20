@@ -1944,8 +1944,20 @@ fn wrap(cells: &[(char, Style)], width: usize, gutter: &[Span<'static>]) -> Vec<
     let mut rows = Vec::new();
     let mut i = 0;
     let mut first = true;
+    // Rows wrapped from a line after a break start under its text: past
+    // its indent and bullet, with its quote bars again.
+    let mut hang: Vec<(char, Style)> = Vec::new();
+    let mut wrapped = false;
     while i < cells.len() || first {
-        let avail = if first { width } else { width.saturating_sub(indent).max(1) };
+        if !first && !wrapped {
+            hang = hanging(&cells[i..]);
+            if hang.len() * 2 > width.saturating_sub(indent) {
+                hang.clear();
+            }
+        }
+        let hang_now: &[(char, Style)] = if wrapped { &hang } else { &[] };
+        let hang_w: usize = hang_now.iter().map(|(c, _)| c.width().unwrap_or(0)).sum();
+        let avail = if first { width } else { width.saturating_sub(indent + hang_w).max(1) };
         let mut used = 0;
         let mut j = i;
         let mut last_space = None;
@@ -1964,6 +1976,9 @@ fn wrap(cells: &[(char, Style)], width: usize, gutter: &[Span<'static>]) -> Vec<
             (j, j)
         } else if cells[j].0 == '\n' {
             (j, j + 1)
+        } else if cells[j].0 == ' ' && j > i {
+            // A word that ends right at the edge stays on the row.
+            (j, j + 1)
         } else if let Some(space) = last_space.filter(|s| *s > i) {
             (space, space + 1)
         } else if j == i {
@@ -1976,21 +1991,41 @@ fn wrap(cells: &[(char, Style)], width: usize, gutter: &[Span<'static>]) -> Vec<
         if !first && indent > 0 {
             spans.extend(gutter.iter().cloned());
         }
-        let mut k = i;
-        while k < end {
-            let style = cells[k].1;
+        let row: Vec<(char, Style)> = hang_now.iter().chain(&cells[i..end]).copied().collect();
+        let mut k = 0;
+        while k < row.len() {
+            let style = row[k].1;
             let mut text = String::new();
-            while k < end && cells[k].1 == style {
-                text.push(cells[k].0);
+            while k < row.len() && row[k].1 == style {
+                text.push(row[k].0);
                 k += 1;
             }
             spans.push(Span::styled(text, style));
         }
         rows.push(TLine::from(spans));
+        wrapped = j < cells.len() && cells[j].0 != '\n';
         i = next;
         first = false;
     }
     rows
+}
+
+/// What a line's wrapped rows start with: its quote bars and indent as
+/// they are, and blanks under its bullet (`• `, `1. `).
+fn hanging(cells: &[(char, Style)]) -> Vec<(char, Style)> {
+    let lead = cells.iter().take_while(|(c, _)| matches!(c, '▎' | ' ')).count();
+    let mut out = cells[..lead].to_vec();
+    let rest = &cells[lead..];
+    let digits = rest.iter().take_while(|(c, _)| c.is_ascii_digit()).count();
+    let bullet = match rest.first() {
+        Some(('•', _)) => 1,
+        _ if digits > 0 && rest.get(digits).is_some_and(|(c, _)| *c == '.') => digits + 1,
+        _ => 0,
+    };
+    if bullet > 0 && rest.get(bullet).is_some_and(|(c, _)| *c == ' ') {
+        out.extend(std::iter::repeat_n((' ', Style::new()), bullet + 1));
+    }
+    out
 }
 
 /// The status bar (`statusbar`), and the second one above it
@@ -2300,6 +2335,16 @@ mod tests {
     fn wraps_at_spaces_with_hanging_indent() {
         let cells: Vec<(char, Style)> = "ab: one two three".chars().map(|c| (c, Style::new())).collect();
         assert_eq!(text(&wrap(&cells, 10, &[Span::raw("    ")])), vec!["ab: one", "    two", "    three"]);
+    }
+
+    #[test]
+    fn wrapped_list_items_and_quotes_hang_under_their_text() {
+        let cells: Vec<(char, Style)> =
+            "x\n• one two three\n▎ four five six\n12. seven eight".chars().map(|c| (c, Style::new())).collect();
+        assert_eq!(
+            text(&wrap(&cells, 12, &[Span::raw(" ")])),
+            vec!["x", " • one two", "   three", " ▎ four five", " ▎ six", " 12. seven", "     eight"]
+        );
     }
 
     #[test]
