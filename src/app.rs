@@ -880,6 +880,8 @@ pub struct App {
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
     pub vote: Option<VotePicker>,
+    /// Custom emoji per server: (yours and global, each room's own).
+    custom_emoji: HashMap<AccountName, (Vec<(String, OwnedMxcUri)>, HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>>)>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
     /// When you went /away: from then, DMs collect with your mentions.
@@ -1352,6 +1354,7 @@ impl App {
             switcher: None,
             theme_picker: None,
             vote: None,
+            custom_emoji: HashMap::new(),
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
@@ -1855,6 +1858,9 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::CustomEmoji { account, global, rooms } => {
+                self.custom_emoji.insert(account, (global, rooms));
+            }
             AppEvent::Edited(saved) => {
                 match saved {
                     Ok(text) => self.input.set_text(&text),
@@ -1937,6 +1943,9 @@ impl App {
             AppEvent::Synced { account, first } => {
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.status = ConnStatus::Online;
+                }
+                if first && let Some(acct) = self.connected(&account) {
+                    acct.load_custom_emoji();
                 }
                 match self.splits.remove(&*account) {
                     Some(since) if !first => {
@@ -4285,10 +4294,24 @@ impl App {
             return Vec::new();
         }
         if let Some(prefix) = word.strip_prefix(':') {
-            return crate::emoji::complete(prefix.trim_end_matches(':'))
-                .into_iter()
-                .map(|(emoji, code)| Candidate { text: emoji.to_owned(), user: None, hint: Some(format!(":{code}:")) })
-                .collect();
+            let prefix = prefix.trim_end_matches(':');
+            // Your custom emoji first: they stay :shortcodes: until sent.
+            let here = self.win().room.as_ref().map(|k| (k.account.clone(), k.room_id.clone()));
+            let mut custom: Vec<(String, OwnedMxcUri)> =
+                here.map(|(account, room)| self.emoji_for(&account, Some(&room))).unwrap_or_default();
+            custom.retain(|(code, _)| !prefix.is_empty() && code.to_lowercase().starts_with(&prefix.to_lowercase()));
+            custom.sort_by_key(|(code, _)| (code.len(), code.clone()));
+            let custom = custom.into_iter().map(|(code, _)| Candidate {
+                text: format!(":{code}:"),
+                user: None,
+                hint: Some("custom emoji".into()),
+            });
+            let unicode = crate::emoji::complete(prefix).into_iter().map(|(emoji, code)| Candidate {
+                text: emoji.to_owned(),
+                user: None,
+                hint: Some(format!(":{code}:")),
+            });
+            return custom.chain(unicode).collect();
         }
         let suffix = if at_start { format!("{} ", self.cfg.completion_char) } else { " ".to_owned() };
         let win = self.win();
@@ -4787,7 +4810,9 @@ impl App {
             Ok(ctx) => ctx,
             Err(e) => return self.error(e),
         };
-        let content = self.as_thread_message(compose(text, kind, &self.mentions, self.cfg.markdown));
+        let content =
+            self.with_custom_emoji(&acct.name, &room_id, compose(text, kind, &self.mentions, self.cfg.markdown));
+        let content = self.as_thread_message(content);
         self.send_content(acct, room_id, content, text, kind.line_kind(), None);
         self.note_away(None);
     }
@@ -4947,7 +4972,8 @@ impl App {
         let (acct, room_id) = self.room_ctx()?;
         // In a thread window the reply stays in the thread.
         let thread = self.win().thread_root().map(|root| Thread::plain(root.to_owned(), event_id.clone()));
-        let content = compose(text, Say::Text, &self.mentions, self.cfg.markdown).make_reply_to(
+        let content = compose(text, Say::Text, &self.mentions, self.cfg.markdown);
+        let content = self.with_custom_emoji(&acct.name, &room_id, content).make_reply_to(
             ReplyMetadata::new(&event_id, &sender, thread.as_ref()),
             ForwardThread::Yes,
             AddMentions::Yes,
@@ -4972,7 +4998,9 @@ impl App {
         }
         let (acct, room_id) = self.room_ctx()?;
         let kind = if emote { Say::Emote } else { Say::Text };
-        let content = compose(text, kind, &self.mentions, self.cfg.markdown)
+        let content = compose(text, kind, &self.mentions, self.cfg.markdown);
+        let content = self
+            .with_custom_emoji(&acct.name, &room_id, content)
             .make_replacement(ReplacementMetadata::new(event_id.clone(), None));
         let rich = crate::convert::rich_of(&content.msgtype);
         if let Some(line) = self.win_mut().find_mut(&event_id) {
@@ -5008,8 +5036,37 @@ impl App {
             return Err("type an emoji (or any text) to react with".into());
         }
         let (acct, room_id) = self.room_ctx()?;
-        acct.react(room_id, event_id, crate::emoji::expand(key).into_owned());
+        let code = key.trim_matches(':');
+        let custom =
+            self.emoji_for(&acct.name, Some(&room_id)).into_iter().find(|(c, _)| c == code && key.starts_with(':'));
+        match custom {
+            Some((code, picture)) => acct.react_custom(room_id, event_id, picture, code),
+            None => acct.react(room_id, event_id, crate::emoji::expand(key).into_owned()),
+        }
         Ok(())
+    }
+
+    /// The custom emoji you can use in `room`: its own pack's, then yours
+    /// and the global ones.
+    fn emoji_for(&self, account: &str, room: Option<&RoomId>) -> Vec<(String, OwnedMxcUri)> {
+        let Some((global, rooms)) = self.custom_emoji.get(account) else { return Vec::new() };
+        let mut out: Vec<(String, OwnedMxcUri)> = room.and_then(|r| rooms.get(r)).cloned().unwrap_or_default();
+        for (code, picture) in global {
+            if !out.iter().any(|(c, _)| c == code) {
+                out.push((code.clone(), picture.clone()));
+            }
+        }
+        out
+    }
+
+    /// Custom emoji in a message for `room`, as their pictures.
+    fn with_custom_emoji(
+        &self,
+        account: &str,
+        room: &RoomId,
+        content: RoomMessageEventContent,
+    ) -> RoomMessageEventContent {
+        crate::compose::custom_emoji(content, &self.emoji_for(account, Some(room)))
     }
 
     fn cmd_upload(&mut self, args: &str) -> Result<(), String> {
@@ -7542,6 +7599,26 @@ mod tests {
 
         assert!(app.cmd_poll("Lunch? | soup").unwrap_err().contains("usage"), "two answers at least");
         assert!(app.cmd_poll("end").is_err(), "not connected, nothing to end");
+    }
+
+    #[test]
+    fn custom_emoji_complete_with_tab() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let mxc = |s: &str| OwnedMxcUri::from(format!("mxc://x.org/{s}"));
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        app.on_event(AppEvent::CustomEmoji {
+            account: "t".into(),
+            global: vec![("blobcat".into(), mxc("g")), ("party".into(), mxc("p"))],
+            rooms: HashMap::from([(room.clone(), vec![("blobcat".into(), mxc("room")), ("blobfox".into(), mxc("f"))])]),
+        });
+        let mine = app.emoji_for("t", Some(&room));
+        assert_eq!(mine[0], ("blobcat".to_owned(), mxc("room")), "the room's own wins");
+        assert_eq!(mine.len(), 3);
+        app.input.set_text(":blob");
+        let offered: Vec<String> = app.candidates().into_iter().take(2).map(|c| c.text).collect();
+        assert_eq!(offered, [":blobcat:", ":blobfox:"]);
     }
 
     #[test]

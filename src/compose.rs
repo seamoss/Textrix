@@ -1,13 +1,13 @@
-//! Outgoing message content: Markdown, and mentions for nicks inserted by
-//! tab completion.
+//! Outgoing message content: Markdown, mentions for nicks inserted by
+//! tab completion, and custom emoji.
 
 use matrix_sdk::ruma::{
-    OwnedUserId,
+    OwnedMxcUri, OwnedUserId,
     events::{
         Mentions,
         room::message::{
-            EmoteMessageEventContent, FormattedBody, MessageType, NoticeMessageEventContent, RoomMessageEventContent,
-            TextMessageEventContent,
+            EmoteMessageEventContent, FormattedBody, MessageFormat, MessageType, NoticeMessageEventContent,
+            RoomMessageEventContent, TextMessageEventContent,
         },
     },
 };
@@ -71,6 +71,103 @@ pub fn compose(text: &str, kind: Say, mentions: &[(String, OwnedUserId)], markdo
     }
 }
 
+/// Custom emoji (`:shortcode:`s from `emoji`) in a message as the pictures
+/// they stand for, `<img data-mx-emoticon>`, the way other clients send
+/// them. The plain text keeps the shortcodes, and code stays as it is.
+pub fn custom_emoji(mut content: RoomMessageEventContent, emoji: &[(String, OwnedMxcUri)]) -> RoomMessageEventContent {
+    let (body, formatted) = match &content.msgtype {
+        MessageType::Text(c) => (&c.body, &c.formatted),
+        MessageType::Emote(c) => (&c.body, &c.formatted),
+        MessageType::Notice(c) => (&c.body, &c.formatted),
+        _ => return content,
+    };
+    if !emoji.iter().any(|(code, _)| body.contains(&format!(":{code}:"))) {
+        return content;
+    }
+    let html = match formatted {
+        Some(f) if f.format == MessageFormat::Html => f.body.clone(),
+        _ => html_escape(body).replace('\n', "<br>"),
+    };
+    let with = emoticons(&html, emoji);
+    if with == html {
+        return content;
+    }
+    let body = body.clone();
+    content.msgtype = match content.msgtype {
+        MessageType::Emote(_) => MessageType::Emote(EmoteMessageEventContent::html(body, with)),
+        MessageType::Notice(_) => MessageType::Notice(NoticeMessageEventContent::html(body, with)),
+        _ => MessageType::Text(TextMessageEventContent::html(body, with)),
+    };
+    content
+}
+
+/// `html` with each known `:shortcode:` outside `<code>` and `<pre>` as
+/// its picture.
+fn emoticons(html: &str, emoji: &[(String, OwnedMxcUri)]) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_code = 0usize;
+    let mut rest = html;
+    while !rest.is_empty() {
+        if rest.starts_with('<') {
+            let end = rest.find('>').map_or(rest.len(), |e| e + 1);
+            let tag = &rest[..end];
+            let name: String =
+                tag[1..].trim_start_matches('/').chars().take_while(char::is_ascii_alphanumeric).collect();
+            if name.eq_ignore_ascii_case("code") || name.eq_ignore_ascii_case("pre") {
+                if tag.starts_with("</") {
+                    in_code = in_code.saturating_sub(1);
+                } else if !tag.ends_with("/>") {
+                    in_code += 1;
+                }
+            }
+            out.push_str(tag);
+            rest = &rest[end..];
+            continue;
+        }
+        let end = rest.find('<').unwrap_or(rest.len());
+        let text = &rest[..end];
+        if in_code > 0 {
+            out.push_str(text);
+        } else {
+            out.push_str(&shortcodes(text, emoji));
+        }
+        rest = &rest[end..];
+    }
+    out
+}
+
+fn shortcodes(text: &str, emoji: &[(String, OwnedMxcUri)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(':') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let found = after.find(':').and_then(|len| {
+            let code = &after[..len];
+            let safe = !code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || "_+-.".contains(c));
+            emoji.iter().find(|(c, _)| safe && c == code).map(|(c, picture)| (len, c, picture))
+        });
+        match found {
+            Some((len, code, picture)) => {
+                out.push_str(&format!(
+                    "<img data-mx-emoticon src=\"{picture}\" alt=\":{code}:\" title=\":{code}:\" height=\"32\" />"
+                ));
+                rest = &after[len + 1..];
+            }
+            None => {
+                out.push(':');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
 fn escape_markdown(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -86,9 +183,28 @@ fn escape_markdown(s: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn custom_emoji_go_as_pictures() {
+        let emoji = vec![("blobcat".to_owned(), OwnedMxcUri::from("mxc://x.org/blob"))];
+        let sent = custom_emoji(compose("hi :blobcat: and `:blobcat:` and :nope:", Say::Text, &[], true), &emoji);
+        let html = html_of(&sent).unwrap();
+        assert_eq!(html.matches("data-mx-emoticon").count(), 1, "not in code: {html}");
+        assert!(html.contains(r#"src="mxc://x.org/blob" alt=":blobcat:""#) && html.contains(":nope:"), "{html}");
+        let MessageType::Text(text) = &sent.msgtype else { panic!() };
+        assert_eq!(text.body, "hi :blobcat: and `:blobcat:` and :nope:", "the plain text keeps the shortcodes");
+
+        let plain = custom_emoji(compose("a <b> :blobcat:\nline", Say::Emote, &[], false), &emoji);
+        assert!(matches!(plain.msgtype, MessageType::Emote(_)));
+        let html = html_of(&plain).unwrap();
+        assert!(html.starts_with("a &lt;b&gt; <img") && html.ends_with("<br>line"), "{html}");
+        let none = compose("nothing here", Say::Text, &[], false);
+        assert!(html_of(&custom_emoji(none, &emoji)).is_none(), "nothing to change");
+    }
+
     fn html_of(content: &RoomMessageEventContent) -> Option<String> {
         match &content.msgtype {
             MessageType::Text(t) => t.formatted.as_ref().map(|f| f.body.clone()),
+            MessageType::Emote(e) => e.formatted.as_ref().map(|f| f.body.clone()),
             _ => None,
         }
     }

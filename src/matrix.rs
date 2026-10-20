@@ -221,6 +221,13 @@ pub enum AppEvent {
     Quit,
     /// The attached terminal's editor (Ctrl+X) finished: what it saved.
     Edited(Result<String, String>),
+    /// Custom emoji from image packs: yours and the ones you've made
+    /// global, and each room's own. (shortcode, picture).
+    CustomEmoji {
+        account: AccountName,
+        global: Vec<(String, OwnedMxcUri)>,
+        rooms: HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>>,
+    },
     /// The textrix on disk changed: its version, if it said.
     Installed {
         version: Option<String>,
@@ -1951,6 +1958,71 @@ impl Account {
         });
     }
 
+    /// The custom emoji in image packs (MSC2545: `im.ponies.*`, and the
+    /// stable `m.room.image_pack` / `m.image_pack.rooms`), from what's
+    /// stored locally: your own pack, packs you've made global, and each
+    /// room's.
+    pub fn load_custom_emoji(&self) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let account = acct.client.account();
+            let data = |kind: &'static str| {
+                let account = account.clone();
+                async move {
+                    let raw = account.account_data_raw(kind.into()).await.ok().flatten()?;
+                    serde_json::from_str::<serde_json::Value>(raw.json().get()).ok()
+                }
+            };
+            let mut global = data("im.ponies.user_emotes").await.map(|c| pack_emoji(&c)).unwrap_or_default();
+            let mut rooms: HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>> = HashMap::new();
+            for room in acct.client.joined_rooms() {
+                let mut emoji = Vec::new();
+                for kind in ["im.ponies.room_emotes", "m.room.image_pack"] {
+                    for state in room.get_state_events(kind.into()).await.unwrap_or_default() {
+                        let matrix_sdk::deserialized_responses::RawAnySyncOrStrippedState::Sync(raw) = state else {
+                            continue;
+                        };
+                        if let Ok(event) = serde_json::from_str::<serde_json::Value>(raw.json().get()) {
+                            emoji.extend(pack_emoji(&event["content"]));
+                        }
+                    }
+                }
+                if !emoji.is_empty() {
+                    rooms.insert(room.room_id().to_owned(), emoji);
+                }
+            }
+            // Rooms whose packs you've made global.
+            for kind in ["im.ponies.emote_rooms", "m.image_pack.rooms"] {
+                let Some(content) = data(kind).await else { continue };
+                let listed =
+                    content["rooms"].as_object().map(|r| r.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+                for room_id in listed {
+                    if let Some(emoji) = OwnedRoomId::try_from(room_id).ok().and_then(|id| rooms.get(&id)) {
+                        global.extend(emoji.iter().cloned());
+                    }
+                }
+            }
+            if !global.is_empty() || !rooms.is_empty() {
+                let _ = acct.notify.send(AppEvent::CustomEmoji { account: acct.name.clone(), global, rooms });
+            }
+        });
+    }
+
+    /// React with a custom emoji: its picture is the key, and its
+    /// shortcode goes along for clients to show.
+    pub fn react_custom(&self, room_id: OwnedRoomId, event_id: OwnedEventId, picture: OwnedMxcUri, shortcode: String) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let content = serde_json::json!({
+                "m.relates_to": { "rel_type": "m.annotation", "event_id": event_id, "key": picture },
+                "shortcode": shortcode,
+                "com.beeper.reaction.shortcode": shortcode,
+            });
+            acct.room(&room_id)?.send_raw("m.reaction", content).await?;
+            Ok(())
+        });
+    }
+
     /// Vote in the poll `poll` starts, in the events it was started with.
     pub fn vote(&self, room_id: OwnedRoomId, poll: OwnedEventId, answers: Vec<String>, stable: bool) {
         use matrix_sdk::ruma::events::poll::{
@@ -3402,6 +3474,22 @@ fn create_unique(dir: &Path, name: &str) -> Result<(PathBuf, std::fs::File)> {
     bail!("too many files named {name} in {}", dir.display())
 }
 
+/// An image pack's emoji: (shortcode, picture), leaving out images meant
+/// only as stickers.
+pub fn pack_emoji(content: &serde_json::Value) -> Vec<(String, OwnedMxcUri)> {
+    let usage = |v: &serde_json::Value| v["usage"].as_array().map(|u| u.iter().any(|x| x == "emoticon"));
+    let pack_ok = usage(&content["pack"]).unwrap_or(true);
+    let Some(images) = content["images"].as_object() else { return Vec::new() };
+    images
+        .iter()
+        .filter(|(_, image)| usage(image).unwrap_or(pack_ok))
+        .filter_map(|(code, image)| {
+            let url = image["url"].as_str().filter(|u| u.starts_with("mxc://"))?;
+            Some((code.trim_matches(':').to_owned(), OwnedMxcUri::from(url)))
+        })
+        .collect()
+}
+
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut value = bytes as f64;
@@ -3426,6 +3514,28 @@ pub enum VerifyAnswer {
     Confirm,
     Mismatch,
     Cancel,
+}
+
+#[cfg(test)]
+mod pack_tests {
+    #[test]
+    fn packs_give_their_emoji_not_their_stickers() {
+        let pack = serde_json::json!({
+            "pack": { "display_name": "Cats" },
+            "images": {
+                "blobcat": { "url": "mxc://x.org/blob" },
+                "bigcat": { "url": "mxc://x.org/big", "usage": ["sticker"] },
+                "both": { "url": "mxc://x.org/both", "usage": ["sticker", "emoticon"] },
+                "broken": { "url": "https://not.mxc/" }
+            }
+        });
+        let mut emoji: Vec<String> = super::pack_emoji(&pack).into_iter().map(|(code, _)| code).collect();
+        emoji.sort();
+        assert_eq!(emoji, ["blobcat", "both"]);
+        let stickers_only =
+            serde_json::json!({ "pack": { "usage": ["sticker"] }, "images": { "a": { "url": "mxc://x/a" } } });
+        assert!(super::pack_emoji(&stickers_only).is_empty());
+    }
 }
 
 #[cfg(test)]

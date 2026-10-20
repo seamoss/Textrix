@@ -1469,6 +1469,9 @@ fn rich_style(t: &Theme, base: Style, marks: Marks, highlight: bool) -> Style {
     if marks.mention && !highlight {
         style = style.patch(t.mention);
     }
+    if marks.emoji {
+        style = style.patch(t.accent);
+    }
     if marks.dim || marks.spoiler {
         style = style.patch(t.dim);
     }

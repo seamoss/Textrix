@@ -27,6 +27,8 @@ pub struct Marks {
     pub color: Option<(u8, u8, u8)>,
     /// What a piece of a code block is, for syntax colouring.
     pub syntax: Option<Syntax>,
+    /// A custom emoji (an image pack's), shown by its `:shortcode:`.
+    pub emoji: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,9 +155,13 @@ impl Writer {
     }
 
     fn node(&mut self, node: &NodeRef, marks: Marks) {
-        let element = match node.data() {
+        let (element, emoticon) = match node.data() {
             NodeData::Text(text) => return self.text(&text.borrow(), marks),
-            NodeData::Element(element) => element.to_matrix().element,
+            NodeData::Element(element) => {
+                let data = element.to_matrix();
+                let emoticon = data.attrs.iter().any(|a| &*a.name.local == "data-mx-emoticon");
+                (data.element, emoticon)
+            }
             _ => return self.children(node, marks),
         };
         let mut m = marks;
@@ -251,6 +257,10 @@ impl Writer {
                 self.block_break();
                 self.text("──────────", Marks { dim: true, ..m });
                 return self.block_break();
+            }
+            MatrixElement::Img(img) if emoticon => {
+                let name = img.alt.as_deref().or(img.title.as_deref()).unwrap_or("emoji").trim_matches(':');
+                return self.text(&format!(":{name}:"), Marks { emoji: true, ..m });
             }
             MatrixElement::Img(img) => {
                 let alt = img.alt.as_deref().or(img.title.as_deref()).unwrap_or("image");
@@ -349,6 +359,14 @@ fn parse_color(hex: &str) -> Option<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_emoji_show_their_shortcodes() {
+        let spans = render(r#"so <img data-mx-emoticon src="mxc://x.org/b" alt=":blobcat:" height="32"> and <img src="mxc://x.org/p" alt="photo">"#).unwrap();
+        let emoji = spans.iter().find(|s| s.text == ":blobcat:").expect("the shortcode");
+        assert!(emoji.marks.emoji);
+        assert!(spans.iter().any(|s| s.text == "[photo]" && !s.marks.emoji), "other pictures as before");
+    }
 
     fn text_of(html: &str) -> String {
         plain(&render(html).unwrap_or_default())

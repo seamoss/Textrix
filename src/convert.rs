@@ -109,7 +109,14 @@ impl<'a> Converter<'a> {
         }
 
         match any {
-            AnySyncTimelineEvent::MessageLike(msg) => message_like(msg, line),
+            AnySyncTimelineEvent::MessageLike(msg) => match message_like(msg, line) {
+                // A custom emoji's reaction key is its picture: show its name.
+                Some(Item::React { target, key, nick, own }) if key.starts_with("mxc://") => {
+                    let content = ev.raw().get_field::<serde_json::Value>("content").ok().flatten();
+                    Some(Item::React { target, key: custom_reaction(content.as_ref()), nick, own })
+                }
+                other => other,
+            },
             AnySyncTimelineEvent::State(state) => self.state(state, line).await,
         }
     }
@@ -293,6 +300,15 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
     }
 }
 
+/// A custom emoji reaction, by the shortcode clients send with it.
+fn custom_reaction(content: Option<&serde_json::Value>) -> String {
+    let code = content.and_then(|c| c.get("shortcode").or_else(|| c.get("com.beeper.reaction.shortcode")));
+    match code.and_then(|c| c.as_str()) {
+        Some(code) => format!(":{}:", code.trim_matches(':')),
+        None => ":emoji:".to_owned(),
+    }
+}
+
 /// The message that starts `poll`: its question, for logs, search and
 /// notifications, with the poll itself to draw.
 fn poll_line(mut line: Line, poll: Poll) -> Item {
@@ -439,6 +455,13 @@ pub fn to_local(ts: MilliSecondsSinceUnixEpoch) -> DateTime<Local> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_emoji_reactions_go_by_their_shortcode() {
+        assert_eq!(custom_reaction(Some(&serde_json::json!({ "shortcode": ":blobcat:" }))), ":blobcat:");
+        assert_eq!(custom_reaction(Some(&serde_json::json!({ "com.beeper.reaction.shortcode": "party" }))), ":party:");
+        assert_eq!(custom_reaction(None), ":emoji:");
+    }
 
     #[test]
     fn elements_polls_come_in() {
