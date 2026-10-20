@@ -159,6 +159,13 @@ struct Unsent {
 }
 
 const ORPHANS_MAX: usize = 1000;
+
+/// Away or offline this long is news; less is likely a missed heartbeat.
+const AWAY_NEWS: chrono::TimeDelta = chrono::TimeDelta::minutes(30);
+/// Someone who spoke this recently is around, whatever their presence says.
+const SPOKE_LATELY: chrono::TimeDelta = chrono::TimeDelta::minutes(15);
+/// The same "is away" note at most this often.
+const AWAY_REPEAT: Duration = Duration::from_secs(3600);
 const TYPING_EXPIRY: Duration = Duration::from_secs(45);
 
 impl Window {
@@ -829,7 +836,8 @@ pub struct App {
     splits: HashMap<String, Instant>,
     /// People whose away status you've been told about (irssi's "is
     /// away"), and what it was.
-    away_noted: HashMap<OwnedUserId, String>,
+    /// Who an "is away" note was shown for: their status then, and when.
+    away_noted: HashMap<OwnedUserId, (String, Instant)>,
     /// Where each message in the mentions window came from.
     mention_origins: HashMap<OwnedEventId, WinKey>,
     /// How many aliases deep the current command runs.
@@ -2061,12 +2069,6 @@ impl App {
                 self.spaces.insert(account, spaces);
             }
             AppEvent::Presence { account, updates } => {
-                // Back online: the next time they're away is news again.
-                for (user, presence) in &updates {
-                    if presence.kind == PresenceKind::Online {
-                        self.away_noted.remove(user);
-                    }
-                }
                 self.presence.entry(account).or_default().extend(updates);
             }
             AppEvent::Avatar { account, room_id, url, protocol } => {
@@ -4558,9 +4560,15 @@ impl App {
     }
 
     /// Like irssi's "nick is away": after you write to someone (in their
-    /// DM, by mentioning them, or replying to them) who's away or offline,
-    /// say so once, and again only when that changes.
+    /// DM, by mentioning them, or replying to them) who's away or gone, say
+    /// so, when it's news. Presence is a guess (a missed heartbeat reads as
+    /// offline, and some people and servers don't share it), so only a
+    /// status they set or a long absence counts; never for someone who's
+    /// just been talking; and the same note at most once an hour.
     fn note_away(&mut self, replied_to: Option<OwnedUserId>) {
+        if !self.cfg.away_notes {
+            return;
+        }
         let Some(account) = self.win().account().map(ToOwned::to_owned) else { return };
         let own = self.connected(&account).map(|a| a.user_id);
         let mut people: Vec<OwnedUserId> = self.win().dm_user.iter().cloned().collect();
@@ -4569,30 +4577,49 @@ impl App {
         people.dedup();
         for user in people.into_iter().filter(|u| Some(u) != own.as_ref()) {
             let Some(presence) = self.presence_of(&account, &user) else { continue };
-            let status = presence.status.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            let (text, key) = match presence.kind {
-                PresenceKind::Online => continue,
-                PresenceKind::Away => ("away".to_owned(), format!("away {status:?}")),
-                PresenceKind::Offline => match presence.last_active {
-                    Some(at) => {
-                        (format!("offline, last seen {}", ago(Local::now() - at)), format!("offline {status:?}"))
-                    }
-                    None => ("offline".to_owned(), format!("offline {status:?}")),
-                },
+            let status = presence.status.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
+            let gone = presence.last_active.map(|at| Local::now() - at).filter(|g| *g >= AWAY_NEWS);
+            let text = match (presence.kind, gone) {
+                (PresenceKind::Online, _) => continue,
+                (PresenceKind::Away, Some(gone)) => format!("away, last active {}", ago(gone)),
+                (PresenceKind::Away, None) if status.is_some() => "away".to_owned(),
+                (PresenceKind::Offline, Some(gone)) => format!("offline, last seen {}", ago(gone)),
+                // A missed heartbeat, or presence they don't share.
+                _ => continue,
             };
-            if self.away_noted.get(&user) == Some(&key) {
+            if self.spoke_lately(&account, &user) {
                 continue;
+            }
+            if let Some((said, at)) = self.away_noted.get(&user) {
+                let new_status = status.as_ref().is_some_and(|s| s != said);
+                if at.elapsed() < AWAY_REPEAT && !new_status {
+                    continue;
+                }
             }
             let fallback = user.localpart().to_owned();
             let nick = self.win().members.iter().find(|m| m.user_id == user).map_or(fallback, |m| m.name.clone());
             let name = self.display_name(Some(&user), &nick).to_owned();
-            let line = match status {
+            let line = match &status {
                 Some(status) => format!("{name} is {text}: {status}"),
                 None => format!("{name} is {text}"),
             };
-            self.away_noted.insert(user, key);
+            self.away_noted.insert(user, (status.unwrap_or_default(), Instant::now()));
             self.info(line);
         }
+    }
+
+    /// Whether `user` said something in the last few minutes, in any of
+    /// `account`'s windows: then they're around, whatever their presence
+    /// says.
+    fn spoke_lately(&self, account: &str, user: &UserId) -> bool {
+        let since = Local::now() - SPOKE_LATELY;
+        self.windows.iter().filter(|w| w.account() == Some(account)).any(|w| {
+            w.lines
+                .iter()
+                .rev()
+                .take_while(|l| l.ts >= since)
+                .any(|l| l.is_message() && l.sender.as_deref() == Some(user))
+        })
     }
 
     /// In a thread window: (root, latest event, its sender), for sending
@@ -7355,7 +7382,7 @@ mod tests {
     }
 
     #[test]
-    fn writing_to_someone_away_says_so_once() {
+    fn writing_to_someone_away_says_so_when_its_news() {
         let mut app = test_app();
         let sam: OwnedUserId = "@sam:x.org".try_into().unwrap();
         let key = WinKey { account: "t".into(), room_id: "!dm:x.org".try_into().unwrap(), thread: None };
@@ -7368,9 +7395,20 @@ mod tests {
             app.on_event(AppEvent::Presence { account: "t".into(), updates: vec![(sam.clone(), p)] })
         };
         let notes = |app: &App| app.windows[1].lines.iter().filter(|l| l.body.contains(" is ")).count();
+        let ago = |mins| Some(Local::now() - chrono::TimeDelta::minutes(mins));
+        let presence =
+            |kind, status: Option<&str>, last_active| Presence { kind, status: status.map(Into::into), last_active };
 
         app.note_away(None);
         assert_eq!(notes(&app), 0, "nothing known, nothing said");
+        set(&mut app, presence(PresenceKind::Offline, None, None));
+        app.note_away(None);
+        set(&mut app, presence(PresenceKind::Offline, None, ago(3)));
+        app.note_away(None);
+        set(&mut app, presence(PresenceKind::Away, None, ago(5)));
+        app.note_away(None);
+        assert_eq!(notes(&app), 0, "hidden presence, a missed heartbeat, a few idle minutes: not news");
+
         set(&mut app, away("lunch"));
         app.note_away(None);
         app.note_away(None);
@@ -7379,11 +7417,29 @@ mod tests {
         set(&mut app, away("in a meeting"));
         app.note_away(None);
         assert_eq!(notes(&app), 2, "a new status is news");
-        set(&mut app, Presence { kind: PresenceKind::Online, status: None, last_active: None });
-        app.note_away(None);
+        set(&mut app, presence(PresenceKind::Online, None, None));
         set(&mut app, away("in a meeting"));
         app.note_away(None);
-        assert_eq!(notes(&app), 3, "away again after being back");
+        assert_eq!(notes(&app), 2, "a blip online doesn't make it news again");
+
+        // An hour on, long gone is worth saying again.
+        app.away_noted.get_mut(&sam).unwrap().1 = Instant::now().checked_sub(AWAY_REPEAT).unwrap();
+        set(&mut app, presence(PresenceKind::Offline, None, ago(180)));
+        app.note_away(None);
+        assert_eq!(app.windows[1].lines.back().unwrap().body, "sam is offline, last seen 3h ago");
+
+        // Someone who's just been talking is around, whatever it says.
+        app.away_noted.clear();
+        let mut said = Line::new(LineKind::Message, "back");
+        (said.sender, said.ts) = (Some(sam.clone()), Local::now() - chrono::TimeDelta::minutes(2));
+        app.windows[1].lines.push_back(said);
+        app.note_away(None);
+        assert_eq!(notes(&app), 3);
+
+        app.windows[1].lines.pop_back();
+        app.cfg.away_notes = false;
+        app.note_away(None);
+        assert_eq!(notes(&app), 3, "away_notes = false: never");
     }
 
     #[test]

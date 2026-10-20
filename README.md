@@ -350,10 +350,16 @@ stays in a private folder until Textrix closes.
   `/whois` includes it. `✎` in the window list means someone is typing there;
   typing notices clear when that person's message arrives, and expire after
   45 seconds without an update.
-- Like irssi's "is away": when you write to someone who's away or offline
-  (in your DM with them, by mentioning them, or replying to them), a line
-  says so ("sam is away: lunch") once, and again only when that changes.
-  It uses the presence your server shares, so not on sliding sync.
+- Like irssi's "is away": when you write to someone who's away (in your DM
+  with them, by mentioning them, or replying to them), a line says so
+  ("sam is away: lunch"), when it's news: they set a status, or they've
+  been gone half an hour or more ("sam is offline, last seen 3h ago").
+  Presence is only a guess (a missed heartbeat reads as offline, and some
+  people and servers don't share it), so a bare "offline", a few idle
+  minutes, or someone who's said something in the last quarter of an
+  hour, never get a note; and the same note comes at most once an hour,
+  unless their status changes. `away_notes = false` turns them off. It
+  uses the presence your server shares, so not on sliding sync.
 - Messages that mention you or a highlight word are collected, from every
   room and in time order, in a **mentions** window (listed under status;
   `/mentions` opens it). Click one, or select it and press Enter, to go to
@@ -518,6 +524,7 @@ applies it (and picks up servers added to or removed from the dotfile):
 ```toml
 timestamp_format = "%H:%M"
 nick_column = 12           # nicks in a column this wide (0: inline)
+away_notes = true          # "sam is away: lunch" when you write to them, if it's news
 show_joins = true
 link_titles = "unencrypted" # page titles under links: "all", "off"
 hyperlinks = true          # links as real hyperlinks (OSC 8)

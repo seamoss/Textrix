@@ -7,6 +7,18 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.5] - 2026-10-20
+
+### Changed
+- "Is away" notes only come when they're news. Presence is a guess (a
+  missed heartbeat reads as offline, and some people and servers don't
+  share it), so a note now needs a status they set ("away: lunch") or an
+  absence of half an hour or more ("offline, last seen 3h ago"). Nobody
+  who's said something in the last 15 minutes gets one, and the same note
+  comes at most once an hour, unless their status changes: a moment back
+  online no longer makes it new again. `away_notes = false` turns them
+  off.
+
 ## [0.9.4] - 2026-10-19
 
 ### Fixed
