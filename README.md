@@ -154,6 +154,7 @@ unencrypted too.
 | F6 / Shift+F6 | focus the next / previous split pane |
 | Ctrl+A/E/B/F/U/K/W/Y/D | emacs-style editing; Ctrl+C clears the line |
 | Ctrl+C twice | on an empty line, quits ("press Ctrl+C again to quit"); in the background, detaches instead |
+| Ctrl+X | write the message in your editor (`editor` in config.toml, else `$VISUAL`, else `$EDITOR`, else vi); save and quit, and the text is back in the input line to send. The editor works on a private temporary file, deleted when it closes, and in background mode it runs in the attached terminal |
 | Ctrl+L | redraw |
 
 **Mouse** (`mouse = true`): the wheel scrolls the pane under the pointer
@@ -205,7 +206,7 @@ bindings.
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
 | Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is |
 | Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
-| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| list \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
+| Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
 | Aliases | `/alias tt /window goto Team Tests` makes `/tt`. irssi-style: `$0`, `$1`… are its arguments, `$1-` the first onwards, `$*` all of them (with none of these, arguments go on the end), and `;` runs several commands (`/alias rr /markread all; /window 1`). Aliases are saved in `config.toml` under `[aliases]`, the rest of the file left as it is; `/alias` lists them, `/unalias <name>` removes one. They can't replace built-in commands |
 | Your names | `/window name Ops` shows this window as "Ops" everywhere in Textrix (window list, status bar, pane titles, switcher, the terminal title) without renaming the room for anyone else; the room's own name still finds it in the switcher and `/window goto`. `/window name` on its own puts it back. Names are kept in `layout.json` |
@@ -367,6 +368,10 @@ stays in a private folder until Textrix closes.
   room and in time order, in a **mentions** window (listed under status;
   `/mentions` opens it). Click one, or select it and press Enter, to go to
   the message in its room. Mentions found when history loads join it too.
+- Like irssi's awaylog: while you're `/away`, direct messages collect in
+  the mentions window too. Coming back says what came in ("while you were
+  away (1h 5m): 3 mentions (Team Tests) and 2 DMs (sam), in the mentions
+  window") and opens it.
 - Highlights and DMs from other windows (or any window while the terminal is
   in the background) ring the bell and pop a desktop notification in
   iTerm2, Ghostty, WezTerm and kitty. Inside tmux, notifications need
@@ -374,6 +379,25 @@ stays in a private folder until Textrix closes.
   `set -g set-clipboard on`.
 - Textrix moves your read marker as you read, and sends read receipts as set
   by `read_receipts`.
+
+### The status bar
+
+`statusbar` lists what the status bar shows, in order, and `statusbar2`
+adds a second bar above it. Items with nothing to say stay out of the
+way, and prompts ("press Ctrl+C again to quit", "upload …? y/n", the keys
+in selection mode) always come at the end of the first bar.
+
+```toml
+statusbar = ["time", "nick", "window", "activity", "typing", "scripts", "upgrade", "playing", "servers", "more"]
+statusbar2 = ["date", "users", "theme"]
+```
+
+The items: `time`, `date`, `nick` (your name on the window's server),
+`window` (its number and name, `(+E)` when encrypted), `users` (how many
+are in the room), `activity` (`Act: 2,7`), `typing`, `scripts` (scripts'
+items), `upgrade` (a newer Textrix), `playing` (audio), `servers` (away,
+unverified, connection trouble), `theme` (the theme on screen), `more`
+(scrolled up). A name it doesn't know stops Textrix with the list.
 
 ### Notifications
 
@@ -412,6 +436,13 @@ Enter keeps the one you're on for the session and Esc puts back the one
 you had. `/save` keeps it for good, like `theme = "<name>"` in
 config.toml. `/theme <name>` goes straight to one, `/theme list` lists
 them in the status window, and `--theme <name>` picks one for a run.
+
+A room can keep a theme of its own, so work and play look different at
+a glance: `/theme here amber-deep` (or Ctrl+T in the list, for "just
+here"), `/theme here off` to give it yours again. `/theme space Work
+turbo` does it for every room in a space; a room's own still wins. The
+screen takes the theme of the room you're in. These are kept in
+`layout.json` straight away; your own theme is still kept by `/save`.
 
 | Shelf | Themes |
 |---|---|
@@ -527,6 +558,9 @@ applies it (and picks up servers added to or removed from the dotfile):
 ```toml
 timestamp_format = "%H:%M"
 nick_column = 12           # nicks in a column this wide (0: inline)
+editor = ""                # Ctrl+X opens this ("" uses $VISUAL, then $EDITOR, then vi)
+statusbar = ["time", "nick", "window", "activity", "typing", "scripts", "upgrade", "playing", "servers", "more"]
+statusbar2 = []            # a second bar above, e.g. ["date", "users", "theme"]
 system_italic = true       # -!- lines in italic
 away_notes = true          # "sam is away: lunch" when you write to them, if it's news
 show_joins = true

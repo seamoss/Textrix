@@ -6182,6 +6182,11 @@ impl App {
 
     /// What the status bar says about upgrades: one installed under you,
     /// or one released.
+    /// The theme on screen: yours, or the focused room's own.
+    pub fn theme_on_screen(&self) -> &ThemeId {
+        &self.palette_for
+    }
+
     pub fn upgrade_note(&self) -> Option<String> {
         match (&self.installed, &self.released) {
             (Some(v), _) if v.is_empty() => Some("new build: /restart".into()),
@@ -7212,6 +7217,31 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn the_status_bars_show_what_you_list() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        app.cfg.statusbar = vec!["window".into(), "theme".into()];
+        app.cfg.statusbar2 = vec!["date".into()];
+        let rows = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 12)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..12).map(|y| (0..90).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>()
+        };
+        let shown = rows(&mut app);
+        assert!(shown[10].starts_with("[2:Night Owls] [default]"), "{}", shown[10]);
+        assert!(shown[9].starts_with(&format!("[{}]", Local::now().format("%a %d %b"))), "a second bar: {}", shown[9]);
+        app.confirm_paste = Some(7);
+        assert!(rows(&mut app)[10].contains("[send 7 pasted lines to Night Owls? y/n]"), "prompts always show");
+
+        let mut table = app.cfg.to_table().unwrap();
+        table.insert("statusbar".into(), toml::Value::Array(vec![toml::Value::String("tme".into())]));
+        let refused = Config::from_table(table, std::path::Path::new("")).map(|_| ()).unwrap_err().to_string();
+        assert!(refused.contains("“tme”") && refused.contains("time"), "{refused}");
     }
 
     #[test]

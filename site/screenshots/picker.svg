@@ -118,7 +118,6 @@
 <rect x="743.0" y="476.0" width="63.0" height="19" fill="#de5d72"/>
 <rect x="806.0" y="476.0" width="9.0" height="19" fill="#dd5c72"/>
 <rect x="815.0" y="476.0" width="9.0" height="19" fill="#d55870"/>
-<rect x="833.0" y="476.0" width="288.0" height="19" fill="#ffff55"/>
 <rect x="446.0" y="495.0" width="9.0" height="19" fill="#90217c"/>
 <rect x="455.0" y="495.0" width="9.0" height="19" fill="#8e217b"/>
 <rect x="464.0" y="495.0" width="9.0" height="19" fill="#8a2078"/>
@@ -158,6 +157,7 @@
 <rect x="788.0" y="495.0" width="9.0" height="19" fill="#8e217b"/>
 <rect x="797.0" y="495.0" width="9.0" height="19" fill="#93227e"/>
 <rect x="806.0" y="495.0" width="18.0" height="19" fill="#8c207a"/>
+<rect x="833.0" y="495.0" width="288.0" height="19" fill="#ffff55"/>
 <rect x="446.0" y="514.0" width="9.0" height="19" fill="#5d1557"/>
 <rect x="455.0" y="514.0" width="9.0" height="19" fill="#4e114e"/>
 <rect x="464.0" y="514.0" width="9.0" height="19" fill="#4f114e"/>
@@ -1538,7 +1538,7 @@
 <text x="842.0 851.0 860.0 869.0 878.0 887.0" y="71.9" fill="#ffffff" font-weight="bold">Themes</text>
 <text x="32.0" y="90.9" fill="#aaaaaa">1</text>
 <text x="77.0 86.0 95.0 104.0 113.0 122.0" y="90.9" fill="#55ffff">status</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="90.9" fill="#aaaaaa">10:07</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="90.9" fill="#aaaaaa">11:14</text>
 <text x="293.0 302.0 311.0" y="90.9" fill="#ffffff" font-weight="bold" font-style="italic">--&gt;</text>
 <text x="446.0 455.0 464.0 473.0 482.0 491.0" y="90.9" fill="#ffff55" font-style="italic">alice,</text>
 <text x="509.0 518.0 527.0" y="90.9" fill="#ffff55" font-style="italic">bob</text>
@@ -1549,7 +1549,7 @@
 <text x="833.0" y="90.9" fill="#ffffff" font-weight="bold">›</text>
 <text x="23.0 32.0" y="109.9" fill="#aaaaaa">11</text>
 <text x="77.0 86.0 95.0 104.0 113.0 122.0 131.0 140.0" y="109.9" fill="#ff5555" font-weight="bold">mentions</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="109.9" fill="#aaaaaa">10:09</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="109.9" fill="#aaaaaa">11:16</text>
 <text x="293.0 302.0 311.0 320.0 329.0" y="109.9" fill="#aaaaaa">&lt;sam&gt;</text>
 <text x="446.0 455.0 464.0 473.0 482.0 491.0" y="109.9" fill="#ffff55">anyone</text>
 <text x="509.0 518.0" y="109.9" fill="#ffff55">up</text>
@@ -1557,9 +1557,13 @@
 <text x="572.0" y="109.9" fill="#ffff55">a</text>
 <text x="590.0 599.0 608.0 617.0" y="109.9" fill="#ffff55">late</text>
 <text x="635.0 644.0 653.0 662.0" y="109.9" fill="#ffff55">one?</text>
-<text x="833.0 842.0 851.0 860.0 869.0" y="109.9" fill="#aaaaaa" font-weight="bold">Plain</text>
+<text x="833.0 842.0 851.0 860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="109.9" fill="#ffffff" font-weight="bold">everywhere</text>
+<text x="932.0" y="109.9" fill="#aaaaaa">·</text>
+<text x="950.0 959.0" y="109.9" fill="#aaaaaa">^T</text>
+<text x="977.0 986.0 995.0 1004.0" y="109.9" fill="#aaaaaa">just</text>
+<text x="1022.0 1031.0 1040.0 1049.0" y="109.9" fill="#aaaaaa">here</text>
 <text x="32.0 41.0 50.0 59.0 68.0 77.0 86.0" y="128.9" fill="#aaaaaa" font-weight="bold">Unreads</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="128.9" fill="#aaaaaa">10:09</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="128.9" fill="#aaaaaa">11:16</text>
 <text x="293.0" y="128.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0 329.0 338.0 347.0 356.0 365.0 374.0" y="128.9" fill="#ff55ff">jo_bloggs</text>
 <text x="383.0" y="128.9" fill="#aaaaaa">&gt;</text>
@@ -1569,13 +1573,12 @@
 <text x="599.0 608.0" y="128.9" fill="#ffff55">we</text>
 <text x="626.0 635.0 644.0 653.0 662.0 671.0 680.0 689.0" y="128.9" fill="#ffff55">building</text>
 <text x="707.0 716.0 725.0 734.0 743.0 752.0 761.0" y="128.9" fill="#ffff55">tonight</text>
-<text x="842.0" y="128.9" fill="#55ffff">•</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="128.9" fill="#55ffff">default</text>
+<text x="833.0 842.0 851.0 860.0 869.0" y="128.9" fill="#aaaaaa" font-weight="bold">Plain</text>
 <text x="32.0" y="147.9" fill="#aaaaaa">9</text>
 <text x="50.0" y="147.9" fill="#15161c" font-weight="bold">J</text>
 <text x="77.0" y="147.9" fill="#ffffff">●</text>
 <text x="95.0 104.0 113.0 122.0 131.0 140.0 149.0 158.0 167.0" y="147.9" fill="#ff5555" font-weight="bold">jo_bloggs</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="147.9" fill="#aaaaaa">10:10</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="147.9" fill="#aaaaaa">11:17</text>
 <text x="293.0" y="147.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0" y="147.9" fill="#ffff55" font-weight="bold">you</text>
 <text x="329.0" y="147.9" fill="#aaaaaa">&gt;</text>
@@ -1587,12 +1590,13 @@
 <text x="662.0 671.0 680.0 689.0 698.0 707.0 716.0 725.0 734.0" y="147.9" fill="#ffff55">terminal.</text>
 <text x="752.0 761.0 770.0 779.0" y="147.9" fill="#ffff55">like</text>
 <text x="797.0 806.0 815.0" y="147.9" fill="#ffff55">irs</text>
-<text x="860.0 869.0 878.0 887.0 896.0" y="147.9" fill="#55ffff">light</text>
+<text x="842.0" y="147.9" fill="#55ffff">•</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="147.9" fill="#55ffff">default</text>
 <text x="32.0" y="166.9" fill="#aaaaaa">7</text>
 <text x="50.0" y="166.9" fill="#15161c" font-weight="bold">T</text>
 <text x="77.0 86.0 95.0 104.0" y="166.9" fill="#ff5555" font-weight="bold">Team</text>
 <text x="122.0 131.0 140.0 149.0 158.0" y="166.9" fill="#ff5555" font-weight="bold">Tests</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="166.9" fill="#aaaaaa">10:10</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="166.9" fill="#aaaaaa">11:17</text>
 <text x="293.0 302.0 311.0 320.0 329.0" y="166.9" fill="#aaaaaa">&lt;sam&gt;</text>
 <text x="446.0" y="166.9" fill="#aaaaaa">↪</text>
 <text x="464.0 473.0 482.0" y="166.9" fill="#aaaaaa">you</text>
@@ -1603,16 +1607,16 @@
 <text x="689.0 698.0 707.0" y="166.9" fill="#aaaaaa">the</text>
 <text x="725.0 734.0 743.0 752.0 761.0 770.0 779.0 788.0 797.0" y="166.9" fill="#aaaaaa">terminal.</text>
 <text x="815.0" y="166.9" fill="#aaaaaa">l</text>
-<text x="860.0 869.0 878.0 887.0" y="166.9" fill="#55ffff">mono</text>
+<text x="860.0 869.0 878.0 887.0 896.0" y="166.9" fill="#55ffff">light</text>
 <text x="32.0" y="185.9" fill="#aaaaaa">2</text>
 <text x="50.0" y="185.9" fill="#15161c" font-weight="bold">B</text>
 <text x="77.0 86.0 95.0 104.0" y="185.9" fill="#ffff55" font-weight="bold">Book</text>
 <text x="122.0 131.0 140.0 149.0" y="185.9" fill="#ffff55" font-weight="bold">Club</text>
 <text x="446.0 455.0 464.0" y="185.9" fill="#ffff55">you</text>
 <text x="482.0 491.0 500.0" y="185.9" fill="#ffff55">are</text>
-<text x="833.0 842.0 851.0 860.0 869.0 878.0 887.0 896.0" y="185.9" fill="#aaaaaa" font-weight="bold">Monitors</text>
+<text x="860.0 869.0 878.0 887.0" y="185.9" fill="#55ffff">mono</text>
 <text x="32.0 41.0 50.0 59.0 68.0" y="204.9" fill="#aaaaaa" font-weight="bold">Rooms</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="204.9" fill="#aaaaaa">10:12</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="204.9" fill="#aaaaaa">11:19</text>
 <text x="293.0" y="204.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0" y="204.9" fill="#ffff55" font-weight="bold">you</text>
 <text x="329.0" y="204.9" fill="#aaaaaa">&gt;</text>
@@ -1620,12 +1624,12 @@
 <text x="509.0 518.0 527.0" y="204.9" fill="#ffff55">the</text>
 <text x="545.0 554.0 563.0 572.0" y="204.9" fill="#ffff55">main</text>
 <text x="590.0 599.0 608.0 617.0" y="204.9" fill="#ffff55">loop</text>
-<text x="860.0 869.0 878.0 887.0 896.0" y="204.9" fill="#55ffff">green</text>
+<text x="833.0 842.0 851.0 860.0 869.0 878.0 887.0 896.0" y="204.9" fill="#aaaaaa" font-weight="bold">Monitors</text>
 <text x="32.0" y="223.9" fill="#aaaaaa" font-weight="bold">◆</text>
 <text x="50.0 59.0 68.0 77.0 86.0 95.0 104.0" y="223.9" fill="#aaaaaa" font-weight="bold">Hobbies</text>
 <text x="464.0 473.0 482.0 491.0" y="223.9" fill="#ffffff" font-weight="bold">loop</text>
 <text x="509.0" y="223.9" fill="#ffffff">{</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="223.9" fill="#55ffff">green-deep</text>
+<text x="860.0 869.0 878.0 887.0 896.0" y="223.9" fill="#55ffff">green</text>
 <text x="32.0" y="242.9" fill="#aaaaaa">3</text>
 <text x="50.0" y="242.9" fill="#15161c" font-weight="bold">G</text>
 <text x="77.0 86.0 95.0 104.0 113.0 122.0" y="242.9" fill="#55ffff">Garden</text>
@@ -1636,7 +1640,7 @@
 <text x="608.0 617.0 626.0 635.0 644.0 653.0 662.0" y="242.9" fill="#ffffff">events.</text>
 <text x="671.0 680.0 689.0 698.0" y="242.9" fill="#ffff55">next</text>
 <text x="707.0 716.0 725.0 734.0 743.0 752.0 761.0 770.0 779.0 788.0" y="242.9" fill="#ffffff">().await?;</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="242.9" fill="#55ffff">green-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="242.9" fill="#55ffff">green-deep</text>
 <text x="32.0" y="261.9" fill="#000000" font-weight="bold">4</text>
 <text x="50.0" y="261.9" fill="#15161c" font-weight="bold">N</text>
 <text x="77.0 86.0 95.0 104.0 113.0" y="261.9" fill="#000000" font-weight="bold">Night</text>
@@ -1647,26 +1651,26 @@
 <text x="689.0 698.0" y="261.9" fill="#aaaaaa" font-style="italic">//</text>
 <text x="716.0 725.0 734.0 743.0 752.0 761.0 770.0" y="261.9" fill="#aaaaaa" font-style="italic">redraws</text>
 <text x="788.0 797.0 806.0 815.0" y="261.9" fill="#aaaaaa" font-style="italic">when</text>
-<text x="860.0 869.0 878.0 887.0" y="261.9" fill="#55ffff">blue</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="261.9" fill="#55ffff">green-tron</text>
 <text x="32.0" y="280.9" fill="#aaaaaa">6</text>
 <text x="50.0" y="280.9" fill="#15161c" font-weight="bold">S</text>
 <text x="77.0 86.0 95.0 104.0 113.0" y="280.9" fill="#55ffff">Synth</text>
 <text x="131.0 140.0 149.0 158.0 167.0" y="280.9" fill="#55ffff">Nerds</text>
 <text x="464.0" y="280.9" fill="#ffffff">}</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="280.9" fill="#55ffff">blue-deep</text>
+<text x="860.0 869.0 878.0 887.0" y="280.9" fill="#55ffff">blue</text>
 <text x="32.0" y="299.9" fill="#aaaaaa" font-weight="bold">◆</text>
 <text x="50.0 59.0 68.0 77.0" y="299.9" fill="#aaaaaa" font-weight="bold">Work</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="299.9" fill="#aaaaaa">10:13</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="299.9" fill="#aaaaaa">11:20</text>
 <text x="293.0" y="299.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0 329.0 338.0 347.0 356.0 365.0 374.0" y="299.9" fill="#ff55ff">jo_bloggs</text>
 <text x="383.0" y="299.9" fill="#aaaaaa">&gt;</text>
 <text x="446.0 455.0 464.0 473.0 482.0 491.0 500.0" y="299.9" fill="#ffff55">[voice]</text>
 <text x="518.0 527.0 536.0 545.0" y="299.9" fill="#ffff55">0:12</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="299.9" fill="#55ffff">blue-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="299.9" fill="#55ffff">blue-deep</text>
 <text x="32.0" y="318.9" fill="#aaaaaa">5</text>
 <text x="50.0" y="318.9" fill="#15161c" font-weight="bold">R</text>
 <text x="77.0 86.0 95.0 104.0 113.0 122.0 131.0 140.0 149.0 158.0" y="318.9" fill="#55ffff">Rustaceans</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="318.9" fill="#aaaaaa">10:14</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="318.9" fill="#aaaaaa">11:21</text>
 <text x="293.0 302.0 311.0 320.0 329.0" y="318.9" fill="#aaaaaa">&lt;sam&gt;</text>
 <text x="446.0 455.0" y="318.9" fill="#ffff55">ok</text>
 <text x="473.0 482.0 491.0 500.0 509.0 518.0" y="318.9" fill="#ffff55">that's</text>
@@ -1677,9 +1681,9 @@
 <text x="770.0" y="318.9" fill="#aaaaaa">[</text>
 <text x="779.0" y="318.9" fill="#aaaaaa">🔥</text>
 <text x="806.0 815.0" y="318.9" fill="#aaaaaa">3]</text>
-<text x="860.0 869.0 878.0" y="318.9" fill="#55ffff">red</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="318.9" fill="#55ffff">blue-tron</text>
 <text x="32.0 41.0 50.0" y="337.9" fill="#aaaaaa" font-weight="bold">DMs</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="337.9" fill="#aaaaaa">10:18</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="337.9" fill="#aaaaaa">11:25</text>
 <text x="293.0" y="337.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0 329.0 338.0" y="337.9" fill="#ff55ff">alice</text>
 <text x="347.0" y="337.9" fill="#aaaaaa">&gt;</text>
@@ -1687,42 +1691,42 @@
 <text x="491.0 500.0" y="337.9" fill="#ffff55">it</text>
 <text x="518.0 527.0" y="337.9" fill="#ffff55">do</text>
 <text x="545.0 554.0 563.0 572.0 581.0 590.0 599.0 608.0 617.0" y="337.9" fill="#ffff55">pictures?</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0" y="337.9" fill="#55ffff">red-deep</text>
+<text x="860.0 869.0 878.0" y="337.9" fill="#55ffff">red</text>
 <text x="32.0" y="356.9" fill="#aaaaaa">8</text>
 <text x="50.0" y="356.9" fill="#15161c" font-weight="bold">A</text>
 <text x="77.0" y="356.9" fill="#aaaaaa">○</text>
 <text x="95.0 104.0 113.0 122.0" y="356.9" fill="#55ffff">alex</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="356.9" fill="#aaaaaa">10:19</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="356.9" fill="#aaaaaa">11:26</text>
 <text x="293.0" y="356.9" fill="#aaaaaa">&lt;</text>
 <text x="302.0 311.0 320.0" y="356.9" fill="#ffff55" font-weight="bold">you</text>
 <text x="329.0" y="356.9" fill="#aaaaaa">&gt;</text>
 <text x="446.0 455.0 464.0 473.0 482.0 491.0 500.0" y="356.9" fill="#ffff55">[image]</text>
 <text x="518.0 527.0 536.0 545.0 554.0 563.0 572.0 581.0 590.0 599.0" y="356.9" fill="#ffff55">sunset.png</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0" y="356.9" fill="#55ffff">red-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0" y="356.9" fill="#55ffff">red-deep</text>
 <text x="23.0 32.0" y="375.9" fill="#aaaaaa">10</text>
 <text x="50.0" y="375.9" fill="#15161c" font-weight="bold">S</text>
 <text x="77.0" y="375.9" fill="#55ff55">●</text>
 <text x="95.0 104.0 113.0" y="375.9" fill="#55ffff">sam</text>
-<text x="860.0 869.0 878.0 887.0 896.0" y="375.9" fill="#55ffff">amber</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="394.9" fill="#55ffff">amber-deep</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="413.9" fill="#55ffff">amber-tron</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="432.9" fill="#55ffff">mono-tron</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="451.9" fill="#55ffff">ibm5151</text>
-<text x="833.0 842.0 851.0 860.0 869.0 878.0 887.0" y="470.9" fill="#aaaaaa" font-weight="bold">Classic</text>
-<text x="860.0 869.0 878.0 887.0 896.0" y="489.9" fill="#0000aa">turbo</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="508.9" fill="#55ffff">procomm</text>
-<text x="860.0 869.0 878.0" y="527.9" fill="#55ffff">c64</text>
-<text x="860.0 869.0 878.0 887.0 896.0" y="546.9" fill="#55ffff">amiga</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0" y="565.9" fill="#55ffff">delphi</text>
-<text x="860.0 869.0 878.0 887.0" y="584.9" fill="#55ffff">mirc</text>
-<text x="239.0 248.0 257.0 266.0 275.0" y="603.9" fill="#aaaaaa">10:19</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0" y="375.9" fill="#55ffff">red-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0" y="394.9" fill="#55ffff">amber</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="413.9" fill="#55ffff">amber-deep</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="432.9" fill="#55ffff">amber-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0" y="451.9" fill="#55ffff">mono-tron</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="470.9" fill="#55ffff">ibm5151</text>
+<text x="833.0 842.0 851.0 860.0 869.0 878.0 887.0" y="489.9" fill="#aaaaaa" font-weight="bold">Classic</text>
+<text x="860.0 869.0 878.0 887.0 896.0" y="508.9" fill="#0000aa">turbo</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0" y="527.9" fill="#55ffff">procomm</text>
+<text x="860.0 869.0 878.0" y="546.9" fill="#55ffff">c64</text>
+<text x="860.0 869.0 878.0 887.0 896.0" y="565.9" fill="#55ffff">amiga</text>
+<text x="860.0 869.0 878.0 887.0 896.0 905.0" y="584.9" fill="#55ffff">delphi</text>
+<text x="239.0 248.0 257.0 266.0 275.0" y="603.9" fill="#aaaaaa">11:26</text>
 <text x="293.0 302.0 311.0" y="603.9" fill="#aaaaaa" font-weight="bold" font-style="italic">-!-</text>
 <text x="446.0 455.0 464.0 473.0 482.0 491.0 500.0 509.0 518.0" y="603.9" fill="#aaaaaa" font-style="italic">jo_bloggs</text>
 <text x="536.0 545.0" y="603.9" fill="#aaaaaa" font-style="italic">is</text>
 <text x="563.0 572.0 581.0 590.0 599.0" y="603.9" fill="#aaaaaa" font-style="italic">away:</text>
 <text x="617.0 626.0 635.0 644.0 653.0 662.0" y="603.9" fill="#aaaaaa" font-style="italic">making</text>
 <text x="680.0 689.0 698.0" y="603.9" fill="#aaaaaa" font-style="italic">tea</text>
-<text x="860.0 869.0 878.0 887.0 896.0 905.0 914.0 923.0 932.0 941.0 950.0 959.0 968.0 977.0" y="603.9" fill="#55ffff">solarized-dark</text>
+<text x="860.0 869.0 878.0 887.0" y="603.9" fill="#55ffff">mirc</text>
 <text x="833.0 842.0 851.0 860.0 869.0" y="622.9" fill="#aaaaaa">Turbo</text>
 <text x="887.0 896.0 905.0 914.0 923.0 932.0 941.0" y="622.9" fill="#aaaaaa">Pascal:</text>
 <text x="959.0 968.0 977.0 986.0 995.0 1004.0" y="622.9" fill="#aaaaaa">yellow</text>
@@ -1730,7 +1734,7 @@
 <text x="1049.0 1058.0 1067.0" y="622.9" fill="#aaaaaa">DOS</text>
 <text x="1085.0 1094.0 1103.0 1112.0" y="622.9" fill="#aaaaaa">blue</text>
 <text x="14.0" y="641.9" fill="#aa0000">[</text>
-<text x="23.0 32.0 41.0 50.0 59.0" y="641.9" fill="#000000">10:19</text>
+<text x="23.0 32.0 41.0 50.0 59.0" y="641.9" fill="#000000">11:26</text>
 <text x="68.0" y="641.9" fill="#aa0000">]</text>
 <text x="86.0" y="641.9" fill="#aa0000">[</text>
 <text x="95.0 104.0 113.0 122.0 131.0 140.0 149.0" y="641.9" fill="#000000">4:Night</text>

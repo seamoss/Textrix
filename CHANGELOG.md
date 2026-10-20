@@ -7,6 +7,32 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.10.0] - 2026-10-20
+
+### Added
+- Ctrl+X writes the message in your editor: `editor` in config.toml, else
+  `$VISUAL`, else `$EDITOR`, else vi. Save and quit, and the text is back
+  in the input line to send. It works on a private temporary file,
+  deleted when the editor closes; in background mode the editor runs in
+  the attached terminal.
+- An away log, like irssi's: while you're `/away`, direct messages
+  collect in the mentions window too, and coming back says what came in
+  ("while you were away (1h 5m): 3 mentions (Team Tests) and 2 DMs
+  (sam)") and opens it.
+- Rooms can keep a theme of their own: `/theme here <name>` (or Ctrl+T in
+  the theme list, for "just here") and `/theme here off`; `/theme space
+  <space> <name>` does it for a space's rooms, unless they have their own.
+  The screen takes the theme of the room you're in. They're kept in
+  layout.json.
+- The status bar is yours to arrange: `statusbar` lists its items in
+  order (`time`, `date`, `nick`, `window`, `users`, `activity`, `typing`,
+  `scripts`, `upgrade`, `playing`, `servers`, `theme`, `more`), and
+  `statusbar2` adds a second bar above it. Prompts always show.
+
+### Changed
+- A full redraw (Ctrl+L, a new theme) no longer asks the terminal where
+  its cursor is first, which it doesn't need to know.
+
 ## [0.9.7] - 2026-10-20
 
 ### Changed

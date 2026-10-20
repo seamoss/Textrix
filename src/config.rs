@@ -116,6 +116,10 @@ pub struct Config {
     /// The editor Ctrl+X opens on your message; empty uses $VISUAL, then
     /// $EDITOR, then vi.
     pub editor: String,
+    /// The status bar's items, in order (see [`STATUS_ITEMS`]).
+    pub statusbar: Vec<String>,
+    /// A second bar, above it, if this lists anything.
+    pub statusbar2: Vec<String>,
     /// Nicks in a column this many characters wide (longer ones are cut
     /// short), so every message starts in line; 0 puts them inline,
     /// `<nick> text`.
@@ -230,6 +234,8 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             nick_column: 12,
+            statusbar: DEFAULT_STATUSBAR.map(String::from).to_vec(),
+            statusbar2: Vec::new(),
             editor: String::new(),
             system_italic: true,
             away_notes: true,
@@ -460,7 +466,38 @@ pub fn save_alias(path: &Path, name: &str, expansion: Option<&str>) -> Result<()
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 
+/// What a status bar can show.
+pub const STATUS_ITEMS: [(&str, &str); 13] = [
+    ("time", "the time"),
+    ("date", "the date"),
+    ("nick", "your name on this window's server"),
+    ("window", "this window's number and name, (+E) when encrypted"),
+    ("users", "how many are in this room"),
+    ("activity", "windows with something new: Act: 2,7"),
+    ("typing", "who's typing here"),
+    ("scripts", "scripts' items"),
+    ("upgrade", "a newer Textrix installed, or out"),
+    ("playing", "audio playing"),
+    ("servers", "away, unverified, and connection trouble"),
+    ("theme", "the theme on screen"),
+    ("more", "scrolled up: there's more below"),
+];
+
+pub const DEFAULT_STATUSBAR: [&str; 10] =
+    ["time", "nick", "window", "activity", "typing", "scripts", "upgrade", "playing", "servers", "more"];
+
 impl Config {
+    /// Settings that the types alone don't check.
+    fn check(&self) -> Result<()> {
+        for (key, items) in [("statusbar", &self.statusbar), ("statusbar2", &self.statusbar2)] {
+            if let Some(bad) = items.iter().find(|i| !STATUS_ITEMS.iter().any(|(name, _)| name == i)) {
+                let names: Vec<&str> = STATUS_ITEMS.iter().map(|(n, _)| *n).collect();
+                anyhow::bail!("{key}: there's no “{bad}”; the items are {}", names.join(", "));
+            }
+        }
+        Ok(())
+    }
+
     /// Every setting as TOML.
     pub fn to_table(&self) -> Result<toml::Table> {
         Ok(toml::Table::try_from(self)?)
@@ -470,6 +507,7 @@ impl Config {
     /// types are errors); theme files come from `themes`.
     pub fn from_table(table: toml::Table, themes: &Path) -> Result<Self> {
         let mut cfg: Self = table.try_into()?;
+        cfg.check()?;
         cfg.palette = Theme::load(&cfg.theme, &cfg.colors, themes)?;
         Ok(cfg)
     }
@@ -478,6 +516,7 @@ impl Config {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 let mut cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+                cfg.check().with_context(|| format!("in {}", path.display()))?;
                 let themes = path.with_file_name("themes");
                 cfg.palette =
                     Theme::load(&cfg.theme, &cfg.colors, &themes).with_context(|| format!("in {}", path.display()))?;

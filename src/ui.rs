@@ -74,8 +74,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.cfg.palette.base != Style::new() {
         f.render_widget(Block::new().style(app.cfg.palette.base), f.area());
     }
+    let bars = if app.cfg.statusbar2.is_empty() { 1 } else { 2 };
     let [topic, middle, status, input] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(bars), Constraint::Length(1)])
             .areas(f.area());
 
     // Side panes give way on narrow terminals.
@@ -1464,7 +1465,34 @@ fn wrap(cells: &[(char, Style)], width: usize, gutter: &[Span<'static>]) -> Vec<
     rows
 }
 
+/// The status bar (`statusbar`), and the second one above it
+/// (`statusbar2`) when there is one. Prompts always come at the end of
+/// the first.
 fn draw_status(f: &mut Frame, area: Rect, app: &App) {
+    let t = &app.cfg.palette;
+    let flashing = app.flash_until.is_some_and(|until| std::time::Instant::now() < until);
+    let mut rows = Vec::new();
+    if !app.cfg.statusbar2.is_empty() {
+        rows.push(status_items(app, &app.cfg.statusbar2));
+    }
+    let mut main = status_items(app, &app.cfg.statusbar);
+    if let Some(prompt) = status_prompt(app) {
+        main.extend([Span::styled("[", t.bar_accent), prompt, Span::styled("] ", t.bar_accent)]);
+    }
+    rows.push(main);
+    for (n, spans) in rows.into_iter().enumerate() {
+        let row = Rect { y: area.y + n as u16, height: 1, ..area };
+        let style = if flashing { t.bar.add_modifier(Modifier::REVERSED) } else { t.bar };
+        let mut line = TLine::from(spans);
+        if flashing {
+            line = line.patch_style(Style::new().add_modifier(Modifier::REVERSED));
+        }
+        f.render_widget(Paragraph::new(line).style(style), row);
+    }
+}
+
+/// `[a] [b] …`: the status bar `items`, those with something to show.
+fn status_items(app: &App, items: &[String]) -> Vec<Span<'static>> {
     let t = &app.cfg.palette;
     let win = &app.windows[app.active];
     let mut spans: Vec<Span> = Vec::new();
@@ -1473,116 +1501,126 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         spans.extend(parts);
         spans.push(Span::styled("] ", t.bar_accent));
     };
-
-    let now = Local::now().format("%H:%M").to_string();
-    // Elite o'clock.
-    let clock = if now == "13:37" { "1337".to_owned() } else { now };
-    item(&mut spans, vec![Span::styled(clock, t.bar)]);
-
-    if let Some(state) = win.account().and_then(|a| app.accounts.get(a)) {
-        let nick = state.nick.clone().unwrap_or_else(|| state.user.clone());
-        item(&mut spans, vec![Span::styled(nick, t.bar)]);
-    }
-
-    let mut name = format!("{}:{}", app.active + 1, win.title());
-    if win.encrypted {
-        name.push_str("(+E)");
-    }
-    item(&mut spans, vec![Span::styled(name, t.bar)]);
-
-    let active: Vec<(usize, Activity)> = app
-        .windows
-        .iter()
-        .enumerate()
-        .filter(|(i, w)| !app.on_screen(*i) && w.activity > Activity::None)
-        .map(|(i, w)| (i + 1, w.activity))
-        .collect();
-    if !active.is_empty() {
-        let mut parts = vec![Span::styled("Act: ", t.bar)];
-        for (n, (num, level)) in active.into_iter().enumerate() {
-            if n > 0 {
-                parts.push(Span::styled(",", t.bar));
+    for name in items {
+        match name.as_str() {
+            "time" => {
+                let now = Local::now().format("%H:%M").to_string();
+                // Elite o'clock.
+                let clock = if now == "13:37" { "1337".to_owned() } else { now };
+                item(&mut spans, vec![Span::styled(clock, t.bar)]);
             }
-            let style = match level {
-                Activity::Highlight => t.bar.patch(t.highlight),
-                Activity::Message => t.bar.patch(t.activity),
-                _ => t.bar_accent,
-            };
-            parts.push(Span::styled(num.to_string(), style));
+            "date" => item(&mut spans, vec![Span::styled(Local::now().format("%a %d %b").to_string(), t.bar)]),
+            "nick" => {
+                if let Some(state) = win.account().and_then(|a| app.accounts.get(a)) {
+                    let nick = state.nick.clone().unwrap_or_else(|| state.user.clone());
+                    item(&mut spans, vec![Span::styled(nick, t.bar)]);
+                }
+            }
+            "window" => {
+                let mut name = format!("{}:{}", app.active + 1, win.title());
+                if win.encrypted {
+                    name.push_str("(+E)");
+                }
+                item(&mut spans, vec![Span::styled(name, t.bar)]);
+            }
+            "users" if win.room.is_some() && !win.members.is_empty() => {
+                item(&mut spans, vec![Span::styled(format!("{} users", win.members.len()), t.bar)]);
+            }
+            "activity" => {
+                let active: Vec<(usize, Activity)> = app
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, w)| !app.on_screen(*i) && w.activity > Activity::None)
+                    .map(|(i, w)| (i + 1, w.activity))
+                    .collect();
+                if !active.is_empty() {
+                    let mut parts = vec![Span::styled("Act: ", t.bar)];
+                    for (n, (num, level)) in active.into_iter().enumerate() {
+                        if n > 0 {
+                            parts.push(Span::styled(",", t.bar));
+                        }
+                        let style = match level {
+                            Activity::Highlight => t.bar.patch(t.highlight),
+                            Activity::Message => t.bar.patch(t.activity),
+                            _ => t.bar_accent,
+                        };
+                        parts.push(Span::styled(num.to_string(), style));
+                    }
+                    item(&mut spans, parts);
+                }
+            }
+            "typing" if !win.typing.is_empty() => {
+                item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
+            }
+            "scripts" => {
+                for text in app.scripts.status_items() {
+                    item(&mut spans, vec![Span::styled(text, t.bar)]);
+                }
+            }
+            "upgrade" => {
+                if let Some(note) = app.upgrade_note() {
+                    item(&mut spans, vec![Span::styled(note, t.bar_alert)]);
+                }
+            }
+            "playing" if app.playing.is_some() => {
+                item(&mut spans, vec![Span::styled("▶ playing", t.bar.add_modifier(Modifier::BOLD))]);
+            }
+            "servers" => {
+                for (name, state) in &app.accounts {
+                    if state.away.is_some() {
+                        item(&mut spans, vec![Span::styled(format!("{name}: away"), t.bar_alert)]);
+                    }
+                    if state.verified == Some(false) {
+                        item(&mut spans, vec![Span::styled(format!("{name}: unverified"), t.bar_alert)]);
+                    }
+                    let label = match &state.status {
+                        ConnStatus::Online => continue,
+                        ConnStatus::Connecting => "connecting",
+                        ConnStatus::Syncing => "syncing",
+                        ConnStatus::Lagging => "lag",
+                        ConnStatus::Offline => "offline",
+                    };
+                    item(&mut spans, vec![Span::styled(format!("{name}: {label}"), t.bar_alert)]);
+                }
+            }
+            "theme" => item(&mut spans, vec![Span::styled(app.theme_on_screen().to_string(), t.bar)]),
+            "more" if win.scroll > 0 => {
+                let style = if win.unseen_below { t.bar.add_modifier(Modifier::BOLD) } else { t.bar };
+                item(&mut spans, vec![Span::styled("more", style)]);
+            }
+            _ => {}
         }
-        item(&mut spans, parts);
     }
+    spans
+}
 
-    if !win.typing.is_empty() {
-        item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
-    }
-
-    for text in app.scripts.status_items() {
-        item(&mut spans, vec![Span::styled(text, t.bar)]);
-    }
-
-    if let Some(note) = app.upgrade_note() {
-        item(&mut spans, vec![Span::styled(note, t.bar_alert)]);
-    }
-
-    if app.playing.is_some() {
-        item(&mut spans, vec![Span::styled("▶ playing", t.bar.add_modifier(Modifier::BOLD))]);
-    }
-
-    for (name, state) in &app.accounts {
-        if state.away.is_some() {
-            item(&mut spans, vec![Span::styled(format!("{name}: away"), t.bar_alert)]);
-        }
-        if state.verified == Some(false) {
-            item(&mut spans, vec![Span::styled(format!("{name}: unverified"), t.bar_alert)]);
-        }
-        let label = match &state.status {
-            ConnStatus::Online => continue,
-            ConnStatus::Connecting => "connecting",
-            ConnStatus::Syncing => "syncing",
-            ConnStatus::Lagging => "lag",
-            ConnStatus::Offline => "offline",
-        };
-        item(&mut spans, vec![Span::styled(format!("{name}: {label}"), t.bar_alert)]);
-    }
-
-    if win.scroll > 0 {
-        let style = if win.unseen_below { t.bar.add_modifier(Modifier::BOLD) } else { t.bar };
-        item(&mut spans, vec![Span::styled("more", style)]);
-    }
-
-    if let Some(prompt) = app.quit_prompt() {
-        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+/// What the status bar asks or explains right now (quitting, a paste, an
+/// upload, a deletion, the keys in selection mode…).
+fn status_prompt(app: &App) -> Option<Span<'static>> {
+    let t = &app.cfg.palette;
+    let win = &app.windows[app.active];
+    let loud = t.bar_alert.add_modifier(Modifier::BOLD);
+    let text = if let Some(prompt) = app.quit_prompt() {
+        return Some(Span::styled(prompt, loud));
     } else if let Some(lines) = app.confirm_paste {
-        let prompt = format!("send {lines} pasted lines to {}? y/n", win.title());
-        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+        format!("send {lines} pasted lines to {}? y/n", win.title())
     } else if let Some(what) = app.upload_summary() {
-        let prompt = format!("upload {what} to {}? Enter/y uploads, n keeps it as text", win.title());
-        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+        format!("upload {what} to {}? Enter/y uploads, n keeps it as text", win.title())
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
-        let prompt = format!("delete {what}? y/n");
-        item(&mut spans, vec![Span::styled(prompt, t.bar_alert.add_modifier(Modifier::BOLD))]);
+        format!("delete {what}? y/n")
     } else if app.select.is_some() && win.is_mentions {
-        item(&mut spans, vec![Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert)]);
+        return Some(Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert));
     } else if app.select.is_some() {
         let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom/play  s save  o open  v spoiler  c copy  i info  Esc";
-        item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
+        return Some(Span::styled(keys, t.bar_alert));
     } else if app.is_editing() {
-        let keys = "editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel";
-        item(&mut spans, vec![Span::styled(keys, t.bar_alert)]);
-    }
-
-    let flashing = app.flash_until.is_some_and(|until| std::time::Instant::now() < until);
-    let line = if flashing {
-        TLine::from(spans).patch_style(Style::new().add_modifier(Modifier::REVERSED))
+        return Some(Span::styled("editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel", t.bar_alert));
     } else {
-        TLine::from(spans)
+        return None;
     };
-    f.render_widget(
-        Paragraph::new(line).style(if flashing { t.bar.add_modifier(Modifier::REVERSED) } else { t.bar }),
-        area,
-    );
+    Some(Span::styled(text, loud))
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
