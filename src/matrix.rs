@@ -219,6 +219,15 @@ pub enum AppEvent {
     Detached,
     /// Asked to quit from outside (`textrix --stop`).
     Quit,
+    /// `/exec` finished: what the command printed and its exit code, for
+    /// the window it ran in (the status window when `into` is `None`), or
+    /// to send there.
+    Exec {
+        into: Option<crate::app::WinKey>,
+        send: bool,
+        command: String,
+        output: Result<(String, Option<i32>), String>,
+    },
     /// The attached terminal's editor (Ctrl+X) finished: what it saved.
     Edited(Result<String, String>),
     /// What the profile pane shows about someone.

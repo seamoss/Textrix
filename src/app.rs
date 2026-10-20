@@ -915,6 +915,8 @@ pub struct App {
     custom_emoji: HashMap<AccountName, (Emoji, HashMap<OwnedRoomId, Emoji>)>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
+    /// A script's command is running (with what it calls): no `/exec`.
+    in_script: usize,
     /// When you went /away: from then, DMs collect with your mentions.
     away_since: Option<chrono::DateTime<Local>>,
     /// The theme `cfg.palette` is: yours, or the focused room's own.
@@ -1038,6 +1040,11 @@ const COMMANDS: &[Cmd] = &[
         name: "play",
         args: "[nick | stop]",
         help: "Play the last voice message, audio or video (from nick); stop stops audio",
+    },
+    Cmd {
+        name: "exec",
+        args: "[-o] <command>",
+        help: "Run a shell command and show what it prints here; -o sends that to the room (not from scripts)",
     },
     Cmd {
         name: "later",
@@ -1433,6 +1440,7 @@ impl App {
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
+            in_script: 0,
             palette_for,
             recent: Vec::new(),
             push_modes: HashMap::new(),
@@ -1570,9 +1578,9 @@ impl App {
                         self.error("scripts and aliases call each other too deeply");
                         continue;
                     }
-                    self.alias_depth += 1;
+                    (self.alias_depth, self.in_script) = (self.alias_depth + 1, self.in_script + 1);
                     self.command(command.trim_start_matches('/'));
-                    self.alias_depth -= 1;
+                    (self.alias_depth, self.in_script) = (self.alias_depth - 1, self.in_script - 1);
                 }
                 script::Effect::Bell => self.ring(BellKind::Mentions),
                 script::Effect::Notify { title, body } => {
@@ -1933,6 +1941,7 @@ impl App {
                 }
             }
             AppEvent::Quit => self.quit = true,
+            AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
                     return;
@@ -4061,6 +4070,77 @@ impl App {
         }
     }
 
+    /// `/exec [-o] <command>`, irssi's: run it with `sh -c`, and show what
+    /// it prints in this window, or (`-o`) send that to the room. Not for
+    /// scripts, which don't run programs.
+    fn cmd_exec(&mut self, args: &str) -> Result<(), String> {
+        if self.in_script > 0 {
+            return Err("scripts can't run programs, so not /exec".into());
+        }
+        let args = args.trim();
+        let (send, command) = match args.strip_prefix("-o") {
+            Some(rest) if rest.starts_with(char::is_whitespace) => (true, rest.trim()),
+            _ => (false, args),
+        };
+        if command.is_empty() {
+            return Err("usage: /exec [-o] <command>".into());
+        }
+        let into = self.win().room.clone();
+        if send {
+            self.room_ctx()?;
+        }
+        let (tx, command) = (self.tx.clone(), command.to_owned());
+        tokio::spawn(async move {
+            let output = run_exec(&command).await;
+            let _ = tx.send(AppEvent::Exec { into, send, command, output });
+        });
+        Ok(())
+    }
+
+    /// `/exec`'s output: shown in the window it ran in, or sent there.
+    fn exec_done(
+        &mut self,
+        into: Option<WinKey>,
+        send: bool,
+        command: &str,
+        output: Result<(String, Option<i32>), String>,
+    ) {
+        let idx = into.as_ref().and_then(|k| self.windows.iter().position(|w| w.room.as_ref() == Some(k))).unwrap_or(0);
+        let cap = self.cfg.scrollback;
+        let (text, code) = match output {
+            Ok(done) => done,
+            Err(e) => {
+                self.windows[idx].push(Line::error(format!("/exec {command}: {e}")), cap);
+                return;
+            }
+        };
+        let mut notes = Vec::new();
+        if send && let Some(key) = into.filter(|_| !text.trim().is_empty()) {
+            match self.connected(&key.account) {
+                Some(acct) => {
+                    // Several lines go as a code block, to keep their shape.
+                    let body = if text.trim_end().contains('\n') {
+                        format!("```\n{}\n```", text.trim_end())
+                    } else {
+                        text.trim().to_owned()
+                    };
+                    acct.send(key.room_id.clone(), compose(&body, Say::Text, &[], true), TransactionId::new());
+                }
+                None => notes.push(Line::error(format!("{} isn't connected", key.account))),
+            }
+        } else if text.trim().is_empty() {
+            notes.push(Line::info(format!("/exec {command}: no output")));
+        } else {
+            notes.extend(text.lines().map(Line::info));
+        }
+        if let Some(code) = code.filter(|c| *c != 0) {
+            notes.push(Line::error(format!("/exec {command}: exit {code}")));
+        }
+        for note in notes {
+            self.windows[idx].push(note, cap);
+        }
+    }
+
     /// `/later <when> <text>` sends it then; `/later` lists what's
     /// waiting, `/later cancel <N|all>` takes it back.
     fn cmd_later(&mut self, args: &str) -> Result<(), String> {
@@ -4841,6 +4921,7 @@ impl App {
             "theme" => self.cmd_theme(args),
             "poll" => self.cmd_poll(args),
             "later" => self.cmd_later(args),
+            "exec" => self.cmd_exec(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
                 Ok(())
@@ -7253,6 +7334,76 @@ fn is_mention(line: &Line) -> bool {
     line.highlight && !line.own && line.is_message()
 }
 
+/// How long `/exec` waits, and how much of what it prints it keeps.
+const EXEC_LIMIT: Duration = Duration::from_secs(30);
+const EXEC_LINES: usize = 500;
+const EXEC_BYTES: usize = 64 * 1024;
+
+/// Run `command` with `sh -c` (no input), and what it printed (stdout,
+/// then stderr) without terminal escapes, cut to size; with its exit code.
+async fn run_exec(command: &str) -> Result<(String, Option<i32>), String> {
+    let child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("couldn't start it: {e}"))?;
+    let out = tokio::time::timeout(EXEC_LIMIT, child.wait_with_output())
+        .await
+        .map_err(|_| format!("stopped after {} seconds", EXEC_LIMIT.as_secs()))?
+        .map_err(|e| e.to_string())?;
+    let mut bytes = out.stdout;
+    bytes.extend_from_slice(&out.stderr);
+    bytes.truncate(EXEC_BYTES);
+    let text = strip_escapes(&String::from_utf8_lossy(&bytes));
+    let mut lines: Vec<&str> = text.lines().collect();
+    let more = lines.len().saturating_sub(EXEC_LINES);
+    lines.truncate(EXEC_LINES);
+    let mut text = lines.join("\n");
+    if more > 0 {
+        text.push_str(&format!("\n… and {more} more lines"));
+    }
+    Ok((text, out.status.code()))
+}
+
+/// Text without terminal escape sequences (colours, cursor moves).
+fn strip_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters, then a final letter.
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ESC \.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' || (c == '\u{1b}' && chars.peek() == Some(&'\\')) {
+                        if c == '\u{1b}' {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// `/later`'s time: `10m`, `1h30m`, `90s`, `2d` from now; `18:30` (the
 /// next one); `tomorrow 9:00`. With the text after it.
 fn parse_later(args: &str, now: chrono::DateTime<Local>) -> Option<(chrono::DateTime<Local>, &str)> {
@@ -8172,6 +8323,38 @@ mod tests {
         assert_eq!(app.profile.as_ref().map(|p| p.user.clone()), Some(user("bob")));
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.profile.is_none());
+    }
+
+    #[tokio::test]
+    async fn exec_runs_a_command_and_shows_its_output() {
+        let (text, code) = run_exec("printf '\\033[31mred\\033[0m\\nsecond\\n'; echo oops >&2").await.unwrap();
+        assert_eq!((text.as_str(), code), ("red\nsecond\noops", Some(0)), "colours stripped, stderr after stdout");
+        let (_, code) = run_exec("exit 3").await.unwrap();
+        assert_eq!(code, Some(3));
+        let (many, _) = run_exec("seq 1 600").await.unwrap();
+        assert!(many.ends_with("… and 100 more lines") && many.starts_with("1\n2\n"), "cut to size");
+
+        let mut app = test_app();
+        let room = room_window(&mut app, "!a:x.org", "Night Owls");
+        let key = app.windows[room].room.clone();
+        app.exec_done(key.clone(), false, "ls", Ok(("a.txt\nb.txt".into(), Some(0))));
+        let shown: Vec<&str> = app.windows[room].lines.iter().map(|l| l.body.as_str()).collect();
+        assert_eq!(shown, ["a.txt", "b.txt"], "in the window it ran in");
+        app.exec_done(key, false, "false", Ok((String::new(), Some(1))));
+        let last: Vec<&str> = app.windows[room].lines.iter().rev().take(2).map(|l| l.body.as_str()).collect();
+        assert_eq!(last, ["/exec false: exit 1", "/exec false: no output"]);
+    }
+
+    #[test]
+    fn scripts_cant_exec() {
+        let mut app = test_app();
+        let source = r#"command("sneaky", "", |args, ctx| run("/exec echo hi"));"#;
+        app.scripts.load("sneaky", None, source).unwrap();
+        app.command("sneaky");
+        app.on_clock();
+        let said = app.windows.iter().flat_map(|w| &w.lines).map(|l| l.body.as_str()).collect::<Vec<_>>();
+        assert!(said.iter().any(|b| b.contains("scripts can't run programs")), "{said:?}");
+        assert_eq!(app.in_script, 0);
     }
 
     #[test]
