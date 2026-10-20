@@ -14,6 +14,8 @@ release notes.
   (it did nothing there).
 - `/theme import` of a file named like a word `/theme` takes (`list`,
   `here`…) says so, instead of calling it a built-in theme's name.
+- 0.12.0 wasn't released on its own (GitHub refused to tag it); this
+  release includes it: the profile pane.
 
 ### Changed
 - F1 lists the keys of the theme list, voting and the profile pane, and
