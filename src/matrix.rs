@@ -1999,7 +1999,7 @@ impl Account {
             let items: Vec<crate::model::Scheduled> =
                 sealer.read(&path).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
             if !items.is_empty() {
-                let _ = notify.send(AppEvent::Scheduled { account: name, items });
+                notify.send(AppEvent::Scheduled { account: name, items });
             }
         });
     }
@@ -2067,7 +2067,7 @@ impl Account {
                 }
             }
             if !global.is_empty() || !rooms.is_empty() {
-                let _ = acct.notify.send(AppEvent::CustomEmoji { account: acct.name.clone(), global, rooms });
+                acct.notify.send(AppEvent::CustomEmoji { account: acct.name.clone(), global, rooms });
             }
         });
     }

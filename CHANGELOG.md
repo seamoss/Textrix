@@ -7,6 +7,27 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.11.0] - 2026-10-20
+
+### Added
+- Polls. Element's (and the stable kind) show their answers under the
+  question, with results as bars, ✓ by yours, and how many voted: while
+  open when the poll shows results, otherwise once it's ended. Select one
+  and press Enter to vote (↑/↓ and Enter, a number, or Space to tick
+  several where allowed). `/poll <question> | <answer> | <answer>…`
+  starts one the way Element does, and `/poll end` ends your latest.
+- Stickers show like images, inline under their name, and open in the
+  viewer.
+- Custom emoji from image packs (the room's, your own, ones you've made
+  global) show by their `:shortcode:`, in messages and reactions. Tab
+  completes them, and they go out as the pictures other clients show, in
+  messages, replies, edits and reactions.
+- `/later <when> <text>` sends a message later: `10m`, `1h30m`, `18:30`,
+  `tomorrow 9:00`. `/later` lists what's waiting and `/later cancel
+  <N|all>` takes it back. Textrix sends them while it runs (in the
+  background is fine), and keeps them on disk sealed with the store's
+  keychain secret.
+
 ## [0.10.0] - 2026-10-20
 
 ### Added

@@ -147,7 +147,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details, Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 | full-screen help (type to filter) / window list / member list |
@@ -204,7 +204,7 @@ bindings.
 | Pins | `p` in selection mode pins a message for everyone in the room, or unpins it (needs the power level to change pins). Pinned messages show `[pinned]`, and the topic bar counts them. `/pins` lists them, newest pin first; `/jump N` goes to one |
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Thread roots show `[N replies]`; replies also appear in the room with their context |
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
-| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is |
+| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is, `/poll <question> \| <answer> \| <answer>…` and `/poll end` (see [Polls](#polls)), `/later <when> <text>` (see [Sending later](#sending-later)) |
 | Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? y/n"; `n` leaves the paths in the input line as text. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
@@ -263,6 +263,13 @@ Emoji shortcodes (`:fire:`, `:+1:`, GitHub/Slack names) turn into emoji when
 you send, react or edit, except inside backticks; `:thu` + Tab completes
 them, showing which shortcode you're on as you cycle.
 
+Custom emoji from image packs (the room's, your own, and packs you've
+made global, in Element or Cinny) show by their `:shortcode:` in the
+theme's accent colour, in messages and reactions. Tab completes their
+shortcodes too, first; they stay `:shortcodes:` in the input line and go
+out as the pictures other clients show, in messages, replies, edits and
+reactions.
+
 ### Chat logs
 
 Off by default: logs hold decrypted messages in plaintext. `log = true` (or
@@ -299,6 +306,8 @@ The cache lives in the encrypted store; `/logout` deletes it, and
 
 ### Images
 
+Stickers show like images, under their name.
+
 The window list shows each room's avatar (a DM falls back to the other
 person's) as a tiny image in terminals with graphics, and a coloured initial
 tile elsewhere.
@@ -322,6 +331,29 @@ written to disk. `+`/`-` or the mouse wheel zoom (up to 16×), the arrow
 keys (or `hjkl`) move around, `0` fits it again, and Esc closes. With
 kitty, iTerm2 or sixel graphics it's sharp; with half-blocks, zooming in is
 how you see the detail.
+
+### Polls
+
+Polls (Element's, or the stable kind) show their answers under the
+question, with the results as bars and `✓` by yours, and how many voted:
+while the poll's open when its starter chose to show results, otherwise
+once it's ended. Select one (Alt+Up) and press Enter to vote: ↑/↓ and
+Enter, a number for one answer, or Space to tick several where the poll
+allows. `/poll Pizza tonight? | yes | no | maybe` starts one (results
+shown, one answer each, the way Element makes them), and `/poll end` ends
+your latest open one here, saying how it came out.
+
+### Sending later
+
+`/later 10m <text>` sends it in ten minutes, `/later 1h30m <text>` in an
+hour and a half; `/later 18:30 <text>` at the next 18:30, `/later tomorrow
+9:00 <text>` tomorrow morning. `/later` lists what's waiting, `/later
+cancel 2` (or `all`) takes it back. Textrix sends them, so it has to be
+running then (in the background is fine); one that falls due while
+you're offline goes when you're back. They're kept on disk sealed with
+your store's keychain secret, or only until Textrix closes without a
+keychain. (Servers that schedule messages themselves can't do it for
+encrypted rooms, where the message has to be encrypted when it's sent.)
 
 ### Voice messages and video
 

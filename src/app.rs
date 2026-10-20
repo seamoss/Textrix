@@ -578,6 +578,9 @@ pub enum LinkTitle {
     None,
 }
 
+/// Custom emoji: (shortcode, picture).
+type Emoji = Vec<(String, OwnedMxcUri)>;
+
 /// Voting in a poll: its answers to pick from (Enter in selection mode).
 pub struct VotePicker {
     pub question: String,
@@ -883,7 +886,7 @@ pub struct App {
     /// Messages to send later (`/later`), soonest first.
     later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
-    custom_emoji: HashMap<AccountName, (Vec<(String, OwnedMxcUri)>, HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>>)>,
+    custom_emoji: HashMap<AccountName, (Emoji, HashMap<OwnedRoomId, Emoji>)>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
     /// When you went /away: from then, DMs collect with your mentions.
