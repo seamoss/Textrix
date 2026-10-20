@@ -485,7 +485,7 @@ config.toml. `/theme <name>` goes straight to one, `/theme list` lists
 them in the status window, and `--theme <name>` picks one for a run. A
 few have other names too: `dark` (default), `phosphor` (green),
 `virtualboy` (red), `solarized` (solarized-dark), `mocha` (catppuccin),
-`ibm` (ibm5151).
+`ibm` (ibm5151), `outrun` (synthwave).
 
 A room can keep a theme of its own, so work and play look different at
 a glance: `/theme here amber-deep` (or Ctrl+T in the list, for "just
@@ -497,9 +497,9 @@ screen takes the theme of the room you're in. These are kept in
 | Shelf | Themes |
 |---|---|
 | Plain | `default` (for dark backgrounds), `light`, `mono` (no colour at all: bold, underline and reverse video) |
-| Monitors | `green`, `blue`, `red` (Virtual Boy) and `amber`: one colour on black, each also `-deep` (on deep blue with every panel framed in double lines, like an 80s airport terminal) and `-tron` (on pure black with thin neon outlines). `mono-tron` is Tron in greys, and `ibm5151` the IBM monochrome display's green, its panels framed in ASCII |
+| Monitors | `green`, `blue`, `red` (Virtual Boy), `amber` and `purple`: one colour on black, each also `-deep` (on deep blue with every panel framed in double lines, like an 80s airport terminal) and `-tron` (on pure black with thin neon outlines). `mono-tron` is Tron in greys, and `ibm5151` the IBM monochrome display's green, its panels framed in ASCII |
 | Classic | `turbo` (Turbo Pascal's DOS blue), `procomm` (a DOS terminal program dialling a BBS), `c64`, `amiga` (Workbench 1.3), `delphi` (Delphi 7), `mirc`, `solarized-dark`, `solarized-light` |
-| Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha) |
+| Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha), `synthwave` (the 80s: neon pink and cyan on a midnight-purple sky, the sun setting in yellow and orange) |
 
 <table>
 <tr>

@@ -45,6 +45,10 @@ pub enum ThemeName {
     Amber,
     AmberDeep,
     AmberTron,
+    /// Violet on black.
+    Purple,
+    PurpleDeep,
+    PurpleTron,
     /// Shades of grey on pure black, with thin outlines: Tron without
     /// the neon.
     MonoTron,
@@ -72,10 +76,13 @@ pub enum ThemeName {
     Gruvbox,
     /// Catppuccin Mocha.
     Catppuccin,
+    /// The 80s as remembered: neon pink and cyan on a midnight-purple
+    /// sky, with a sunset in yellow and orange ("outrun" works too).
+    Synthwave,
 }
 
 impl ThemeName {
-    pub const ALL: [(&str, ThemeName); 30] = [
+    pub const ALL: [(&str, ThemeName); 34] = [
         ("default", ThemeName::Default),
         ("light", ThemeName::Light),
         ("mono", ThemeName::Mono),
@@ -91,6 +98,9 @@ impl ThemeName {
         ("amber", ThemeName::Amber),
         ("amber-deep", ThemeName::AmberDeep),
         ("amber-tron", ThemeName::AmberTron),
+        ("purple", ThemeName::Purple),
+        ("purple-deep", ThemeName::PurpleDeep),
+        ("purple-tron", ThemeName::PurpleTron),
         ("mono-tron", ThemeName::MonoTron),
         ("ibm5151", ThemeName::Ibm5151),
         ("turbo", ThemeName::Turbo),
@@ -106,10 +116,11 @@ impl ThemeName {
         ("nord", ThemeName::Nord),
         ("gruvbox", ThemeName::Gruvbox),
         ("catppuccin", ThemeName::Catppuccin),
+        ("synthwave", ThemeName::Synthwave),
     ];
 
     /// A theme by name (also "dark", "phosphor", "virtualboy",
-    /// "solarized", "catppuccin-mocha", "mocha", "ibm", "5151").
+    /// "solarized", "catppuccin-mocha", "mocha", "ibm", "5151", "outrun").
     pub fn parse(name: &str) -> Option<ThemeName> {
         match name {
             "dark" => Some(ThemeName::Default),
@@ -118,6 +129,7 @@ impl ThemeName {
             "solarized" => Some(ThemeName::SolarizedDark),
             "catppuccin-mocha" | "mocha" => Some(ThemeName::Catppuccin),
             "ibm" | "5151" => Some(ThemeName::Ibm5151),
+            "outrun" => Some(ThemeName::Synthwave),
             name => ThemeName::ALL.iter().find(|(n, _)| *n == name).map(|(_, t)| *t),
         }
     }
@@ -137,8 +149,9 @@ impl ThemeName {
             Blue => "blue on black",
             Red => "red on black, like a Virtual Boy",
             Amber => "amber on black",
-            GreenDeep | BlueDeep | RedDeep | AmberDeep => "on deep blue in double lines: an 80s airport",
-            GreenTron | BlueTron | RedTron | AmberTron => "neon outlines on pure black",
+            Purple => "violet on black",
+            GreenDeep | BlueDeep | RedDeep | AmberDeep | PurpleDeep => "on deep blue in double lines: an 80s airport",
+            GreenTron | BlueTron | RedTron | AmberTron | PurpleTron => "neon outlines on pure black",
             MonoTron => "Tron in greys, on pure black",
             Ibm5151 => "IBM's green monochrome display, framed in ASCII",
             Turbo => "Turbo Pascal: yellow on DOS blue",
@@ -154,6 +167,7 @@ impl ThemeName {
             Nord => "Nord",
             Gruvbox => "Gruvbox, dark",
             Catppuccin => "Catppuccin Mocha",
+            Synthwave => "the 80s: neon pink and cyan on a midnight sky",
         }
     }
 
@@ -163,9 +177,9 @@ impl ThemeName {
         match self {
             Default | Light | Mono => "plain",
             Green | GreenDeep | GreenTron | Blue | BlueDeep | BlueTron | Red | RedDeep | RedTron | Amber
-            | AmberDeep | AmberTron | MonoTron | Ibm5151 => "monitors",
+            | AmberDeep | AmberTron | Purple | PurpleDeep | PurpleTron | MonoTron | Ibm5151 => "monitors",
             Turbo | Procomm | C64 | Amiga | Delphi | Mirc | SolarizedDark | SolarizedLight => "classic",
-            Monokai | Dracula | Nord | Gruvbox | Catppuccin => "nouveau",
+            Monokai | Dracula | Nord | Gruvbox | Catppuccin | Synthwave => "nouveau",
         }
     }
 }
@@ -477,6 +491,10 @@ const BLUE_ON_DEEP: Hue =
     Hue { shades: [123, 81, 74, 25], hot: 231, code: 159, nicks: [123, 159, 117, 87, 81, 195, 153] };
 const AMBER: Hue = Hue { shades: [214, 172, 136, 94], hot: 229, code: 220, nicks: [214, 208, 220, 178, 215, 221, 179] };
 const RED: Hue = Hue { shades: [196, 160, 124, 52], hot: 210, code: 203, nicks: [196, 160, 203, 124, 167, 197, 161] };
+const PURPLE: Hue = Hue { shades: [171, 134, 97, 54], hot: 219, code: 177, nicks: [171, 177, 141, 135, 213, 183, 99] };
+/// Paler violets, to read on the deep blue.
+const PURPLE_ON_DEEP: Hue =
+    Hue { shades: [183, 177, 140, 54], hot: 225, code: 219, nicks: [183, 177, 219, 213, 189, 225, 141] };
 /// Greys, with white for what matters.
 const GREY: Hue = Hue { shades: [252, 246, 241, 236], hot: 231, code: 255, nicks: [252, 255, 249, 231, 250, 253, 247] };
 
@@ -809,6 +827,34 @@ const DRACULA: Palette = Palette {
     nicks: &[0x8be9fd, 0x50fa7b, 0xffb86c, 0xff79c6, 0xbd93f9, 0xff5555, 0xf1fa8c],
 };
 
+/// Outrun: a midnight-purple sky, neon pink and cyan, the sun setting in
+/// yellow and orange, a grid in violet.
+const SYNTHWAVE: Palette = Palette {
+    bg: 0x1b0f2e,
+    fg: 0xf4e9ff,
+    dim: 0x7a6aa8,
+    muted: 0xa99cc9,
+    bar: [0xfff1fb, 0x5a1f8c],
+    bar_accent: 0x2de2e6,
+    bar_alert: 0xffd319,
+    pane: [0xa99cc9, 0x2a1748],
+    current: [0x1b0f2e, 0xff6ec7],
+    accent: 0x2de2e6,
+    highlight: 0xffd319,
+    highlight_text: 0xff9e3d,
+    error: 0xff3864,
+    link: 0x2de2e6,
+    mention: 0xff6ec7,
+    code: 0xffd319,
+    syntax: [0x7a6aa8, 0xff6ec7, 0xffd319, 0xff9e3d, 0x2de2e6, 0xb967ff],
+    good: 0x72f1b8,
+    warn: 0xff9e3d,
+    border: 0xb967ff,
+    outlines: Outlines::Rounded,
+    message_colors: true,
+    nicks: &[0xff6ec7, 0x2de2e6, 0xffd319, 0xb967ff, 0xff9e3d, 0x72f1b8, 0xf6a6ff],
+};
+
 const NORD: Palette = Palette {
     bg: 0x2e3440,
     fg: 0xd8dee9,
@@ -1020,6 +1066,9 @@ impl Theme {
             ThemeName::Amber => Self::monochrome(AMBER, Backdrop::Black),
             ThemeName::AmberDeep => Self::monochrome(AMBER, Backdrop::Deep),
             ThemeName::AmberTron => Self::monochrome(AMBER, Backdrop::Tron),
+            ThemeName::Purple => Self::monochrome(PURPLE, Backdrop::Black),
+            ThemeName::PurpleDeep => Self::monochrome(PURPLE_ON_DEEP, Backdrop::Deep),
+            ThemeName::PurpleTron => Self::monochrome(PURPLE, Backdrop::Tron),
             ThemeName::Ibm5151 => Self::palette(&IBM_5151),
             ThemeName::Turbo => Self::palette(&TURBO),
             ThemeName::Procomm => Self::palette(&PROCOMM),
@@ -1034,6 +1083,7 @@ impl Theme {
             ThemeName::Nord => Self::palette(&NORD),
             ThemeName::Gruvbox => Self::palette(&GRUVBOX),
             ThemeName::Catppuccin => Self::palette(&CATPPUCCIN),
+            ThemeName::Synthwave => Self::palette(&SYNTHWAVE),
         }
     }
 
@@ -1456,6 +1506,7 @@ mod tests {
             ("blue", ThemeName::Blue, 39),
             ("red", ThemeName::Red, 196),
             ("virtualboy", ThemeName::Red, 196),
+            ("purple", ThemeName::Purple, 171),
         ] {
             let parsed: ThemeId =
                 toml::from_str::<std::collections::HashMap<String, ThemeId>>(&format!("t = \"{text}\""))
@@ -1466,7 +1517,7 @@ mod tests {
             let theme = Theme::build(name, &BTreeMap::new()).unwrap();
             assert_eq!(theme.base, Style::new().fg(Color::Indexed(bright)).bg(Color::Black));
             assert!(!theme.message_colors, "senders' colours would break the look");
-            let hue = [GREEN, BLUE, RED].into_iter().find(|h| h.shades[0] == bright).unwrap();
+            let hue = [GREEN, BLUE, RED, PURPLE].into_iter().find(|h| h.shades[0] == bright).unwrap();
             for style in theme.syntax {
                 let Some(Color::Indexed(n)) = style.fg else { panic!("{style:?}") };
                 assert!(hue.shades.contains(&n) || n == hue.hot, "{text}: code in {n} isn't one of its shades");
@@ -1500,7 +1551,7 @@ mod tests {
             }
         }
         assert_eq!(ThemeName::parse("virtualboy"), Some(ThemeName::Red));
-        assert!(ThemeName::parse("purple").is_none());
+        assert!(ThemeName::parse("chartreuse").is_none());
     }
 
     #[test]
@@ -1602,7 +1653,7 @@ mod tests {
                 Theme::load(&ThemeId::File("broken".into()), &BTreeMap::new(), &dir).map(|_| ()).unwrap_err()
             )
         };
-        assert!(broken("base = \"purple\"").contains("isn't a built-in theme"));
+        assert!(broken("base = \"chartreuse\"").contains("isn't a built-in theme"));
         assert!(broken("colour = 1").contains("unknown field"));
         assert!(broken("[colors]\nlnk = \"red\"").contains("in "), "says which file");
         assert!(Theme::load(&ThemeId::File("nope".into()), &BTreeMap::new(), &dir).is_err());
