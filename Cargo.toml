@@ -1,6 +1,6 @@
 [package]
 name = "textrix"
-version = "0.12.1"
+version = "0.12.2"
 edition = "2024"
 rust-version = "1.96"
 description = "An irssi-style terminal client for Matrix"
@@ -18,7 +18,9 @@ crossterm = { version = "0.29", features = ["event-stream", "serde"] }
 dirs = "7"
 eyeball = "0.8"
 futures-util = "0.3"
-image = { version = "0.25", default-features = false }
+# The formats chats send. (image's defaults add AVIF, which is only an
+# encoder here, EXR, TIFF and the like: heavy to build, never shown.)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 imagesize = "0.15"
 matrix-sdk = { version = "0.19.1", features = ["bundled-sqlite", "markdown"] }
 mime = "0.3"
@@ -26,7 +28,7 @@ mime_guess = "2"
 ratatui = { version = "0.30", features = ["serde"] }
 ruma-html = { version = "0.9", features = ["matrix"] }
 # Pure Rust: the default `chafa-dyn` feature would link the C libchafa.
-ratatui-image = { version = "12.0.0-rc.2", default-features = false, features = ["crossterm", "image-defaults"] }
+ratatui-image = { version = "12.0.0-rc.2", default-features = false, features = ["crossterm"] }
 secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -60,10 +62,12 @@ blurhash = "0.2"
 overflow-checks = false
 
 [profile.release]
-# Whole-program optimisation: about a third smaller (66 → 43 MB), slower to
-# build.
-lto = "fat"
-codegen-units = 1
+# Whole-program optimisation in parallel (thin LTO), for size: measured
+# against fat LTO with one codegen unit, the final build step is about 5x
+# faster (it ran on one core) and the download smaller (18.8 against 22.1
+# MB gzipped), the binary a little bigger (52 against 49 MB).
+lto = "thin"
+opt-level = "s"
 strip = true
 
 [lints.rust]

@@ -3661,6 +3661,30 @@ pub enum VerifyAnswer {
 }
 
 #[cfg(test)]
+mod image_tests {
+    /// The formats chats send all still open (the image crate is built
+    /// with only these).
+    #[test]
+    fn chat_image_formats_decode() {
+        let picture = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 6, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 40) as u8, 128])
+        }));
+        for format in [
+            image::ImageFormat::Png,
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::Gif,
+            image::ImageFormat::WebP,
+            image::ImageFormat::Bmp,
+        ] {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            picture.write_to(&mut bytes, format).unwrap();
+            let back = super::decode_image(bytes.get_ref()).unwrap_or_else(|e| panic!("{format:?}: {e:#}"));
+            assert_eq!((back.width(), back.height()), (8, 6), "{format:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod pack_tests {
     #[test]
     fn packs_give_their_emoji_not_their_stickers() {

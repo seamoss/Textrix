@@ -7,6 +7,16 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.12.2] - 2026-10-20
+
+### Changed
+- Smaller to download and much quicker to build: releases are optimised
+  for size with thin LTO, which uses every core (the old fat LTO ran its
+  last step on one, which took most of a release's half hour), and the
+  image library is built with only the formats chats send (JPEG, PNG, GIF,
+  WebP, BMP), not encoders and formats Textrix never shows. The download
+  goes from about 22 to 19 MB.
+
 ## [0.12.1] - 2026-10-20
 
 ### Fixed
