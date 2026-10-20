@@ -110,6 +110,9 @@ pub struct Config {
     /// Say so when you write to someone who's away or long gone ("sam is
     /// away: lunch"), when it's news.
     pub away_notes: bool,
+    /// System messages (`-!-` lines: Textrix's own, joins and leaves,
+    /// topic changes, day changes) in italic, in every theme.
+    pub system_italic: bool,
     /// Nicks in a column this many characters wide (longer ones are cut
     /// short), so every message starts in line; 0 puts them inline,
     /// `<nick> text`.
@@ -224,6 +227,7 @@ impl Default for Config {
         Self {
             timestamp_format: "%H:%M".into(),
             nick_column: 12,
+            system_italic: true,
             away_notes: true,
             show_joins: true,
             link_titles: LinkTitles::Unencrypted,

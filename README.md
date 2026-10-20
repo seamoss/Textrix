@@ -234,9 +234,12 @@ many; 0 puts nicks inline, `<sam> hi`), and panes too narrow for the
 column keep them inline. Joins show `-->` there, leaves `<--`, and
 Textrix's own lines `-!-`.
 
-Those own lines (replies to your commands, errors, netsplits) are set
-apart in a room: a blank row before and after each run of them, in the
-theme's quiet colour and italic, so they don't read as the conversation.
+System messages, the `-!-` lines (Textrix's own, joins and leaves, topic
+and room changes, day changes), are in italic in every theme, so they
+don't read as the conversation; `system_italic = false` keeps them
+upright. Textrix's own lines (replies to your commands, errors,
+netsplits) are also set apart in a room: a blank row before and after
+each run of them, in the theme's quiet colour.
 
 ### Joins and leaves
 
@@ -524,6 +527,7 @@ applies it (and picks up servers added to or removed from the dotfile):
 ```toml
 timestamp_format = "%H:%M"
 nick_column = 12           # nicks in a column this wide (0: inline)
+system_italic = true       # -!- lines in italic
 away_notes = true          # "sam is away: lunch" when you write to them, if it's news
 show_joins = true
 link_titles = "unencrypted" # page titles under links: "all", "off"

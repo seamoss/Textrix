@@ -866,13 +866,8 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
         let mut rendered = render_line_with(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
         if set_apart && line.kind == LineKind::Info {
-            let quiet = cfg.palette.dim.add_modifier(Modifier::ITALIC);
             for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
-                span.style = span.style.patch(quiet);
-            }
-        } else if set_apart && line.kind == LineKind::Error {
-            for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
-                span.style = span.style.add_modifier(Modifier::ITALIC);
+                span.style = span.style.patch(cfg.palette.dim);
             }
         }
         if is_selected {
@@ -1133,7 +1128,7 @@ fn new_messages(t: &Theme, width: usize) -> TLine<'static> {
 
 /// "-!- Day changed to …", laid out like Textrix's other lines (in the
 /// nick column, when there is one) with no time of its own; `quiet` in
-/// rooms, as they are.
+/// rooms, as they are, and in italic like them.
 fn day_changed(cfg: &Config, width: usize, ts: DateTime<Local>, quiet: bool) -> TLine<'static> {
     let t = &cfg.palette;
     let stamp = display_len(&ts.format(&cfg.timestamp_format).to_string());
@@ -1146,11 +1141,10 @@ fn day_changed(cfg: &Config, width: usize, ts: DateTime<Local>, quiet: bool) -> 
         None => spans.push(Span::raw(" ")),
     }
     spans.push(Span::raw(format!("Day changed to {}", ts.format("%a %d %b %Y"))));
-    if quiet {
-        let style = t.dim.add_modifier(Modifier::ITALIC);
-        for span in &mut spans {
-            span.style = span.style.patch(style);
-        }
+    let italic = if cfg.system_italic { Style::new().add_modifier(Modifier::ITALIC) } else { Style::new() };
+    let style = if quiet { t.dim.patch(italic) } else { italic };
+    for span in spans.iter_mut().skip(1) {
+        span.style = span.style.patch(style);
     }
     TLine::from(spans)
 }
@@ -1197,6 +1191,7 @@ fn render_line_with(
 
     push(&mut cells, &line.ts.format(&cfg.timestamp_format).to_string(), t.dim);
     push(&mut cells, " ", Style::new());
+    let after_stamp = cells.len();
 
     let nick_style = if line.highlight {
         t.highlight
@@ -1336,7 +1331,18 @@ fn render_line_with(
         push(&mut cells, &text, t.receipts);
     }
 
+    // System messages in italic, all but the time.
+    if cfg.system_italic && is_system(line) {
+        for (_, style) in &mut cells[after_stamp..] {
+            *style = style.add_modifier(Modifier::ITALIC);
+        }
+    }
     wrap(&cells, width, &gutter)
+}
+
+/// A `-!-` line: Textrix's own, or what happened in the room.
+fn is_system(line: &Line) -> bool {
+    matches!(line.kind, LineKind::Info | LineKind::Error | LineKind::Event | LineKind::Membership)
 }
 
 fn rich_style(t: &Theme, base: Style, marks: Marks, highlight: bool) -> Style {
@@ -1633,6 +1639,32 @@ mod tests {
 
     fn text(rows: &[TLine]) -> Vec<String> {
         rows.iter().map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn system_messages_are_italic() {
+        let italic = |line: &Line, cfg: &Config| {
+            let rows = render_line(line, 80, cfg);
+            let body: Vec<&Span> = rows[0].spans.iter().skip(1).filter(|s| !s.content.trim().is_empty()).collect();
+            let time = &rows[0].spans[0];
+            assert!(!time.style.add_modifier.contains(Modifier::ITALIC), "the time stays upright");
+            body.iter().all(|s| s.style.add_modifier.contains(Modifier::ITALIC))
+        };
+        let cfg = Config::default();
+        let mut said = Line::new(LineKind::Message, "hi");
+        said.nick = "sam".into();
+        let mut joined = Line::new(LineKind::Membership, "sam joined");
+        joined.fold = Some(Fold::Joined("sam".into()));
+        for line in
+            [Line::info("theme: dracula"), Line::error("no such room"), joined, Line::new(LineKind::Event, "topic")]
+        {
+            assert!(italic(&line, &cfg), "{:?}", line.kind);
+        }
+        assert!(!italic(&said, &cfg), "messages aren't");
+        let upright = Config { system_italic: false, ..Config::default() };
+        assert!(!italic(&Line::info("theme: dracula"), &upright));
+        let day = day_changed(&cfg, 80, said.ts, false);
+        assert!(day.spans.last().unwrap().style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]

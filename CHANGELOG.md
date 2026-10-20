@@ -7,6 +7,14 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.9.7] - 2026-10-20
+
+### Changed
+- System messages, the `-!-` lines (Textrix's own, errors, joins and
+  leaves, topic and room changes, day changes), are in italic in every
+  window and theme, so they stand apart from the conversation; the time
+  stays upright. `system_italic = false` keeps them upright.
+
 ## [0.9.6] - 2026-10-20
 
 ### Fixed
