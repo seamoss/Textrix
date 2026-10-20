@@ -24,7 +24,7 @@ use crate::{
     config::{Config, LinkTitles},
     input::display_width,
     links,
-    model::{Activity, Fold, Line, LineKind, PresenceKind},
+    model::{Activity, Fold, Line, LineKind, Poll, PresenceKind},
     richtext::Marks,
     switcher,
     theme::{Outlines, Theme},
@@ -105,6 +105,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.hits.switcher = Some(draw_switcher(f, app));
     }
     app.hits.theme_picker = app.theme_picker.is_some().then(|| draw_theme_picker(f, app));
+    if app.vote.is_some() {
+        draw_vote(f, app);
+    }
     if app.viewer.is_some() {
         draw_viewer(f, app);
     }
@@ -255,6 +258,49 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
         hits.push((rect, n));
     }
     (area, hits)
+}
+
+/// Voting: the poll's question, and its answers to pick from.
+fn draw_vote(f: &mut Frame, app: &App) {
+    let t = &app.cfg.palette;
+    let Some(v) = app.vote.as_ref() else { return };
+    let screen = f.area();
+    let width = screen.width.saturating_sub(4).min(64);
+    let height = (v.answers.len() as u16 + 4).min(screen.height.saturating_sub(2));
+    let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 2, width, height };
+    let keys = if v.max > 1 {
+        format!(" ↑↓ choose · Space ticks (up to {}) · Enter votes · Esc ", v.max)
+    } else {
+        " ↑↓ choose · Enter votes · Esc ".to_owned()
+    };
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(" Vote ", t.accent))
+        .title_bottom(TLine::from(keys).right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    let width = inner.width as usize;
+    f.render_widget(Paragraph::new(Span::styled(cut(&v.question, width), t.accent)), Rect { height: 1, ..inner });
+    for (n, (_, text)) in v.answers.iter().enumerate() {
+        let y = inner.y + 2 + n as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        let tick = match (v.max > 1, v.picked.contains(&n)) {
+            (false, _) => "",
+            (true, true) => "[x] ",
+            (true, false) => "[ ] ",
+        };
+        let row = cut(&format!(" {tick}{}. {text}", n + 1), width);
+        let pad = width.saturating_sub(display_len(&row));
+        let style = if n == v.selected { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+        f.render_widget(
+            Paragraph::new(Span::styled(format!("{row}{}", " ".repeat(pad)), style)),
+            Rect { y, height: 1, ..inner },
+        );
+    }
 }
 
 /// One switcher entry: window number, name (matched letters picked out),
@@ -1320,6 +1366,9 @@ fn render_line_with(
             push(&mut cells, &line.body[at..], body_style);
         }
     }
+    if let Some(poll) = line.poll.as_deref().filter(|_| !line.redacted) {
+        poll_rows(&mut cells, poll, t);
+    }
     if line.edited && !line.redacted {
         push(&mut cells, " (edited)", t.dim);
     }
@@ -1351,6 +1400,39 @@ fn render_line_with(
         }
     }
     wrap(&cells, width, &gutter)
+}
+
+/// A poll's answers under its question, a row each: the results as bars
+/// (when they show), ✓ by yours, and how many voted.
+fn poll_rows(cells: &mut Vec<(char, Style)>, poll: &Poll, t: &Theme) {
+    let mut push = |s: &str, style: Style| cells.extend(s.chars().filter_map(|c| sanitize(c).map(|c| (c, style))));
+    let shown = poll.results_shown();
+    let (counts, voters, mine) = (poll.counts(), poll.voters(), poll.mine());
+    let wide = poll.answers.iter().map(|(_, a)| display_len(a)).max().unwrap_or(0).min(24);
+    for (n, ((id, text), count)) in poll.answers.iter().zip(&counts).enumerate() {
+        let text = cut(text, wide);
+        push("\n", Style::new());
+        push(&format!("{:>2}. ", n + 1), t.dim);
+        push(&text, Style::new());
+        push(&" ".repeat(wide.saturating_sub(display_len(&text)) + 1), Style::new());
+        if shown {
+            let filled = (count * 10 + voters / 2).checked_div(voters).unwrap_or(0).min(10);
+            push(&"█".repeat(filled), t.accent);
+            push(&"░".repeat(10 - filled), t.dim);
+            push(&format!(" {count}"), t.dim);
+        }
+        if mine.contains(&id.as_str()) {
+            push(" ✓", t.accent.add_modifier(Modifier::BOLD));
+        }
+    }
+    let mut footer = if voters == 1 { "1 vote".to_owned() } else { format!("{voters} votes") };
+    if poll.ended.is_some() {
+        footer.push_str(" · ended");
+    } else if !shown {
+        footer.push_str(" · results when it ends");
+    }
+    push("\n", Style::new());
+    push(&footer, t.dim);
 }
 
 /// A `-!-` line: Textrix's own, or what happened in the room.
@@ -1614,6 +1696,7 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
         return Some(Span::styled("↑/↓ choose  Enter go to it  Esc", t.bar_alert));
     } else if app.select.is_some() {
         let keys = "r reply  e edit  d delete  + react  t thread  f forward  p pin  z zoom/play  s save  o open  v spoiler  c copy  i info  Esc";
+        let keys = if app.selected_poll().is_some() { format!("Enter vote  {keys}") } else { keys.to_owned() };
         return Some(Span::styled(keys, t.bar_alert));
     } else if app.is_editing() {
         return Some(Span::styled("editing: ↑/↓ pick  Enter save  clear+Enter delete  Esc cancel", t.bar_alert));

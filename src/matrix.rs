@@ -1923,6 +1923,66 @@ impl Account {
         });
     }
 
+    /// Start a poll, in Element's events so Element shows it: one answer
+    /// each, results visible while it's open.
+    pub fn start_poll(&self, room_id: OwnedRoomId, question: String, answers: Vec<String>) {
+        use matrix_sdk::ruma::events::poll::{
+            start::PollKind,
+            unstable_start::{
+                NewUnstablePollStartEventContent, UnstablePollAnswer, UnstablePollAnswers,
+                UnstablePollStartContentBlock,
+            },
+        };
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let options: Vec<UnstablePollAnswer> = answers
+                .iter()
+                .enumerate()
+                .map(|(n, text)| UnstablePollAnswer::new(format!("a{}", n + 1), text))
+                .collect();
+            let options = UnstablePollAnswers::try_from(options).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut block = UnstablePollStartContentBlock::new(question.clone(), options);
+            block.kind = PollKind::Disclosed;
+            let numbered: Vec<String> = answers.iter().enumerate().map(|(n, a)| format!("{}. {a}", n + 1)).collect();
+            let fallback = format!("{question}\n{}", numbered.join("\n"));
+            let content = NewUnstablePollStartEventContent::plain_text(fallback, block);
+            acct.room(&room_id)?.send(content).await?;
+            Ok(())
+        });
+    }
+
+    /// Vote in the poll `poll` starts, in the events it was started with.
+    pub fn vote(&self, room_id: OwnedRoomId, poll: OwnedEventId, answers: Vec<String>, stable: bool) {
+        use matrix_sdk::ruma::events::poll::{
+            response::PollResponseEventContent, unstable_response::UnstablePollResponseEventContent,
+        };
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            if stable {
+                room.send(PollResponseEventContent::new(answers.into(), poll)).await?;
+            } else {
+                room.send(UnstablePollResponseEventContent::new(answers, poll)).await?;
+            }
+            Ok(())
+        });
+    }
+
+    /// End the poll `poll` starts (yours), saying how it came out.
+    pub fn end_poll(&self, room_id: OwnedRoomId, poll: OwnedEventId, text: String, stable: bool) {
+        use matrix_sdk::ruma::events::poll::{end::PollEndEventContent, unstable_end::UnstablePollEndEventContent};
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            let room = acct.room(&room_id)?;
+            if stable {
+                room.send(PollEndEventContent::with_plain_text(text, poll)).await?;
+            } else {
+                room.send(UnstablePollEndEventContent::new(text, poll)).await?;
+            }
+            Ok(())
+        });
+    }
+
     pub fn redact(&self, room_id: OwnedRoomId, event_id: OwnedEventId) {
         let acct = self.clone();
         self.spawn_op(Some(room_id.clone()), async move {

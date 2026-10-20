@@ -55,7 +55,9 @@ impl ChatLog {
             Item::Line(line) => (line, ""),
             Item::Edit { fallback, .. } => (fallback, "[edit] "),
             Item::Redact { .. } => return Some((today(), format!("{} -!- a message was deleted\n", now_time()))),
-            Item::React { .. } => return None,
+            // Like reactions, votes aren't lines of their own.
+            Item::React { .. } | Item::PollVote { .. } => return None,
+            Item::PollEnd { .. } => return Some((today(), format!("{} -!- a poll ended\n", now_time()))),
         };
         let id = line.event_id.clone()?;
         if line.pending || (matches!(item, Item::Line(_)) && !self.written.insert(id)) {

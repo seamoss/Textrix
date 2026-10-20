@@ -10,6 +10,8 @@ use matrix_sdk::{
         MilliSecondsSinceUnixEpoch, OwnedTransactionId, OwnedUserId, UserId,
         events::{
             AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent, SyncMessageLikeEvent, SyncStateEvent,
+            message::TextContentBlock,
+            poll::{start::PollKind, unstable_start::UnstablePollStartEventContent},
             room::{
                 member::MembershipChange,
                 message::{AudioMessageEventContent, MessageFormat, MessageType, Relation, VideoMessageEventContent},
@@ -21,7 +23,7 @@ use matrix_sdk::{
 use serde::Deserialize;
 
 use crate::{
-    model::{Fold, Item, Line, LineKind, Media, MediaKind},
+    model::{Fold, Item, Line, LineKind, Media, MediaKind, Poll},
     richtext,
 };
 
@@ -223,12 +225,80 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
             let target = ev.redacts.or(ev.content.redacts)?;
             Some(Item::Redact { target })
         }
+        // Polls: Element's unstable events, and the stable ones.
+        AnySyncMessageLikeEvent::UnstablePollStart(SyncMessageLikeEvent::Original(ev)) => {
+            let UnstablePollStartEventContent::New(content) = ev.content else { return None };
+            let start = content.poll_start;
+            let poll = Poll {
+                question: start.question.text,
+                answers: start.answers.iter().map(|a| (a.id.clone(), a.text.clone())).collect(),
+                max: usize::try_from(u64::from(start.max_selections)).unwrap_or(1),
+                disclosed: matches!(start.kind, PollKind::Disclosed),
+                ..Poll::default()
+            };
+            Some(poll_line(line, poll))
+        }
+        AnySyncMessageLikeEvent::PollStart(SyncMessageLikeEvent::Original(ev)) => {
+            let start = ev.content.poll;
+            let text = |t: &TextContentBlock| t.find_plain().unwrap_or_default().to_owned();
+            let poll = Poll {
+                question: text(&start.question.text),
+                answers: start.answers.iter().map(|a| (a.id.clone(), text(&a.text))).collect(),
+                max: usize::try_from(u64::from(start.max_selections)).unwrap_or(1),
+                disclosed: matches!(start.kind, PollKind::Disclosed),
+                stable: true,
+                ..Poll::default()
+            };
+            Some(poll_line(line, poll))
+        }
+        AnySyncMessageLikeEvent::UnstablePollResponse(SyncMessageLikeEvent::Original(ev)) => Some(Item::PollVote {
+            target: ev.content.relates_to.event_id,
+            user: ev.sender,
+            at: ev.origin_server_ts.get().into(),
+            answers: ev.content.poll_response.answers,
+            own: line.own,
+        }),
+        AnySyncMessageLikeEvent::PollResponse(SyncMessageLikeEvent::Original(ev)) => Some(Item::PollVote {
+            target: ev.content.relates_to.event_id,
+            user: ev.sender,
+            at: ev.origin_server_ts.get().into(),
+            answers: ev.content.selections.to_vec(),
+            own: line.own,
+        }),
+        AnySyncMessageLikeEvent::UnstablePollEnd(SyncMessageLikeEvent::Original(ev)) => Some(Item::PollEnd {
+            target: ev.content.relates_to.event_id,
+            user: ev.sender,
+            at: ev.origin_server_ts.get().into(),
+        }),
+        AnySyncMessageLikeEvent::PollEnd(SyncMessageLikeEvent::Original(ev)) => Some(Item::PollEnd {
+            target: ev.content.relates_to.event_id,
+            user: ev.sender,
+            at: ev.origin_server_ts.get().into(),
+        }),
+        // A sticker is a picture with a name: shown like an image.
         AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Original(ev)) => {
-            line.body = format!("[sticker] {}", ev.content.body);
+            let content = ev.content;
+            line.body = format!("[sticker] {}", content.body);
+            line.media = Some(Media {
+                source: content.source.into(),
+                filename: content.body,
+                kind: MediaKind::Image,
+                mimetype: content.info.mimetype.clone(),
+                thumbnail: content.info.thumbnail_source.clone(),
+                size: content.info.size.map(u64::from),
+            });
             Some(Item::Line(line))
         }
         _ => None,
     }
+}
+
+/// The message that starts `poll`: its question, for logs, search and
+/// notifications, with the poll itself to draw.
+fn poll_line(mut line: Line, poll: Poll) -> Item {
+    line.body = format!("[poll] {}", poll.question);
+    line.poll = Some(Box::new(poll));
+    Item::Line(line)
 }
 
 /// Styled spans for messages that carry HTML formatting.
@@ -368,7 +438,62 @@ pub fn to_local(ts: MilliSecondsSinceUnixEpoch) -> DateTime<Local> {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_reply_fallback;
+    use super::*;
+
+    #[test]
+    fn elements_polls_come_in() {
+        let convert = |json: serde_json::Value| {
+            let ev: AnySyncMessageLikeEvent = serde_json::from_value(json).unwrap();
+            message_like(ev, Line::new(LineKind::Message, "")).unwrap()
+        };
+        let start = convert(serde_json::json!({
+            "type": "org.matrix.msc3381.poll.start", "event_id": "$p", "sender": "@sam:x.org", "origin_server_ts": 1,
+            "content": {
+                "org.matrix.msc3381.poll.start": {
+                    "question": { "org.matrix.msc1767.text": "Pizza tonight?" },
+                    "kind": "org.matrix.msc3381.poll.disclosed", "max_selections": 1,
+                    "answers": [ { "id": "a1", "org.matrix.msc1767.text": "Yes" }, { "id": "a2", "org.matrix.msc1767.text": "No" } ]
+                },
+                "org.matrix.msc1767.text": "Pizza tonight?\n1. Yes\n2. No"
+            }
+        }));
+        let Item::Line(line) = start else { panic!("a line") };
+        let poll = line.poll.unwrap();
+        assert_eq!(line.body, "[poll] Pizza tonight?");
+        assert_eq!(
+            (poll.question.as_str(), poll.answers.len(), poll.max, poll.disclosed),
+            ("Pizza tonight?", 2, 1, true)
+        );
+
+        let vote = convert(serde_json::json!({
+            "type": "org.matrix.msc3381.poll.response", "event_id": "$v", "sender": "@jo:x.org", "origin_server_ts": 5,
+            "content": { "org.matrix.msc3381.poll.response": { "answers": ["a1"] },
+                "m.relates_to": { "rel_type": "m.reference", "event_id": "$p" } }
+        }));
+        assert!(
+            matches!(vote, Item::PollVote { ref target, at: 5, ref answers, .. } if target == "$p" && answers == &["a1"])
+        );
+        let end = convert(serde_json::json!({
+            "type": "org.matrix.msc3381.poll.end", "event_id": "$e", "sender": "@sam:x.org", "origin_server_ts": 9,
+            "content": { "org.matrix.msc3381.poll.end": {}, "org.matrix.msc1767.text": "Ended",
+                "m.relates_to": { "rel_type": "m.reference", "event_id": "$p" } }
+        }));
+        assert!(matches!(end, Item::PollEnd { at: 9, .. }));
+    }
+
+    #[test]
+    fn stickers_are_pictures() {
+        let ev: AnySyncMessageLikeEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.sticker", "event_id": "$s", "sender": "@sam:x.org", "origin_server_ts": 1,
+            "content": { "body": "Party parrot", "url": "mxc://x.org/parrot",
+                "info": { "mimetype": "image/webp", "w": 256, "h": 256, "size": 4096 } }
+        }))
+        .unwrap();
+        let Some(Item::Line(line)) = message_like(ev, Line::new(LineKind::Message, "")) else { panic!("a line") };
+        assert_eq!(line.body, "[sticker] Party parrot");
+        let media = line.media.unwrap();
+        assert!(media.has_picture() && media.mimetype.as_deref() == Some("image/webp"), "{media:?}");
+    }
 
     #[test]
     fn voice_messages_show_length_and_waveform() {

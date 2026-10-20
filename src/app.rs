@@ -1,7 +1,7 @@
 //! Application state: windows, accounts, keys and slash commands.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -42,7 +42,7 @@ use crate::{
     links,
     matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
     model::{
-        AccountName, Activity, Fold, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence,
+        AccountName, Activity, Fold, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Poll, Presence,
         PresenceKind, RoomMeta, SpaceInfo, ago,
     },
     notify,
@@ -555,6 +555,17 @@ fn annotate(line: &mut Line, item: &Item) {
             Some(_) => {}
             None => line.reactions.push((key.clone(), vec![nick.clone()])),
         },
+        Item::PollVote { user, at, answers, own, .. } => {
+            if let Some(poll) = line.poll.as_mut() {
+                poll.vote(user, *at, answers, *own);
+            }
+        }
+        // Only whoever started a poll ends it.
+        Item::PollEnd { user, at, .. } if line.sender.as_ref() == Some(user) => {
+            if let Some(poll) = line.poll.as_mut() {
+                poll.ended.get_or_insert(*at);
+            }
+        }
         _ => {}
     }
 }
@@ -565,6 +576,21 @@ pub enum LinkTitle {
     Ready(String),
     /// The page has no title, or it couldn't be fetched.
     None,
+}
+
+/// Voting in a poll: its answers to pick from (Enter in selection mode).
+pub struct VotePicker {
+    pub question: String,
+    /// (id, text).
+    pub answers: Vec<(String, String)>,
+    /// How many one vote may pick.
+    pub max: usize,
+    /// The answers picked so far (several, when `max` allows).
+    pub picked: BTreeSet<usize>,
+    pub selected: usize,
+    key: WinKey,
+    poll: OwnedEventId,
+    stable: bool,
 }
 
 /// What `/theme` does other than pick a theme, so no theme file can be
@@ -853,6 +879,7 @@ pub struct App {
     konami: usize,
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
+    pub vote: Option<VotePicker>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
     /// When you went /away: from then, DMs collect with your mentions.
@@ -978,6 +1005,11 @@ const COMMANDS: &[Cmd] = &[
         name: "play",
         args: "[nick | stop]",
         help: "Play the last voice message, audio or video (from nick); stop stops audio",
+    },
+    Cmd {
+        name: "poll",
+        args: "<question> | <answer> | <answer>… | end",
+        help: "Start a poll here (Enter on one in selection mode votes), or end your latest",
     },
     Cmd { name: "lastlog", args: "[-n N] [-nick nick] <text>", help: "Search this window's loaded scrollback" },
     Cmd {
@@ -1319,6 +1351,7 @@ impl App {
             konami: 0,
             switcher: None,
             theme_picker: None,
+            vote: None,
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
@@ -3267,6 +3300,9 @@ impl App {
         if self.theme_picker.is_some() {
             return self.on_theme_picker_key(key);
         }
+        if self.vote.is_some() {
+            return self.on_vote_key(key);
+        }
         if self.select.is_none() && (key.modifiers - KeyModifiers::SHIFT).is_empty() {
             self.konami = eggs::konami_step(self.konami, key.code);
             if self.konami == eggs::KONAMI.len() {
@@ -3765,6 +3801,117 @@ impl App {
         }
     }
 
+    /// The poll on the selected message, if it starts one.
+    pub fn selected_poll(&self) -> Option<&Poll> {
+        self.selected_line()?.poll.as_deref()
+    }
+
+    /// Enter on a poll: its answers to vote from, your vote ticked.
+    fn open_vote(&mut self, line: &Line) {
+        let (Some(poll), Some(key), Some(id)) = (line.poll.as_deref(), self.win().room.clone(), line.event_id.clone())
+        else {
+            return;
+        };
+        if poll.ended.is_some() {
+            return self.info("that poll has ended");
+        }
+        let mine = poll.mine();
+        let picked =
+            poll.answers.iter().enumerate().filter(|(_, (a, _))| mine.contains(&a.as_str())).map(|(n, _)| n).collect();
+        self.vote = Some(VotePicker {
+            question: poll.question.clone(),
+            answers: poll.answers.clone(),
+            max: poll.max.max(1),
+            picked,
+            selected: 0,
+            key: WinKey { thread: None, ..key },
+            poll: id,
+            stable: poll.stable,
+        });
+    }
+
+    fn on_vote_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let Some(v) = self.vote.as_mut() else { return };
+        let last = v.answers.len().saturating_sub(1);
+        match key.code {
+            Esc => self.vote = None,
+            Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.vote = None,
+            Up | Char('k') => v.selected = v.selected.saturating_sub(1),
+            Down | Char('j') => v.selected = (v.selected + 1).min(last),
+            // Picking several: Space ticks one.
+            Char(' ') if v.max > 1 => {
+                if !v.picked.remove(&v.selected) && v.picked.len() < v.max {
+                    v.picked.insert(v.selected);
+                }
+            }
+            Char(c @ '1'..='9') if (c as usize - '1' as usize) <= last => {
+                v.selected = c as usize - '1' as usize;
+                if v.max == 1 {
+                    self.send_vote();
+                }
+            }
+            Enter => self.send_vote(),
+            _ => {}
+        }
+    }
+
+    /// Vote: the ticked answers, or the chosen one.
+    fn send_vote(&mut self) {
+        let Some(v) = self.vote.take() else { return };
+        let picked: Vec<usize> =
+            if v.max > 1 && !v.picked.is_empty() { v.picked.iter().copied().collect() } else { vec![v.selected] };
+        let answers: Vec<String> = picked.iter().filter_map(|&n| v.answers.get(n)).map(|(id, _)| id.clone()).collect();
+        let texts: Vec<&str> = picked.iter().filter_map(|&n| v.answers.get(n)).map(|(_, t)| t.as_str()).collect();
+        match self.connected(&v.key.account) {
+            Some(acct) => {
+                acct.vote(v.key.room_id.clone(), v.poll.clone(), answers, v.stable);
+                self.select = None;
+                self.info(format!("voted {} in “{}”", texts.join(", "), v.question));
+            }
+            None => self.error(format!("{} isn't connected", v.key.account)),
+        }
+    }
+
+    /// `/poll <question> | <answer> | <answer>…` starts one; `/poll end`
+    /// ends your latest open one here.
+    fn cmd_poll(&mut self, args: &str) -> Result<(), String> {
+        let usage = "usage: /poll <question> | <answer> | <answer> … (2 to 20 answers), or /poll end";
+        if args.trim() == "end" {
+            let (acct, room_id) = self.room_ctx()?;
+            let latest =
+                self.win().lines.iter().rev().find(|l| l.own && l.poll.as_ref().is_some_and(|p| p.ended.is_none()));
+            let Some((poll, id)) = latest.and_then(|l| Some((l.poll.as_deref()?, l.event_id.clone()?))) else {
+                return Err("you have no open poll here".into());
+            };
+            let counts = poll.counts();
+            let top = counts.iter().max().copied().unwrap_or(0);
+            let winners: Vec<&str> = poll
+                .answers
+                .iter()
+                .zip(&counts)
+                .filter(|(_, c)| **c == top && top > 0)
+                .map(|((_, a), _)| a.as_str())
+                .collect();
+            let text = match winners.as_slice() {
+                [] => "The poll has ended. Nobody voted.".to_owned(),
+                [one] => format!("The poll has ended. Top answer: {one}"),
+                many => format!("The poll has ended. Top answers: {}", many.join(", ")),
+            };
+            acct.end_poll(room_id, id, text, poll.stable);
+            return Ok(());
+        }
+        let mut parts = args.split('|').map(str::trim).filter(|p| !p.is_empty());
+        let question = parts.next().ok_or(usage)?.to_owned();
+        let answers: Vec<String> = parts.map(str::to_owned).collect();
+        if !(2..=20).contains(&answers.len()) {
+            return Err(usage.into());
+        }
+        let (acct, room_id) = self.room_ctx()?;
+        acct.start_poll(room_id, question, answers);
+        Ok(())
+    }
+
     fn on_select_key(&mut self, key: KeyEvent) {
         use KeyCode::*;
         let Some(line) = self.selected_line().cloned() else {
@@ -3780,6 +3927,7 @@ impl App {
             PageDown => self.move_select(10),
             Home | Char('g') => self.select = self.selectable().first().cloned(),
             End | Char('G') => self.select = self.selectable().pop(),
+            Enter if line.poll.is_some() => self.open_vote(&line),
             Enter if self.win().is_mentions => {
                 self.select = None;
                 let key =
@@ -4347,6 +4495,7 @@ impl App {
             "forward" => self.cmd_forward(args),
             "markread" => self.cmd_markread(args),
             "theme" => self.cmd_theme(args),
+            "poll" => self.cmd_poll(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
                 Ok(())
@@ -7343,6 +7492,56 @@ mod tests {
         app.on_event(AppEvent::Away { account: "t".into(), message: Some("again".into()) });
         app.on_event(AppEvent::Away { account: "t".into(), message: None });
         assert!(app.windows[0].lines.back().unwrap().body.ends_with("nothing for you"));
+    }
+
+    #[test]
+    fn polls_show_results_and_take_votes() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let mut start = msg("$p", "[poll] Pizza tonight?");
+        start.poll = Some(Box::new(Poll {
+            question: "Pizza tonight?".into(),
+            answers: vec![("a1".into(), "Yes".into()), ("a2".into(), "No".into()), ("a3".into(), "Maybe".into())],
+            max: 1,
+            disclosed: true,
+            ..Poll::default()
+        }));
+        let vote = |user: &str, at: u64, answer: &str, own: bool| Item::PollVote {
+            target: "$p".try_into().unwrap(),
+            user: format!("@{user}:x.org").try_into().unwrap(),
+            at,
+            answers: vec![answer.into()],
+            own,
+        };
+        let items =
+            vec![Item::Line(start), vote("sam", 2, "a1", false), vote("jo", 3, "a1", false), vote("me", 4, "a2", true)];
+        app.on_event(AppEvent::Timeline { account: "t".into(), room_id: room, items, live: true, limited: false });
+        app.show_sidebar = false;
+        let screen = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 14)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..14).map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        };
+        let shown = screen(&mut app);
+        assert!(shown.contains("1. Yes   ███████░░░ 2"), "{shown}");
+        assert!(shown.contains("2. No    ███░░░░░░░ 1 ✓"), "{shown}");
+        assert!(shown.contains("3 votes"), "{shown}");
+
+        // Select it, Enter: the answers, yours ticked; a number votes.
+        app.enter_select();
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let v = app.vote.as_ref().expect("the vote list");
+        assert_eq!((v.answers.len(), v.max), (3, 1));
+        assert!(screen(&mut app).contains(" Vote "));
+        app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+        assert!(app.vote.is_none(), "one pick votes straight away");
+        assert!(app.win().lines.back().unwrap().body.contains("isn't connected"), "it tried to send");
+
+        assert!(app.cmd_poll("Lunch? | soup").unwrap_err().contains("usage"), "two answers at least");
+        assert!(app.cmd_poll("end").is_err(), "not connected, nothing to end");
     }
 
     #[test]

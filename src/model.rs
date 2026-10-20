@@ -1,10 +1,10 @@
 //! Plain data shared between the Matrix side and the UI.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Local};
 use matrix_sdk::ruma::{
-    EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedTransactionId, OwnedUserId, events::room::MediaSource,
+    EventId, OwnedEventId, OwnedMxcUri, OwnedRoomId, OwnedTransactionId, OwnedUserId, UserId, events::room::MediaSource,
 };
 
 /// The dotfile name of a server, e.g. `"m4trix"`.
@@ -68,6 +68,8 @@ pub struct Line {
     pub cached: bool,
     /// A join, leave or rename, which can fold into its neighbours.
     pub fold: Option<Fold>,
+    /// A poll this message starts, with the votes seen so far.
+    pub poll: Option<Box<Poll>>,
 }
 
 /// Membership noise that runs of fold into one summary line.
@@ -108,6 +110,7 @@ impl Line {
             reactions: Vec::new(),
             cached: false,
             fold: None,
+            poll: None,
         }
     }
 
@@ -178,6 +181,83 @@ pub struct Media {
     pub size: Option<u64>,
 }
 
+/// A poll (Element's `org.matrix.msc3381` events, or the stable
+/// `m.poll` ones), with the votes seen so far.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Poll {
+    pub question: String,
+    /// (id, text), in order.
+    pub answers: Vec<(String, String)>,
+    /// How many answers one vote may pick.
+    pub max: usize,
+    /// Results show while it's open, not only once it's ended.
+    pub disclosed: bool,
+    /// Started with the stable events, so votes go back that way.
+    pub stable: bool,
+    /// Each voter's latest vote: when (ms since 1970), and what.
+    pub votes: BTreeMap<OwnedUserId, (u64, Vec<String>)>,
+    /// You, once you've voted.
+    pub me: Option<OwnedUserId>,
+    /// When it ended (ms since 1970).
+    pub ended: Option<u64>,
+}
+
+impl Poll {
+    /// A vote, unless it came after the end, or before one of theirs
+    /// already counted.
+    pub fn vote(&mut self, user: &UserId, at: u64, answers: &[String], own: bool) {
+        if self.ended.is_some_and(|end| at > end) || self.votes.get(user).is_some_and(|(t, _)| *t > at) {
+            return;
+        }
+        if own {
+            self.me = Some(user.to_owned());
+        }
+        self.votes.insert(user.to_owned(), (at, answers.to_vec()));
+    }
+
+    /// What a vote counts for: answers the poll has, up to `max`; none
+    /// when it picked none of them (a spoiled vote).
+    fn counted<'a>(&self, picked: &'a [String]) -> Vec<&'a str> {
+        let mut out: Vec<&str> = Vec::new();
+        for id in picked {
+            if self.answers.iter().any(|(a, _)| a == id) && !out.contains(&id.as_str()) {
+                out.push(id);
+            }
+        }
+        out.truncate(self.max.max(1));
+        out
+    }
+
+    /// Votes for each answer, in order.
+    pub fn counts(&self) -> Vec<usize> {
+        let mut counts = vec![0; self.answers.len()];
+        for (_, picked) in self.votes.values() {
+            for id in self.counted(picked) {
+                if let Some(i) = self.answers.iter().position(|(a, _)| a == id) {
+                    counts[i] += 1;
+                }
+            }
+        }
+        counts
+    }
+
+    /// How many voted (spoiled votes aside).
+    pub fn voters(&self) -> usize {
+        self.votes.values().filter(|(_, picked)| !self.counted(picked).is_empty()).count()
+    }
+
+    /// The answers you picked.
+    pub fn mine(&self) -> Vec<&str> {
+        self.me.as_ref().and_then(|me| self.votes.get(me)).map(|(_, picked)| self.counted(picked)).unwrap_or_default()
+    }
+
+    /// Whether results show: disclosed polls while open, every poll once
+    /// it's ended.
+    pub fn results_shown(&self) -> bool {
+        self.disclosed || self.ended.is_some()
+    }
+}
+
 /// One converted timeline event.
 #[derive(Clone, Debug)]
 pub enum Item {
@@ -198,6 +278,20 @@ pub enum Item {
         /// Yours.
         own: bool,
     },
+    /// A vote in the poll `target` starts.
+    PollVote {
+        target: OwnedEventId,
+        user: OwnedUserId,
+        at: u64,
+        answers: Vec<String>,
+        own: bool,
+    },
+    /// The poll `target` starts has ended (said by `user`).
+    PollEnd {
+        target: OwnedEventId,
+        user: OwnedUserId,
+        at: u64,
+    },
 }
 
 impl Item {
@@ -205,7 +299,11 @@ impl Item {
     pub fn target(&self) -> Option<&EventId> {
         match self {
             Item::Line(_) => None,
-            Item::Edit { target, .. } | Item::Redact { target } | Item::React { target, .. } => Some(target),
+            Item::Edit { target, .. }
+            | Item::Redact { target }
+            | Item::React { target, .. }
+            | Item::PollVote { target, .. }
+            | Item::PollEnd { target, .. } => Some(target),
         }
     }
 }
@@ -313,6 +411,25 @@ pub struct Member {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polls_count_each_voters_latest_vote() {
+        let user = |n: &str| OwnedUserId::try_from(format!("@{n}:x.org")).unwrap();
+        let ids = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut poll =
+            Poll { answers: vec![("a".into(), "Yes".into()), ("b".into(), "No".into())], max: 1, ..Poll::default() };
+        poll.vote(&user("sam"), 1, &ids(&["a"]), false);
+        poll.vote(&user("sam"), 3, &ids(&["b"]), false);
+        poll.vote(&user("sam"), 2, &ids(&["a"]), false);
+        poll.vote(&user("jo"), 4, &ids(&["b", "a"]), true);
+        poll.vote(&user("eve"), 5, &ids(&["zzz"]), false);
+        assert_eq!(poll.counts(), [0, 2], "sam's latest, jo's first pick only, eve's spoiled");
+        assert_eq!((poll.voters(), poll.mine()), (2, vec!["b"]));
+        poll.ended = Some(6);
+        poll.vote(&user("dee"), 7, &ids(&["a"]), false);
+        assert_eq!(poll.counts(), [0, 2], "nothing after the end");
+        assert!(poll.results_shown());
+    }
 
     #[test]
     fn presence_reads_naturally() {
