@@ -3,6 +3,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -936,6 +940,8 @@ pub struct App {
     pub invites: Vec<Invitation>,
     /// Gallery pictures the renderer wants, fetched after the draw.
     pub tile_requests: Vec<(OwnedEventId, Media)>,
+    /// `notify_command`s running, and whether the last one failed.
+    hooks: (Arc<AtomicUsize>, Arc<AtomicBool>),
     /// Messages to send later (`/later`), soonest first.
     later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
@@ -1495,6 +1501,7 @@ impl App {
             home: None,
             invites: Vec::new(),
             tile_requests: Vec::new(),
+            hooks: Default::default(),
             custom_emoji: HashMap::new(),
             later: Vec::new(),
             editor_request: None,
@@ -2511,6 +2518,7 @@ impl App {
         let quiet = muted || mode == Some(RoomNotificationMode::MentionsAndKeywordsOnly);
         let mut ring = false;
         let mut mentions = Vec::new();
+        let mut hooks = Vec::new();
         let notifying = self.notifying();
 
         if live && let Some(log) = self.log.as_mut() {
@@ -2624,16 +2632,42 @@ impl App {
                 continue;
             }
             ring = true;
+            let nick = line.sender.as_ref().and_then(|u| self.layout.nicknames.get(u)).unwrap_or(&line.nick);
+            let title = if w.is_dm { nick.clone() } else { format!("{nick} in {}", w.title()) };
+            let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
+            if !self.cfg.notify_command.trim().is_empty()
+                && let Some(key) = &w.room
+            {
+                let kind = if line.highlight {
+                    "mention"
+                } else if w.is_dm {
+                    "dm"
+                } else {
+                    "message"
+                };
+                let text = if self.cfg.notify_preview { line.body.clone() } else { String::new() };
+                hooks.push(vec![
+                    ("TEXTRIX_KIND", kind.to_owned()),
+                    ("TEXTRIX_TITLE", title.clone()),
+                    ("TEXTRIX_FROM", nick.clone()),
+                    ("TEXTRIX_FROM_ID", line.sender.as_ref().map(ToString::to_string).unwrap_or_default()),
+                    ("TEXTRIX_ROOM", w.title().to_owned()),
+                    ("TEXTRIX_ROOM_ID", key.room_id.to_string()),
+                    ("TEXTRIX_SERVER", key.account.clone()),
+                    ("TEXTRIX_TEXT", text),
+                    ("TEXTRIX_AWAY", if self.away_since.is_some() { "1" } else { "0" }.to_owned()),
+                ]);
+            }
             if notifying {
-                let nick = line.sender.as_ref().and_then(|u| self.layout.nicknames.get(u)).unwrap_or(&line.nick);
-                let title = if w.is_dm { nick.clone() } else { format!("{nick} in {}", w.title()) };
-                let body = if self.cfg.notify_preview { line.body.clone() } else { "new message".to_owned() };
                 self.notifications.push((title, body));
             }
         }
         // Like irssi's hilight window, but every mention, newest last.
         for line in mentions {
             self.record_mention(idx, &line, live && !viewing);
+        }
+        for vars in hooks {
+            self.run_notify_command(vars);
         }
         if ring {
             self.ring(BellKind::Mentions);
@@ -4274,6 +4308,47 @@ impl App {
                 .and_then(|html| crate::richtext::render(&html.body));
             self.windows[idx].push(line, cap);
         }
+    }
+
+    /// `notify_command`, for one notification: `sh -c` with the details in
+    /// its environment (never in the command, so a message can't inject
+    /// anything). A few at a time; each gets 30 seconds. A failure is
+    /// reported once, until one works again.
+    fn run_notify_command(&mut self, vars: Vec<(&'static str, String)>) {
+        const AT_ONCE: usize = 4;
+        let command = self.cfg.notify_command.clone();
+        let (running, failing) = (self.hooks.0.clone(), self.hooks.1.clone());
+        if running.fetch_add(1, Ordering::SeqCst) >= AT_ONCE {
+            running.fetch_sub(1, Ordering::SeqCst);
+            tracing::warn!("notify_command: {AT_ONCE} already running, skipping one");
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut child = tokio::process::Command::new("sh");
+            child.arg("-c").arg(&command).envs(vars).kill_on_drop(true);
+            child.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null());
+            child.stderr(std::process::Stdio::piped());
+            let outcome = match tokio::time::timeout(EXEC_LIMIT, child.output()).await {
+                Ok(Ok(out)) if out.status.success() => Ok(()),
+                Ok(Ok(out)) => {
+                    let said = String::from_utf8_lossy(&out.stderr);
+                    let said = said.lines().next().map(|l| format!(": {}", strip_escapes(l))).unwrap_or_default();
+                    Err(format!("{}{said}", out.status))
+                }
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err(format!("still running after {}s, stopped", EXEC_LIMIT.as_secs())),
+            };
+            running.fetch_sub(1, Ordering::SeqCst);
+            match outcome {
+                Ok(()) => failing.store(false, Ordering::SeqCst),
+                Err(e) if !failing.swap(true, Ordering::SeqCst) => {
+                    let line = Line::error(format!("notify_command failed ({e}); said once until it works again"));
+                    let _ = tx.send(AppEvent::Notice { account: None, room_id: None, line });
+                }
+                Err(_) => {}
+            }
+        });
     }
 
     /// `/exec [-o] <command>`, irssi's: run it with `sh -c`, and show what
@@ -7514,6 +7589,10 @@ impl App {
                 .and_then(|mut t| t.remove("v"))
                 .unwrap_or_else(|| toml::Value::String(value.to_owned()))
         };
+        // Settings that run programs aren't for scripts, which don't.
+        if self.in_script > 0 && RUNS_PROGRAMS.contains(&key) {
+            return Err(format!("scripts can't change {key}, which runs a program"));
+        }
         if let Some((_, now, help)) = script_settings.iter().find(|(k, _, _)| k == key) {
             if value.is_empty() {
                 self.info(format!("{key} = {now}  ({help})"));
@@ -7769,6 +7848,9 @@ fn is_mention(line: &Line) -> bool {
 
 /// How long `/exec` waits, and how much of what it prints it keeps.
 const EXEC_LIMIT: Duration = Duration::from_secs(30);
+
+/// Settings whose value is a command Textrix runs.
+const RUNS_PROGRAMS: [&str; 3] = ["notify_command", "editor", "video_player"];
 const EXEC_LINES: usize = 500;
 const EXEC_BYTES: usize = 64 * 1024;
 
@@ -8945,6 +9027,41 @@ mod tests {
         app.on_key(alt_r);
         assert!(app.select.is_none() && app.windows[a].seek.is_none());
         assert_eq!(app.windows[a].lines.back().unwrap().body, "nothing unread here");
+    }
+
+    #[tokio::test]
+    async fn notify_command_hears_mentions_through_its_environment() {
+        let mut app = test_app();
+        let out = std::env::temp_dir().join(format!("textrix-hook-{}", std::process::id()));
+        app.cfg.notify_command = format!(
+            "printf '%s|%s|%s|%s' \"$TEXTRIX_KIND\" \"$TEXTRIX_FROM\" \"$TEXTRIX_ROOM\" \"$TEXTRIX_TEXT\" > '{}'",
+            out.display()
+        );
+        room_window(&mut app, "!a:x.org", "Night Owls");
+        let mut line = msg("$1", "you: look $(echo injected)");
+        (line.highlight, line.nick, line.sender) = (true, "sam".into(), Some("@sam:x.org".try_into().unwrap()));
+        let items = vec![Item::Line(line)];
+        app.on_event(AppEvent::Timeline {
+            account: "t".into(),
+            room_id: "!a:x.org".try_into().unwrap(),
+            items,
+            live: true,
+            limited: false,
+        });
+        let mut heard = String::new();
+        for _ in 0..100 {
+            heard = std::fs::read_to_string(&out).unwrap_or_default();
+            if !heard.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        std::fs::remove_file(&out).ok();
+        assert_eq!(heard, "mention|sam|Night Owls|you: look $(echo injected)", "the text is data, never run");
+
+        app.in_script = 1;
+        assert!(app.cmd_set("notify_command \"touch x\"").is_err(), "not from scripts");
+        assert!(app.cmd_set("editor \"touch x\"").is_err());
     }
 
     #[test]

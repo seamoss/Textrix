@@ -500,6 +500,37 @@ bell marks the window in tmux's status line.
 synced, so your other clients notify on it too); `/hilight` lists them and
 `/dehilight <word>` removes one. `/info` shows a room's setting.
 
+#### Notification hooks
+
+`notify_command` in config.toml runs a command of yours for each of those
+alerts (mentions, DMs, rooms set to `/notify all`, when you aren't looking
+at the room), whether desktop notifications are on or not, and also while
+Textrix runs in the background with no terminal. Use it to push to your
+phone, light up a lamp, or log them. The details come in environment
+variables, never pasted into the command, so a message can't slip
+anything into your shell:
+
+| Variable | What |
+|---|---|
+| `TEXTRIX_KIND` | `mention`, `dm`, or `message` (a room set to `/notify all`) |
+| `TEXTRIX_TITLE` | the desktop notification's title: `sam in Night Owls`, or `sam` for a DM |
+| `TEXTRIX_FROM`, `TEXTRIX_FROM_ID` | who: their name (your nickname for them, if you gave one) and Matrix ID |
+| `TEXTRIX_ROOM`, `TEXTRIX_ROOM_ID` | where |
+| `TEXTRIX_SERVER` | which of your servers |
+| `TEXTRIX_TEXT` | the message (empty with `notify_preview = false`) |
+| `TEXTRIX_AWAY` | `1` while you're `/away`, else `0` |
+
+```toml
+# Push to your phone with ntfy, but only while you're away:
+notify_command = 'if [ "$TEXTRIX_AWAY" = 1 ]; then curl -s -d "$TEXTRIX_TEXT" -H "Title: $TEXTRIX_TITLE" ntfy.sh/your-topic; fi'
+```
+
+It runs with `sh -c`, four at most at once, each stopped after 30
+seconds. If it fails, Textrix says so once in the status window (with
+the first line it printed to stderr), and again only after it has worked
+in between. Scripts can't change it, or `editor` and `video_player`,
+which also run programs.
+
 ### Themes
 
 ![The /themes list at the right, trying turbo: the whole screen in yellow on DOS blue](site/screenshots/picker.svg)
@@ -653,6 +684,7 @@ bell_style = "sound"       # "visual" flashes the status bar, "both" does both
 bell_for = ["mentions", "invites", "verification", "failed_sends", "transfers"]
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
+notify_command = ""        # run this for each notification (see Notification hooks)
 log = false                # chat logs (plaintext!); /log on|off per session
 log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"

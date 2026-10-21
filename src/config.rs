@@ -157,6 +157,9 @@ pub struct Config {
     pub notifications: NotifyMode,
     /// Include the message text in notifications.
     pub notify_preview: bool,
+    /// A command run (with `sh -c`) for each notification, desktop ones on
+    /// or off: who, where and what come in `TEXTRIX_*` variables.
+    pub notify_command: String,
     /// Lines kept per window.
     pub scrollback: usize,
     /// Events fetched per history request.
@@ -254,6 +257,7 @@ impl Default for Config {
             bell_for: BellKind::ALL.to_vec(),
             notifications: NotifyMode::Auto,
             notify_preview: true,
+            notify_command: String::new(),
             scrollback: 5000,
             history_page: 50,
             completion_char: ":".into(),
