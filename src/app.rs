@@ -1095,7 +1095,11 @@ const COMMANDS: &[Cmd] = &[
         args: "[-deep] [from:name] [in:room] [after:date] [before:date] [text]",
         help: "Search every room (the encrypted local index, and loaded history; -deep also reads open rooms' last 500)",
     },
-    Cmd { name: "jump", args: "<N>", help: "Go to result N of /search or /pins and select it" },
+    Cmd {
+        name: "jump",
+        args: "<N> | new",
+        help: "Go to result N of /search or /pins and select it; new: to the first unread message here (Alt+R)",
+    },
     Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
     Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
@@ -1245,6 +1249,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("Alt+1…0, Alt+Q…P", "go to window 1–20"),
     ("Ctrl+N / Ctrl+P, Alt+← / Alt+→", "next / previous window"),
     ("Alt+A", "jump to the most important window with activity"),
+    ("Alt+R", "jump to the new-messages line in this room (where you'd read up to), loading history back to it"),
     ("Ctrl+K, Alt+K", "quick switcher: type part of a room's name (or its number), Enter goes there"),
     ("PgUp / PgDn", "scroll; older history loads at the top"),
     ("Tab", "complete commands, nicks (adds a mention), :emoji shortcodes, server names, file paths"),
@@ -3741,6 +3746,11 @@ impl App {
                 '1'..='9' => self.switch_to(c as usize - '1' as usize),
                 '0' => self.switch_to(9),
                 'a' => self.next_active(),
+                'r' => {
+                    if let Err(e) = self.jump_to_unread() {
+                        self.error(e);
+                    }
+                }
                 'k' => self.switcher = Some(Switcher::default()),
                 'b' => self.input.word_left(),
                 'f' => self.input.word_right(),
@@ -6025,9 +6035,25 @@ impl App {
     }
 
     fn cmd_jump(&mut self, args: &str) -> Result<(), String> {
-        let n: usize = args.trim().parse().map_err(|_| "usage: /jump <N> (numbers from /search)")?;
+        if args.trim() == "new" {
+            return self.jump_to_unread();
+        }
+        let n: usize = args.trim().parse().map_err(|_| "usage: /jump <N> (numbers from /search) | new")?;
         let (key, event) = self.search_hits.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("no result {n}"))?;
         self.jump_to(key, event)
+    }
+
+    /// Alt+R, `/jump new`: to the new-messages line, with the last message
+    /// you'd read selected just above it (older history loads until it's
+    /// there).
+    fn jump_to_unread(&mut self) -> Result<(), String> {
+        let w = self.win();
+        let key = w.room.clone().filter(|k| k.thread.is_none()).ok_or("that's for a room's own window")?;
+        let marker = w.marker.clone().ok_or("no read marker here yet: you haven't read anything in this room")?;
+        if w.latest_event().as_ref() == Some(&marker) {
+            return Err("nothing unread here".into());
+        }
+        self.jump_to(key, marker)
     }
 
     /// Go to a message: its room's window (reopened if closed), selected, or
@@ -8887,6 +8913,38 @@ mod tests {
         app.changelog_done(None, Err("rate limited".into()));
         assert_eq!(app.windows[0].lines.back().unwrap().body, "couldn't get the changelog: rate limited");
         assert!(app.cmd_changelog("0").is_err() && app.cmd_changelog("many").is_err());
+    }
+
+    #[test]
+    fn alt_r_goes_to_where_you_read_up_to() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        for n in 1..=5 {
+            app.windows[a].lines.push_back(msg(&format!("${n}"), "hi"));
+        }
+        app.switch_to(a);
+        let alt_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT);
+        app.on_key(alt_r);
+        assert!(app.select.is_none(), "no marker, nowhere to go");
+
+        app.windows[a].marker = Some("$2".try_into().unwrap());
+        app.on_key(alt_r);
+        assert_eq!(app.select.as_ref().map(|e| e.as_str()), Some("$2"), "the last one read, above the line");
+
+        app.select = None;
+        app.windows[a].marker = Some("$0".try_into().unwrap());
+        app.command("jump new");
+        assert_eq!(
+            app.windows[a].seek.as_ref().map(|e| e.as_str()),
+            Some("$0"),
+            "not loaded: history loads back to it"
+        );
+
+        app.windows[a].seek = None;
+        app.windows[a].marker = Some("$5".try_into().unwrap());
+        app.on_key(alt_r);
+        assert!(app.select.is_none() && app.windows[a].seek.is_none());
+        assert_eq!(app.windows[a].lines.back().unwrap().body, "nothing unread here");
     }
 
     #[test]
