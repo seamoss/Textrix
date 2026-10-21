@@ -2096,6 +2096,18 @@ fn hanging(cells: &[(char, Style)]) -> Vec<(char, Style)> {
     out
 }
 
+/// A colour on the bar, unless it would vanish into it (the same colour,
+/// or nearly as bright): then the bar's own text, marked by `instead`.
+fn on_bar(t: &Theme, style: Style, instead: Modifier) -> Style {
+    let brightness = |c: Option<Color>| match c {
+        Some(Color::Rgb(r, g, b)) => Some(0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)),
+        _ => None,
+    };
+    let lost = style.fg == t.bar.bg
+        || brightness(style.fg).zip(brightness(t.bar.bg)).is_some_and(|(a, b)| (a - b).abs() < 40.0);
+    if lost { t.bar.add_modifier(instead) } else { t.bar.patch(style) }
+}
+
 /// The status bar (`statusbar`), and the second one above it
 /// (`statusbar2`) when there is one. Prompts always come at the end of
 /// the first.
@@ -2172,8 +2184,8 @@ fn status_items(app: &App, items: &[String]) -> Vec<Span<'static>> {
                             parts.push(Span::styled(",", t.bar));
                         }
                         let style = match level {
-                            Activity::Highlight => t.bar.patch(t.highlight),
-                            Activity::Message => t.bar.patch(t.activity),
+                            Activity::Highlight => on_bar(t, t.highlight, Modifier::BOLD | Modifier::UNDERLINED),
+                            Activity::Message => on_bar(t, t.activity, Modifier::BOLD),
                             _ => t.bar_accent,
                         };
                         parts.push(Span::styled(num.to_string(), style));

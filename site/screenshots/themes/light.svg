@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="928" height="654" viewBox="0 0 928 654" role="img" aria-label="Night Owls [4] — Textrix">
-<rect width="928" height="654" rx="10" fill="#15161c"/>
+<rect width="928" height="654" rx="10" fill="#fafafa"/>
 <path d="M0,32V10a10,10 0 0 1 10,-10H918a10,10 0 0 1 10,10V32Z" fill="#2b2d35"/>
 <circle cx="20" cy="16" r="6" fill="#ff5f57"/><circle cx="40" cy="16" r="6" fill="#febc2e"/><circle cx="60" cy="16" r="6" fill="#28c840"/>
 <text x="464" y="21" text-anchor="middle" fill="#b9bcc6" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">Night Owls [4] — Textrix</text>
@@ -17,29 +17,29 @@
 <rect x="41.0" y="324.0" width="18.0" height="19" fill="#5f0087"/>
 <rect x="41.0" y="343.0" width="18.0" height="19" fill="#af0000"/>
 <rect x="14.0" y="609.0" width="900.0" height="19" fill="#005f87"/>
-<rect x="545.00" y="283.62" width="9.00" height="2.38" fill="#d5d8de"/>
-<rect x="554.00" y="281.25" width="9.00" height="4.75" fill="#d5d8de"/>
-<rect x="563.00" y="276.50" width="9.00" height="9.50" fill="#d5d8de"/>
-<rect x="572.00" y="271.75" width="9.00" height="14.25" fill="#d5d8de"/>
-<rect x="581.00" y="267.00" width="9.00" height="19.00" fill="#d5d8de"/>
-<rect x="590.00" y="271.75" width="9.00" height="14.25" fill="#d5d8de"/>
-<rect x="599.00" y="274.12" width="9.00" height="11.88" fill="#d5d8de"/>
-<rect x="608.00" y="278.88" width="9.00" height="7.12" fill="#d5d8de"/>
-<rect x="617.00" y="281.25" width="9.00" height="4.75" fill="#d5d8de"/>
-<rect x="626.00" y="276.50" width="9.00" height="9.50" fill="#d5d8de"/>
-<rect x="635.00" y="271.75" width="9.00" height="14.25" fill="#d5d8de"/>
-<rect x="644.00" y="269.38" width="9.00" height="16.62" fill="#d5d8de"/>
-<rect x="653.00" y="274.12" width="9.00" height="11.88" fill="#d5d8de"/>
-<rect x="662.00" y="278.88" width="9.00" height="7.12" fill="#d5d8de"/>
-<rect x="671.00" y="281.25" width="9.00" height="4.75" fill="#d5d8de"/>
-<rect x="680.00" y="283.62" width="9.00" height="2.38" fill="#d5d8de"/>
-<rect x="689.00" y="281.25" width="9.00" height="4.75" fill="#d5d8de"/>
-<rect x="698.00" y="278.88" width="9.00" height="7.12" fill="#d5d8de"/>
-<rect x="707.00" y="274.12" width="9.00" height="11.88" fill="#d5d8de"/>
-<rect x="716.00" y="271.75" width="9.00" height="14.25" fill="#d5d8de"/>
-<rect x="725.00" y="276.50" width="9.00" height="9.50" fill="#d5d8de"/>
-<rect x="734.00" y="281.25" width="9.00" height="4.75" fill="#d5d8de"/>
-<rect x="743.00" y="283.62" width="9.00" height="2.38" fill="#d5d8de"/>
+<rect x="545.00" y="283.62" width="9.00" height="2.38" fill="#24292f"/>
+<rect x="554.00" y="281.25" width="9.00" height="4.75" fill="#24292f"/>
+<rect x="563.00" y="276.50" width="9.00" height="9.50" fill="#24292f"/>
+<rect x="572.00" y="271.75" width="9.00" height="14.25" fill="#24292f"/>
+<rect x="581.00" y="267.00" width="9.00" height="19.00" fill="#24292f"/>
+<rect x="590.00" y="271.75" width="9.00" height="14.25" fill="#24292f"/>
+<rect x="599.00" y="274.12" width="9.00" height="11.88" fill="#24292f"/>
+<rect x="608.00" y="278.88" width="9.00" height="7.12" fill="#24292f"/>
+<rect x="617.00" y="281.25" width="9.00" height="4.75" fill="#24292f"/>
+<rect x="626.00" y="276.50" width="9.00" height="9.50" fill="#24292f"/>
+<rect x="635.00" y="271.75" width="9.00" height="14.25" fill="#24292f"/>
+<rect x="644.00" y="269.38" width="9.00" height="16.62" fill="#24292f"/>
+<rect x="653.00" y="274.12" width="9.00" height="11.88" fill="#24292f"/>
+<rect x="662.00" y="278.88" width="9.00" height="7.12" fill="#24292f"/>
+<rect x="671.00" y="281.25" width="9.00" height="4.75" fill="#24292f"/>
+<rect x="680.00" y="283.62" width="9.00" height="2.38" fill="#24292f"/>
+<rect x="689.00" y="281.25" width="9.00" height="4.75" fill="#24292f"/>
+<rect x="698.00" y="278.88" width="9.00" height="7.12" fill="#24292f"/>
+<rect x="707.00" y="274.12" width="9.00" height="11.88" fill="#24292f"/>
+<rect x="716.00" y="271.75" width="9.00" height="14.25" fill="#24292f"/>
+<rect x="725.00" y="276.50" width="9.00" height="9.50" fill="#24292f"/>
+<rect x="734.00" y="281.25" width="9.00" height="4.75" fill="#24292f"/>
+<rect x="743.00" y="283.62" width="9.00" height="2.38" fill="#24292f"/>
 </g>
 <g fill="none" stroke-linecap="square">
 <path d="M216.5,67.5L216.5,58.0M216.5,67.5L216.5,77.0" stroke="#808080" stroke-width="1.3"/>
@@ -136,36 +136,36 @@
 <text x="266.0 275.0 284.0 293.0 302.0 311.0 320.0 329.0" y="52.9" fill="#eeeeee">optional</text>
 <text x="23.0" y="71.9" fill="#808080">1</text>
 <text x="68.0 77.0 86.0 95.0 104.0 113.0" y="71.9" fill="#585858">status</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="71.9" fill="#808080">12:32</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="71.9" fill="#808080">20:40</text>
 <text x="275.0" y="71.9" fill="#808080">&lt;</text>
 <text x="284.0 293.0 302.0 311.0 320.0 329.0 338.0 347.0 356.0" y="71.9" fill="#008700">jo_bloggs</text>
 <text x="365.0" y="71.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="71.9" fill="#d5d8de">always.</text>
-<text x="500.0 509.0 518.0 527.0" y="71.9" fill="#d5d8de">what</text>
-<text x="545.0 554.0 563.0" y="71.9" fill="#d5d8de">are</text>
-<text x="581.0 590.0" y="71.9" fill="#d5d8de">we</text>
-<text x="608.0 617.0 626.0 635.0 644.0 653.0 662.0 671.0" y="71.9" fill="#d5d8de">building</text>
-<text x="689.0 698.0 707.0 716.0 725.0 734.0 743.0" y="71.9" fill="#d5d8de">tonight</text>
+<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="71.9" fill="#24292f">always.</text>
+<text x="500.0 509.0 518.0 527.0" y="71.9" fill="#24292f">what</text>
+<text x="545.0 554.0 563.0" y="71.9" fill="#24292f">are</text>
+<text x="581.0 590.0" y="71.9" fill="#24292f">we</text>
+<text x="608.0 617.0 626.0 635.0 644.0 653.0 662.0 671.0" y="71.9" fill="#24292f">building</text>
+<text x="689.0 698.0 707.0 716.0 725.0 734.0 743.0" y="71.9" fill="#24292f">tonight</text>
 <text x="797.0 806.0 815.0 824.0 833.0" y="71.9" fill="#808080">Users</text>
 <text x="851.0 860.0 869.0" y="71.9" fill="#808080">(8)</text>
 <text x="14.0 23.0" y="90.9" fill="#808080">11</text>
 <text x="68.0 77.0 86.0 95.0 104.0 113.0 122.0 131.0" y="90.9" fill="#c678dd" font-weight="bold">mentions</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="90.9" fill="#808080">12:33</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="90.9" fill="#808080">20:41</text>
 <text x="275.0" y="90.9" fill="#808080">&lt;</text>
-<text x="284.0 293.0 302.0" y="90.9" fill="#d5d8de" font-weight="bold">you</text>
+<text x="284.0 293.0 302.0" y="90.9" fill="#24292f" font-weight="bold">you</text>
 <text x="311.0" y="90.9" fill="#808080">&gt;</text>
-<text x="428.0" y="90.9" fill="#d5d8de">a</text>
-<text x="446.0 455.0 464.0 473.0 482.0 491.0" y="90.9" fill="#d5d8de">matrix</text>
-<text x="509.0 518.0 527.0 536.0 545.0 554.0 563.0" y="90.9" fill="#d5d8de">client.</text>
-<text x="581.0 590.0" y="90.9" fill="#d5d8de">in</text>
-<text x="608.0 617.0 626.0" y="90.9" fill="#d5d8de">the</text>
-<text x="644.0 653.0 662.0 671.0 680.0 689.0 698.0 707.0 716.0" y="90.9" fill="#d5d8de">terminal.</text>
-<text x="734.0 743.0 752.0 761.0" y="90.9" fill="#d5d8de">like</text>
+<text x="428.0" y="90.9" fill="#24292f">a</text>
+<text x="446.0 455.0 464.0 473.0 482.0 491.0" y="90.9" fill="#24292f">matrix</text>
+<text x="509.0 518.0 527.0 536.0 545.0 554.0 563.0" y="90.9" fill="#24292f">client.</text>
+<text x="581.0 590.0" y="90.9" fill="#24292f">in</text>
+<text x="608.0 617.0 626.0" y="90.9" fill="#24292f">the</text>
+<text x="644.0 653.0 662.0 671.0 680.0 689.0 698.0 707.0 716.0" y="90.9" fill="#24292f">terminal.</text>
+<text x="734.0 743.0 752.0 761.0" y="90.9" fill="#24292f">like</text>
 <text x="797.0" y="90.9" fill="#af5f00" font-weight="bold">@</text>
 <text x="806.0" y="90.9" fill="#008700">●</text>
 <text x="824.0 833.0 842.0" y="90.9" fill="#870087">you</text>
 <text x="23.0 32.0 41.0 50.0 59.0 68.0 77.0" y="109.9" fill="#808080" font-weight="bold">Unreads</text>
-<text x="428.0 437.0 446.0 455.0 464.0" y="109.9" fill="#d5d8de">irssi</text>
+<text x="428.0 437.0 446.0 455.0 464.0" y="109.9" fill="#24292f">irssi</text>
 <text x="797.0" y="109.9" fill="#af5f00" font-weight="bold">@</text>
 <text x="806.0" y="109.9" fill="#008700">●</text>
 <text x="824.0 833.0 842.0" y="109.9" fill="#005faf">sam</text>
@@ -173,7 +173,7 @@
 <text x="41.0" y="128.9" fill="#15161c" font-weight="bold">J</text>
 <text x="68.0" y="128.9" fill="#af5f00">●</text>
 <text x="86.0 95.0 104.0 113.0 122.0 131.0 140.0 149.0 158.0" y="128.9" fill="#c678dd" font-weight="bold">jo_bloggs</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="128.9" fill="#808080">12:33</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="128.9" fill="#808080">20:41</text>
 <text x="275.0" y="128.9" fill="#808080">&lt;</text>
 <text x="284.0 293.0 302.0" y="128.9" fill="#005faf">sam</text>
 <text x="311.0" y="128.9" fill="#808080">&gt;</text>
@@ -184,6 +184,7 @@
 <text x="572.0 581.0 590.0 599.0 608.0 617.0 626.0" y="128.9" fill="#808080">client.</text>
 <text x="644.0 653.0" y="128.9" fill="#808080">in</text>
 <text x="671.0 680.0 689.0" y="128.9" fill="#808080">the</text>
+<text x="707.0 716.0 725.0 734.0 743.0 752.0 761.0 770.0 779.0" y="128.9" fill="#808080">terminal.</text>
 <text x="797.0" y="128.9" fill="#008700">+</text>
 <text x="806.0" y="128.9" fill="#af5f00">●</text>
 <text x="824.0 833.0 842.0 851.0 860.0 869.0 878.0 887.0 896.0" y="128.9" fill="#008700">jo_bloggs</text>
@@ -191,27 +192,26 @@
 <text x="41.0" y="147.9" fill="#15161c" font-weight="bold">T</text>
 <text x="68.0 77.0 86.0 95.0" y="147.9" fill="#c678dd" font-weight="bold">Team</text>
 <text x="113.0 122.0 131.0 140.0 149.0" y="147.9" fill="#c678dd" font-weight="bold">Tests</text>
-<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0 491.0 500.0" y="147.9" fill="#808080">terminal.</text>
-<text x="518.0 527.0 536.0 545.0" y="147.9" fill="#808080">like</text>
-<text x="563.0 572.0 581.0" y="147.9" fill="#808080">i…”</text>
-<text x="599.0 608.0" y="147.9" fill="#d5d8de">of</text>
-<text x="626.0 635.0 644.0 653.0 662.0 671.0" y="147.9" fill="#d5d8de">course</text>
-<text x="689.0 698.0 707.0" y="147.9" fill="#d5d8de">you</text>
-<text x="725.0 734.0 743.0" y="147.9" fill="#d5d8de">are</text>
+<text x="428.0 437.0 446.0 455.0" y="147.9" fill="#808080">like</text>
+<text x="473.0 482.0 491.0" y="147.9" fill="#808080">i…”</text>
+<text x="509.0 518.0" y="147.9" fill="#24292f">of</text>
+<text x="536.0 545.0 554.0 563.0 572.0 581.0" y="147.9" fill="#24292f">course</text>
+<text x="599.0 608.0 617.0" y="147.9" fill="#24292f">you</text>
+<text x="635.0 644.0 653.0" y="147.9" fill="#24292f">are</text>
 <text x="806.0" y="147.9" fill="#008700">●</text>
 <text x="824.0 833.0 842.0 851.0 860.0" y="147.9" fill="#af0000">alice</text>
 <text x="23.0" y="166.9" fill="#808080">2</text>
 <text x="41.0" y="166.9" fill="#15161c" font-weight="bold">B</text>
-<text x="68.0 77.0 86.0 95.0" y="166.9" fill="#d5d8de" font-weight="bold">Book</text>
-<text x="113.0 122.0 131.0 140.0" y="166.9" fill="#d5d8de" font-weight="bold">Club</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="166.9" fill="#808080">12:35</text>
+<text x="68.0 77.0 86.0 95.0" y="166.9" fill="#24292f" font-weight="bold">Book</text>
+<text x="113.0 122.0 131.0 140.0" y="166.9" fill="#24292f" font-weight="bold">Club</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="166.9" fill="#808080">20:43</text>
 <text x="275.0" y="166.9" fill="#808080">&lt;</text>
-<text x="284.0 293.0 302.0" y="166.9" fill="#d5d8de" font-weight="bold">you</text>
+<text x="284.0 293.0 302.0" y="166.9" fill="#24292f" font-weight="bold">you</text>
 <text x="311.0" y="166.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0 446.0 455.0 464.0 473.0" y="166.9" fill="#d5d8de">here's</text>
-<text x="491.0 500.0 509.0" y="166.9" fill="#d5d8de">the</text>
-<text x="527.0 536.0 545.0 554.0" y="166.9" fill="#d5d8de">main</text>
-<text x="572.0 581.0 590.0 599.0" y="166.9" fill="#d5d8de">loop</text>
+<text x="428.0 437.0 446.0 455.0 464.0 473.0" y="166.9" fill="#24292f">here's</text>
+<text x="491.0 500.0 509.0" y="166.9" fill="#24292f">the</text>
+<text x="527.0 536.0 545.0 554.0" y="166.9" fill="#24292f">main</text>
+<text x="572.0 581.0 590.0 599.0" y="166.9" fill="#24292f">loop</text>
 <text x="806.0" y="166.9" fill="#a8a8a8">○</text>
 <text x="824.0 833.0 842.0" y="166.9" fill="#005faf">bob</text>
 <text x="23.0 32.0 41.0 50.0 59.0" y="185.9" fill="#808080" font-weight="bold">Rooms</text>
@@ -241,8 +241,8 @@
 <text x="41.0" y="242.9" fill="#15161c" font-weight="bold">N</text>
 <text x="68.0 77.0 86.0 95.0 104.0" y="242.9" fill="#15161c" font-weight="bold">Night</text>
 <text x="122.0 131.0 140.0 149.0" y="242.9" fill="#15161c" font-weight="bold">Owls</text>
-<text x="428.0 437.0 446.0 455.0" y="242.9" fill="#808080" font-style="italic">when</text>
-<text x="473.0 482.0 491.0 500.0 509.0 518.0" y="242.9" fill="#808080" font-style="italic">needed</text>
+<text x="482.0 491.0 500.0 509.0" y="242.9" fill="#808080" font-style="italic">when</text>
+<text x="527.0 536.0 545.0 554.0 563.0 572.0" y="242.9" fill="#808080" font-style="italic">needed</text>
 <text x="23.0" y="261.9" fill="#808080">6</text>
 <text x="41.0" y="261.9" fill="#15161c" font-weight="bold">S</text>
 <text x="68.0 77.0 86.0 95.0 104.0" y="261.9" fill="#585858">Synth</text>
@@ -250,23 +250,23 @@
 <text x="446.0" y="261.9" fill="#af005f">}</text>
 <text x="23.0" y="280.9" fill="#808080" font-weight="bold">◆</text>
 <text x="41.0 50.0 59.0 68.0" y="280.9" fill="#808080" font-weight="bold">Work</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="280.9" fill="#808080">12:36</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="280.9" fill="#808080">20:44</text>
 <text x="275.0" y="280.9" fill="#808080">&lt;</text>
 <text x="284.0 293.0 302.0 311.0 320.0 329.0 338.0 347.0 356.0" y="280.9" fill="#008700">jo_bloggs</text>
 <text x="365.0" y="280.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="280.9" fill="#d5d8de">[voice]</text>
-<text x="500.0 509.0 518.0 527.0" y="280.9" fill="#d5d8de">0:12</text>
+<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="280.9" fill="#24292f">[voice]</text>
+<text x="500.0 509.0 518.0 527.0" y="280.9" fill="#24292f">0:12</text>
 <text x="23.0" y="299.9" fill="#808080">5</text>
 <text x="41.0" y="299.9" fill="#15161c" font-weight="bold">R</text>
 <text x="68.0 77.0 86.0 95.0 104.0 113.0 122.0 131.0 140.0 149.0" y="299.9" fill="#585858">Rustaceans</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="299.9" fill="#808080">12:37</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="299.9" fill="#808080">20:45</text>
 <text x="275.0" y="299.9" fill="#808080">&lt;</text>
 <text x="284.0 293.0 302.0" y="299.9" fill="#005faf">sam</text>
 <text x="311.0" y="299.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0" y="299.9" fill="#d5d8de">ok</text>
-<text x="455.0 464.0 473.0 482.0 491.0 500.0" y="299.9" fill="#d5d8de">that's</text>
-<text x="518.0 527.0 536.0 545.0 554.0 563.0 572.0 581.0" y="299.9" fill="#d5d8de">actually</text>
-<text x="599.0 608.0 617.0 626.0" y="299.9" fill="#d5d8de">nice</text>
+<text x="428.0 437.0" y="299.9" fill="#24292f">ok</text>
+<text x="455.0 464.0 473.0 482.0 491.0 500.0" y="299.9" fill="#24292f">that's</text>
+<text x="518.0 527.0 536.0 545.0 554.0 563.0 572.0 581.0" y="299.9" fill="#24292f">actually</text>
+<text x="599.0 608.0 617.0 626.0" y="299.9" fill="#24292f">nice</text>
 <text x="644.0 653.0" y="299.9" fill="#008787">[2</text>
 <text x="671.0 680.0 689.0 698.0 707.0 716.0 725.0 734.0" y="299.9" fill="#008787">replies]</text>
 <text x="752.0" y="299.9" fill="#808080">[</text>
@@ -277,25 +277,25 @@
 <text x="41.0" y="337.9" fill="#15161c" font-weight="bold">A</text>
 <text x="68.0" y="337.9" fill="#a8a8a8">○</text>
 <text x="86.0 95.0 104.0 113.0" y="337.9" fill="#585858">alex</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="337.9" fill="#808080">12:41</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="337.9" fill="#808080">20:49</text>
 <text x="275.0" y="337.9" fill="#808080">&lt;</text>
 <text x="284.0 293.0 302.0 311.0 320.0" y="337.9" fill="#af0000">alice</text>
 <text x="329.0" y="337.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0 446.0 455.0" y="337.9" fill="#d5d8de">does</text>
-<text x="473.0 482.0" y="337.9" fill="#d5d8de">it</text>
-<text x="500.0 509.0" y="337.9" fill="#d5d8de">do</text>
-<text x="527.0 536.0 545.0 554.0 563.0 572.0 581.0 590.0 599.0" y="337.9" fill="#d5d8de">pictures?</text>
+<text x="428.0 437.0 446.0 455.0" y="337.9" fill="#24292f">does</text>
+<text x="473.0 482.0" y="337.9" fill="#24292f">it</text>
+<text x="500.0 509.0" y="337.9" fill="#24292f">do</text>
+<text x="527.0 536.0 545.0 554.0 563.0 572.0 581.0 590.0 599.0" y="337.9" fill="#24292f">pictures?</text>
 <text x="14.0 23.0" y="356.9" fill="#808080">10</text>
 <text x="41.0" y="356.9" fill="#15161c" font-weight="bold">S</text>
 <text x="68.0" y="356.9" fill="#008700">●</text>
 <text x="86.0 95.0 104.0" y="356.9" fill="#585858">sam</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="356.9" fill="#808080">12:42</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="356.9" fill="#808080">20:50</text>
 <text x="275.0" y="356.9" fill="#808080">&lt;</text>
-<text x="284.0 293.0 302.0" y="356.9" fill="#d5d8de" font-weight="bold">you</text>
+<text x="284.0 293.0 302.0" y="356.9" fill="#24292f" font-weight="bold">you</text>
 <text x="311.0" y="356.9" fill="#808080">&gt;</text>
-<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="356.9" fill="#d5d8de">[image]</text>
-<text x="500.0 509.0 518.0 527.0 536.0 545.0 554.0 563.0 572.0 581.0" y="356.9" fill="#d5d8de">sunset.png</text>
-<text x="221.0 230.0 239.0 248.0 257.0" y="603.9" fill="#808080">12:42</text>
+<text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0" y="356.9" fill="#24292f">[image]</text>
+<text x="500.0 509.0 518.0 527.0 536.0 545.0 554.0 563.0 572.0 581.0" y="356.9" fill="#24292f">sunset.png</text>
+<text x="221.0 230.0 239.0 248.0 257.0" y="603.9" fill="#808080">20:50</text>
 <text x="275.0 284.0 293.0" y="603.9" fill="#808080" font-weight="bold" font-style="italic">-!-</text>
 <text x="428.0 437.0 446.0 455.0 464.0 473.0 482.0 491.0 500.0" y="603.9" fill="#808080" font-style="italic">jo_bloggs</text>
 <text x="518.0 527.0" y="603.9" fill="#808080" font-style="italic">is</text>
@@ -303,7 +303,7 @@
 <text x="599.0 608.0 617.0 626.0 635.0 644.0" y="603.9" fill="#808080" font-style="italic">making</text>
 <text x="662.0 671.0 680.0" y="603.9" fill="#808080" font-style="italic">tea</text>
 <text x="14.0" y="622.9" fill="#87d7ff">[</text>
-<text x="23.0 32.0 41.0 50.0 59.0" y="622.9" fill="#eeeeee">12:42</text>
+<text x="23.0 32.0 41.0 50.0 59.0" y="622.9" fill="#eeeeee">20:50</text>
 <text x="68.0" y="622.9" fill="#87d7ff">]</text>
 <text x="86.0" y="622.9" fill="#87d7ff">[</text>
 <text x="95.0 104.0 113.0 122.0 131.0 140.0 149.0" y="622.9" fill="#eeeeee">4:Night</text>
@@ -311,7 +311,7 @@
 <text x="239.0" y="622.9" fill="#87d7ff">]</text>
 <text x="257.0" y="622.9" fill="#87d7ff">[</text>
 <text x="266.0 275.0 284.0 293.0" y="622.9" fill="#eeeeee">Act:</text>
-<text x="311.0" y="622.9" fill="#d5d8de" font-weight="bold">2</text>
+<text x="311.0" y="622.9" fill="#24292f" font-weight="bold">2</text>
 <text x="320.0" y="622.9" fill="#eeeeee">,</text>
 <text x="329.0" y="622.9" fill="#c678dd" font-weight="bold">7</text>
 <text x="338.0" y="622.9" fill="#eeeeee">,</text>
@@ -325,15 +325,15 @@
 <text x="563.0" y="622.9" fill="#87d7ff">]</text>
 <text x="14.0 23.0 32.0 41.0 50.0 59.0" y="641.9" fill="#008787">[Night</text>
 <text x="77.0 86.0 95.0 104.0 113.0" y="641.9" fill="#008787">Owls]</text>
-<text x="131.0 140.0 149.0" y="641.9" fill="#d5d8de">and</text>
-<text x="167.0 176.0" y="641.9" fill="#d5d8de">it</text>
-<text x="194.0 203.0 212.0 221.0" y="641.9" fill="#d5d8de">runs</text>
-<text x="239.0 248.0" y="641.9" fill="#d5d8de">in</text>
-<text x="266.0 275.0 284.0" y="641.9" fill="#d5d8de">the</text>
-<text x="302.0 311.0 320.0 329.0 338.0 347.0 356.0 365.0 374.0 383.0 392.0" y="641.9" fill="#d5d8de">background,</text>
-<text x="410.0 419.0 428.0 437.0" y="641.9" fill="#d5d8de">like</text>
-<text x="455.0 464.0 473.0 482.0 491.0" y="641.9" fill="#d5d8de">irssi</text>
-<text x="509.0 518.0" y="641.9" fill="#d5d8de">in</text>
-<text x="536.0 545.0 554.0 563.0 572.0 581.0" y="641.9" fill="#d5d8de">screen</text>
+<text x="131.0 140.0 149.0" y="641.9" fill="#24292f">and</text>
+<text x="167.0 176.0" y="641.9" fill="#24292f">it</text>
+<text x="194.0 203.0 212.0 221.0" y="641.9" fill="#24292f">runs</text>
+<text x="239.0 248.0" y="641.9" fill="#24292f">in</text>
+<text x="266.0 275.0 284.0" y="641.9" fill="#24292f">the</text>
+<text x="302.0 311.0 320.0 329.0 338.0 347.0 356.0 365.0 374.0 383.0 392.0" y="641.9" fill="#24292f">background,</text>
+<text x="410.0 419.0 428.0 437.0" y="641.9" fill="#24292f">like</text>
+<text x="455.0 464.0 473.0 482.0 491.0" y="641.9" fill="#24292f">irssi</text>
+<text x="509.0 518.0" y="641.9" fill="#24292f">in</text>
+<text x="536.0 545.0 554.0 563.0 572.0 581.0" y="641.9" fill="#24292f">screen</text>
 </g>
 </svg>

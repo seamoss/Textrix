@@ -319,6 +319,21 @@ const TITLE_BAR: f64 = 32.0;
 /// A dark terminal's colours, for the themes that leave them to it.
 const DEFAULT_FG: u32 = 0xd5d8de;
 const DEFAULT_BG: u32 = 0x15161c;
+/// A light terminal's, for the theme made for one.
+const LIGHT_FG: u32 = 0x24292f;
+const LIGHT_BG: u32 = 0xfafafa;
+
+thread_local! {
+    /// The terminal's own colours a screenshot is drawn in: (text, paper).
+    static TERMINAL: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((DEFAULT_FG, DEFAULT_BG)) };
+}
+
+/// Draw in a light terminal (for the light theme), or a dark one.
+fn light_terminal(light: bool) -> (u32, u32) {
+    let colours = if light { (LIGHT_FG, LIGHT_BG) } else { (DEFAULT_FG, DEFAULT_BG) };
+    TERMINAL.with(|t| t.set(colours));
+    colours
+}
 const ANSI: [u32; 16] = [
     0x15161c, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xabb2bf, 0x5c6370, 0xff8b94, 0xb5e890,
     0xffd68a, 0x8cc8ff, 0xe5a3f5, 0x7fdbe6, 0xf5f6f8,
@@ -365,7 +380,8 @@ fn rgb(color: Color, default: u32) -> u32 {
 
 /// A cell's colours, after reverse video.
 fn colors(cell: &ratatui::buffer::Cell) -> (u32, u32) {
-    let (fg, bg) = (rgb(cell.fg, DEFAULT_FG), rgb(cell.bg, DEFAULT_BG));
+    let (text, paper) = TERMINAL.with(|t| t.get());
+    let (fg, bg) = (rgb(cell.fg, text), rgb(cell.bg, paper));
     if cell.modifier.contains(Modifier::REVERSED) { (bg, fg) } else { (fg, bg) }
 }
 
@@ -549,7 +565,7 @@ fn svg(buf: &Buffer, title: &str) -> String {
             *counts.entry(colors(cell(x, y)).1).or_default() += 1;
         }
     }
-    let paper = counts.into_iter().max_by_key(|&(c, n)| (n, c)).map_or(DEFAULT_BG, |(c, _)| c);
+    let paper = counts.into_iter().max_by_key(|&(c, n)| (n, c)).map_or(TERMINAL.with(|t| t.get()).1, |(c, _)| c);
     let (width, height) = (f64::from(cols) * CELL_W + 2.0 * PAD, f64::from(rows) * CELL_H + TITLE_BAR + PAD);
 
     let mut out = String::new();
@@ -826,8 +842,31 @@ fn screenshots() {
     save(&dir, "home", &mut home, (124, 30));
 
     for (name, theme) in ThemeName::ALL {
+        light_terminal(theme == ThemeName::Light);
         save(&dir.join("themes"), name, &mut night_owls(theme, true), (100, 32));
     }
+    light_terminal(false);
+    // The website's themes page lists them from this: shelf, what each is,
+    // and its colours for a swatch.
+    let colour = |c: Option<Color>, default| format!("#{:06x}", rgb(c.unwrap_or(Color::Reset), default));
+    let list: Vec<serde_json::Value> = ThemeName::ALL
+        .iter()
+        .map(|&(name, theme)| {
+            let t = Theme::builtin(theme);
+            let (text, paper) = if theme == ThemeName::Light { (LIGHT_FG, LIGHT_BG) } else { (DEFAULT_FG, DEFAULT_BG) };
+            serde_json::json!({
+                "name": name,
+                "shelf": theme.group(),
+                "about": theme.about(),
+                "bg": colour(t.base.bg, paper),
+                "fg": colour(t.base.fg, text),
+                "accent": colour(t.accent.fg, text),
+            })
+        })
+        .collect();
+    let path = dir.join("themes/themes.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap() + "\n").unwrap();
+    println!("wrote {}", path.display());
 }
 
 #[test]

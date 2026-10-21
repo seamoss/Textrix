@@ -79,10 +79,36 @@ pub enum ThemeName {
     /// The 80s as remembered: neon pink and cyan on a midnight-purple
     /// sky, with a sunset in yellow and orange ("outrun" works too).
     Synthwave,
+    /// The original Game Boy's four greens.
+    Gameboy,
+    /// Ceefax: eight colours on black, yellow on blue up top.
+    Teletext,
+    /// A fatal exception has occurred: white on Windows blue.
+    Bsod,
+    /// Windows 3.1's Hot Dog Stand: ketchup and mustard.
+    HotdogStand,
+    /// Art deco at dusk: flamingo pink and pool aqua over the ocean.
+    MiamiHeat,
+    /// Granite, moss and candlelight after midnight.
+    Cemetery,
+    /// Golden hour: a peach sky, coral and lavender, a firefly or two.
+    SummerEvening,
+    /// The deep sea: glowing jellyfish and an anglerfish's lure.
+    Abyss,
+    /// Black and white film, and red for what matters.
+    Noir,
+    /// A dark roast with crema, and a mint leaf.
+    Espresso,
+    /// Ａ Ｅ Ｓ Ｔ Ｈ Ｅ Ｔ Ｉ Ｃ: pastel pink, teal and Windows 95 grey.
+    Vaporwave,
+    /// Glowing green, hazard stripes, do not lick the screen.
+    Radioactive,
+    /// A mirror ball: gold and magenta, every nick a different light.
+    Disco,
 }
 
 impl ThemeName {
-    pub const ALL: [(&str, ThemeName); 34] = [
+    pub const ALL: [(&str, ThemeName); 47] = [
         ("default", ThemeName::Default),
         ("light", ThemeName::Light),
         ("mono", ThemeName::Mono),
@@ -117,10 +143,24 @@ impl ThemeName {
         ("gruvbox", ThemeName::Gruvbox),
         ("catppuccin", ThemeName::Catppuccin),
         ("synthwave", ThemeName::Synthwave),
+        ("gameboy", ThemeName::Gameboy),
+        ("teletext", ThemeName::Teletext),
+        ("bsod", ThemeName::Bsod),
+        ("hotdog-stand", ThemeName::HotdogStand),
+        ("miami-heat", ThemeName::MiamiHeat),
+        ("cemetery", ThemeName::Cemetery),
+        ("summer-evening", ThemeName::SummerEvening),
+        ("abyss", ThemeName::Abyss),
+        ("noir", ThemeName::Noir),
+        ("espresso", ThemeName::Espresso),
+        ("vaporwave", ThemeName::Vaporwave),
+        ("radioactive", ThemeName::Radioactive),
+        ("disco", ThemeName::Disco),
     ];
 
     /// A theme by name (also "dark", "phosphor", "virtualboy",
-    /// "solarized", "catppuccin-mocha", "mocha", "ibm", "5151", "outrun").
+    /// "solarized", "catppuccin-mocha", "mocha", "ibm", "5151", "outrun",
+    /// and a few more for the newer ones).
     pub fn parse(name: &str) -> Option<ThemeName> {
         match name {
             "dark" => Some(ThemeName::Default),
@@ -130,6 +170,18 @@ impl ThemeName {
             "catppuccin-mocha" | "mocha" => Some(ThemeName::Catppuccin),
             "ibm" | "5151" => Some(ThemeName::Ibm5151),
             "outrun" => Some(ThemeName::Synthwave),
+            "dmg" => Some(ThemeName::Gameboy),
+            "ceefax" => Some(ThemeName::Teletext),
+            "bluescreen" => Some(ThemeName::Bsod),
+            "hotdog" => Some(ThemeName::HotdogStand),
+            "miami" => Some(ThemeName::MiamiHeat),
+            "cemetary" | "graveyard" => Some(ThemeName::Cemetery),
+            "summer" => Some(ThemeName::SummerEvening),
+            "deepsea" => Some(ThemeName::Abyss),
+            "coffee" => Some(ThemeName::Espresso),
+            "aesthetic" => Some(ThemeName::Vaporwave),
+            "toxic" => Some(ThemeName::Radioactive),
+            "mirrorball" => Some(ThemeName::Disco),
             name => ThemeName::ALL.iter().find(|(n, _)| *n == name).map(|(_, t)| *t),
         }
     }
@@ -168,6 +220,19 @@ impl ThemeName {
             Gruvbox => "Gruvbox, dark",
             Catppuccin => "Catppuccin Mocha",
             Synthwave => "the 80s: neon pink and cyan on a midnight sky",
+            Gameboy => "the original Game Boy's four greens",
+            Teletext => "Ceefax: eight colours on black, yellow on blue up top",
+            Bsod => "a fatal exception has occurred: white on Windows blue",
+            HotdogStand => "Windows 3.1's Hot Dog Stand: ketchup and mustard",
+            MiamiHeat => "art deco at dusk: flamingo pink and pool aqua over the ocean",
+            Cemetery => "granite, moss and candlelight after midnight",
+            SummerEvening => "golden hour: a peach sky, coral and lavender, a firefly or two",
+            Abyss => "the deep sea: glowing jellyfish and an anglerfish's lure",
+            Noir => "black and white film, and red for what matters",
+            Espresso => "a dark roast with crema, and a mint leaf",
+            Vaporwave => "Ａ Ｅ Ｓ Ｔ Ｈ Ｅ Ｔ Ｉ Ｃ: pastel pink, teal and Windows 95 grey",
+            Radioactive => "glowing green, hazard stripes, do not lick the screen",
+            Disco => "a mirror ball: gold and magenta, every nick a different light",
         }
     }
 
@@ -178,8 +243,11 @@ impl ThemeName {
             Default | Light | Mono => "plain",
             Green | GreenDeep | GreenTron | Blue | BlueDeep | BlueTron | Red | RedDeep | RedTron | Amber
             | AmberDeep | AmberTron | Purple | PurpleDeep | PurpleTron | MonoTron | Ibm5151 => "monitors",
-            Turbo | Procomm | C64 | Amiga | Delphi | Mirc | SolarizedDark | SolarizedLight => "classic",
-            Monokai | Dracula | Nord | Gruvbox | Catppuccin | Synthwave => "nouveau",
+            Turbo | Procomm | C64 | Amiga | Delphi | Mirc | SolarizedDark | SolarizedLight | Gameboy | Teletext
+            | Bsod | HotdogStand => "classic",
+            Monokai | Dracula | Nord | Gruvbox | Catppuccin | Synthwave | MiamiHeat | Cemetery | SummerEvening
+            | Abyss | Noir | Espresso => "nouveau",
+            Vaporwave | Radioactive | Disco => "wild",
         }
     }
 }
@@ -882,6 +950,357 @@ const SYNTHWAVE: Palette = Palette {
     nicks: &[0xff6ec7, 0x2de2e6, 0xffd319, 0xb967ff, 0xff9e3d, 0x72f1b8, 0xf6a6ff],
 };
 
+/// The original Game Boy's four greens.
+const GAMEBOY: Palette = Palette {
+    bg: 0x9bbc0f,
+    fg: 0x0f380f,
+    dim: 0x306230,
+    muted: 0x306230,
+    bar: [0x9bbc0f, 0x0f380f],
+    bar_accent: 0x8bac0f,
+    bar_alert: 0x9bbc0f,
+    pane: [0x9bbc0f, 0x306230],
+    current: [0x9bbc0f, 0x0f380f],
+    accent: 0x0f380f,
+    highlight: 0x0f380f,
+    highlight_text: 0x306230,
+    error: 0x0f380f,
+    link: 0x306230,
+    mention: 0x0f380f,
+    code: 0x306230,
+    syntax: [0x306230, 0x0f380f, 0x306230, 0x0f380f, 0x0f380f, 0x306230],
+    good: 0x0f380f,
+    warn: 0x306230,
+    border: 0x306230,
+    outlines: Outlines::Plain,
+    message_colors: false,
+    nicks: &[0x0f380f, 0x306230],
+};
+
+/// Ceefax: eight colours on black, yellow on blue up top.
+const TELETEXT: Palette = Palette {
+    bg: 0x000000,
+    fg: 0xffffff,
+    dim: 0x00ffff,
+    muted: 0xffffff,
+    bar: [0xffff00, 0x0000ff],
+    bar_accent: 0xffffff,
+    bar_alert: 0xff00ff,
+    pane: [0x00ffff, 0x000000],
+    current: [0x000000, 0xffff00],
+    accent: 0xffff00,
+    highlight: 0xff00ff,
+    highlight_text: 0xff00ff,
+    error: 0xff0000,
+    link: 0x00ffff,
+    mention: 0x00ff00,
+    code: 0x00ff00,
+    syntax: [0x00ffff, 0xffff00, 0x00ff00, 0xff00ff, 0xffffff, 0xff0000],
+    good: 0x00ff00,
+    warn: 0xffff00,
+    border: 0x0000ff,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0xffff00, 0x00ffff, 0x00ff00, 0xff00ff, 0xff0000, 0xffffff],
+};
+
+/// A fatal exception has occurred: white on Windows blue.
+const BSOD: Palette = Palette {
+    bg: 0x0000aa,
+    fg: 0xffffff,
+    dim: 0xaaaaaa,
+    muted: 0xaaaaaa,
+    bar: [0x0000aa, 0xaaaaaa],
+    bar_accent: 0x0000aa,
+    bar_alert: 0xaa0000,
+    pane: [0xffffff, 0x000080],
+    current: [0x0000aa, 0xffffff],
+    accent: 0xffffff,
+    highlight: 0xffff55,
+    highlight_text: 0xffff55,
+    error: 0xffffff,
+    link: 0x55ffff,
+    mention: 0xffff55,
+    code: 0xffffff,
+    syntax: [0xaaaaaa, 0xffff55, 0x55ffff, 0xffffff, 0xffffff, 0x55ffff],
+    good: 0x55ff55,
+    warn: 0xffff55,
+    border: 0xaaaaaa,
+    outlines: Outlines::None,
+    message_colors: false,
+    nicks: &[0xffffff, 0x55ffff, 0xffff55, 0xaaaaaa],
+};
+
+/// Windows 3.1's Hot Dog Stand: ketchup and mustard.
+const HOTDOG_STAND: Palette = Palette {
+    bg: 0xffff00,
+    fg: 0x000000,
+    dim: 0x7a6200,
+    muted: 0x3d3100,
+    bar: [0xffffff, 0xff0000],
+    bar_accent: 0xffff00,
+    bar_alert: 0x000000,
+    pane: [0xffff00, 0xc00000],
+    current: [0xffff00, 0x000000],
+    accent: 0xff0000,
+    highlight: 0xff0000,
+    highlight_text: 0xc00000,
+    error: 0xff0000,
+    link: 0xb00000,
+    mention: 0xd40000,
+    code: 0x5c0000,
+    syntax: [0x7a6200, 0xff0000, 0x8a3a00, 0xc00000, 0x000000, 0x5c0000],
+    good: 0x005c00,
+    warn: 0xc04000,
+    border: 0xff0000,
+    outlines: Outlines::Thick,
+    message_colors: true,
+    nicks: &[0xff0000, 0x000000, 0xa00000, 0x604000, 0xc04000, 0x800000, 0x404000],
+};
+
+/// Art deco at dusk: flamingo pink and pool aqua over the ocean.
+const MIAMI_HEAT: Palette = Palette {
+    bg: 0x0b2b36,
+    fg: 0xfff2f7,
+    dim: 0x4f7d8a,
+    muted: 0xa7c6cf,
+    bar: [0x0b2b36, 0xff6fae],
+    bar_accent: 0x00575e,
+    bar_alert: 0x0b2b36,
+    pane: [0xa7c6cf, 0x12404e],
+    current: [0x0b2b36, 0x2ee6d6],
+    accent: 0x2ee6d6,
+    highlight: 0xff6fae,
+    highlight_text: 0xffb3d1,
+    error: 0xff4d5e,
+    link: 0x7ff3e8,
+    mention: 0xffd23f,
+    code: 0xffb86b,
+    syntax: [0x4f7d8a, 0xff6fae, 0xffd23f, 0xffb86b, 0x2ee6d6, 0xc3a6ff],
+    good: 0x5be38d,
+    warn: 0xffb86b,
+    border: 0x1f6f7a,
+    outlines: Outlines::Rounded,
+    message_colors: true,
+    nicks: &[0xff6fae, 0x2ee6d6, 0xffd23f, 0xffb86b, 0x5be38d, 0xc3a6ff, 0x7ff3e8],
+};
+
+/// Granite, moss and candlelight after midnight.
+const CEMETERY: Palette = Palette {
+    bg: 0x101112,
+    fg: 0xc9c5bb,
+    dim: 0x575b58,
+    muted: 0x8a8d88,
+    bar: [0xc9c5bb, 0x26282a],
+    bar_accent: 0x6b8f5a,
+    bar_alert: 0xe0a84e,
+    pane: [0x8a8d88, 0x1a1c1d],
+    current: [0x101112, 0x8a8d88],
+    accent: 0x6b8f5a,
+    highlight: 0xb3232f,
+    highlight_text: 0xd4545e,
+    error: 0xb3232f,
+    link: 0x9a8fb5,
+    mention: 0xe0a84e,
+    code: 0xa8b59a,
+    syntax: [0x575b58, 0x9a8fb5, 0xa8b59a, 0xe0a84e, 0xc9c5bb, 0x6b8f5a],
+    good: 0x6b8f5a,
+    warn: 0xe0a84e,
+    border: 0x3a3d3f,
+    outlines: Outlines::Plain,
+    message_colors: true,
+    nicks: &[0xa8b59a, 0x9a8fb5, 0xe0a84e, 0xc9c5bb, 0x8fa3b8, 0xb88f8f, 0x7d9970],
+};
+
+/// Golden hour: a peach sky, coral and lavender, a firefly or two.
+const SUMMER_EVENING: Palette = Palette {
+    bg: 0xfbeee0,
+    fg: 0x3b2f40,
+    dim: 0x9a8478,
+    muted: 0x6e5d66,
+    bar: [0xfff7ef, 0x8a6bb5],
+    bar_accent: 0xffd08a,
+    bar_alert: 0xffe2b3,
+    pane: [0x3b2f40, 0xf1dcc8],
+    current: [0xfff7ef, 0xe2725b],
+    accent: 0x8a6bb5,
+    highlight: 0xe2725b,
+    highlight_text: 0xb84a32,
+    error: 0xc0392b,
+    link: 0x5b6cc2,
+    mention: 0xc27a0e,
+    code: 0x7a5c2e,
+    syntax: [0x9a8478, 0x8a6bb5, 0x5a8a3e, 0xc27a0e, 0xd0604a, 0x5b6cc2],
+    good: 0x5a8a3e,
+    warn: 0xc27a0e,
+    border: 0xe3c9b0,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0xd0604a, 0x8a6bb5, 0x5a8a3e, 0xc27a0e, 0x5b6cc2, 0xb5547a, 0x2e8080],
+};
+
+/// The deep sea: glowing jellyfish and an anglerfish's lure.
+const ABYSS: Palette = Palette {
+    bg: 0x02070d,
+    fg: 0xa9d8e6,
+    dim: 0x2f5d73,
+    muted: 0x6f9fb3,
+    bar: [0x02070d, 0x1fd1c1],
+    bar_accent: 0x0b3d47,
+    bar_alert: 0x02070d,
+    pane: [0x6f9fb3, 0x0a1a26],
+    current: [0x02070d, 0x3ff2e0],
+    accent: 0x3ff2e0,
+    highlight: 0xff6bd6,
+    highlight_text: 0xffa8ea,
+    error: 0xff5470,
+    link: 0x7df9ff,
+    mention: 0xff6bd6,
+    code: 0xf6e05e,
+    syntax: [0x2f5d73, 0xff6bd6, 0xf6e05e, 0xffa94d, 0x3ff2e0, 0x9d8cff],
+    good: 0x3ff2e0,
+    warn: 0xf6e05e,
+    border: 0x1b4459,
+    outlines: Outlines::Rounded,
+    message_colors: true,
+    nicks: &[0x3ff2e0, 0x7df9ff, 0x9d8cff, 0xff6bd6, 0xf6e05e, 0x66ffb3, 0xffa94d],
+};
+
+/// Black and white film, and red for what matters.
+const NOIR: Palette = Palette {
+    bg: 0x0b0b0b,
+    fg: 0xd6d6d6,
+    dim: 0x6e6e6e,
+    muted: 0x9a9a9a,
+    bar: [0x0b0b0b, 0xd6d6d6],
+    bar_accent: 0x8a0000,
+    bar_alert: 0xb00000,
+    pane: [0xbdbdbd, 0x262626],
+    current: [0x0b0b0b, 0xf0f0f0],
+    accent: 0xf0f0f0,
+    highlight: 0xe01e1e,
+    highlight_text: 0xff4d4d,
+    error: 0xe01e1e,
+    link: 0xbdbdbd,
+    mention: 0xe01e1e,
+    code: 0xe6e6e6,
+    syntax: [0x6e6e6e, 0xf0f0f0, 0xa8a8a8, 0xcfcfcf, 0xffffff, 0xbdbdbd],
+    good: 0xbdbdbd,
+    warn: 0xe01e1e,
+    border: 0x3a3a3a,
+    outlines: Outlines::Plain,
+    message_colors: false,
+    nicks: &[0xf0f0f0, 0xbdbdbd, 0x9a9a9a, 0xd6d6d6, 0x8a8a8a, 0xc8c8c8, 0xa8a8a8],
+};
+
+/// A dark roast with crema, and a mint leaf.
+const ESPRESSO: Palette = Palette {
+    bg: 0x1e1410,
+    fg: 0xecdcc6,
+    dim: 0x7a6050,
+    muted: 0xb39a84,
+    bar: [0x1e1410, 0xd4a373],
+    bar_accent: 0x6b3a1e,
+    bar_alert: 0x8c2f1b,
+    pane: [0xb39a84, 0x2e2019],
+    current: [0x1e1410, 0xe8c39e],
+    accent: 0xd4a373,
+    highlight: 0xff9b54,
+    highlight_text: 0xffc48a,
+    error: 0xe5533d,
+    link: 0x9cc5a1,
+    mention: 0xff9b54,
+    code: 0xe8c39e,
+    syntax: [0x7a6050, 0xd4a373, 0x9cc5a1, 0xff9b54, 0xe8c39e, 0xc9a0dc],
+    good: 0x9cc5a1,
+    warn: 0xe9b44c,
+    border: 0x4a362b,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0xd4a373, 0x9cc5a1, 0xff9b54, 0xe8c39e, 0xc9a0dc, 0xe5533d, 0xb5c99a],
+};
+
+/// Ａ Ｅ Ｓ Ｔ Ｈ Ｅ Ｔ Ｉ Ｃ: pastel pink, teal and Windows 95 grey.
+const VAPORWAVE: Palette = Palette {
+    bg: 0xffd6f2,
+    fg: 0x3d1a5b,
+    dim: 0x9a6fae,
+    muted: 0x6b4a80,
+    bar: [0xffffff, 0x008b8b],
+    bar_accent: 0xffd6f2,
+    bar_alert: 0xfff38a,
+    pane: [0x3d1a5b, 0xc0c0c0],
+    current: [0xffffff, 0xff3fa4],
+    accent: 0x008b8b,
+    highlight: 0xb5179e,
+    highlight_text: 0x7209b7,
+    error: 0xd00050,
+    link: 0x0067a0,
+    mention: 0xff3fa4,
+    code: 0x5a189a,
+    syntax: [0x9a6fae, 0xb5179e, 0x008b8b, 0xd9480f, 0x0067a0, 0x7209b7],
+    good: 0x05a37c,
+    warn: 0xd9822b,
+    border: 0xb967ff,
+    outlines: Outlines::Plain,
+    message_colors: true,
+    nicks: &[0xb5179e, 0x7209b7, 0x0077b6, 0x008b8b, 0xd9480f, 0x5a189a, 0xe63987],
+};
+
+/// Glowing green, hazard stripes, do not lick the screen.
+const RADIOACTIVE: Palette = Palette {
+    bg: 0x0a0f05,
+    fg: 0xd4ff4a,
+    dim: 0x5d7a1f,
+    muted: 0x9fbf3a,
+    bar: [0x000000, 0xf2c200],
+    bar_accent: 0x5a4600,
+    bar_alert: 0x000000,
+    pane: [0xd4ff4a, 0x1c2a0a],
+    current: [0x000000, 0x39ff14],
+    accent: 0x39ff14,
+    highlight: 0xff6a00,
+    highlight_text: 0xffb000,
+    error: 0xff2a00,
+    link: 0x00ffcc,
+    mention: 0xff6a00,
+    code: 0xc6ff00,
+    syntax: [0x5d7a1f, 0x39ff14, 0xffd000, 0xff6a00, 0x00ffcc, 0xa3ff00],
+    good: 0x39ff14,
+    warn: 0xf2c200,
+    border: 0x39ff14,
+    outlines: Outlines::Thick,
+    message_colors: true,
+    nicks: &[0x39ff14, 0xc6ff00, 0xffd000, 0xff6a00, 0x00ffcc, 0xa3ff00, 0xffe14d],
+};
+
+/// A mirror ball: gold and magenta, every nick a different light.
+const DISCO: Palette = Palette {
+    bg: 0x0a0a0a,
+    fg: 0xfff6e0,
+    dim: 0x8a7a9a,
+    muted: 0xc9b8d9,
+    bar: [0x0a0a0a, 0xffcc00],
+    bar_accent: 0x7a0066,
+    bar_alert: 0x0a0a0a,
+    pane: [0xfff6e0, 0x3a0050],
+    current: [0x0a0a0a, 0xff2fd0],
+    accent: 0xffcc00,
+    highlight: 0xff2fd0,
+    highlight_text: 0x00e5ff,
+    error: 0xff3b3b,
+    link: 0x00e5ff,
+    mention: 0xff2fd0,
+    code: 0xffe600,
+    syntax: [0x8a7a9a, 0xff2fd0, 0xffe600, 0xff9f1c, 0x00e5ff, 0x6b5bff],
+    good: 0x3bff6f,
+    warn: 0xff9f1c,
+    border: 0xffcc00,
+    outlines: Outlines::Double,
+    message_colors: true,
+    nicks: &[0xff3b3b, 0xff9f1c, 0xffe600, 0x3bff6f, 0x00e5ff, 0x6b5bff, 0xff2fd0],
+};
+
 const NORD: Palette = Palette {
     bg: 0x2e3440,
     fg: 0xd8dee9,
@@ -1112,6 +1531,19 @@ impl Theme {
             ThemeName::Gruvbox => Self::palette(&GRUVBOX),
             ThemeName::Catppuccin => Self::palette(&CATPPUCCIN),
             ThemeName::Synthwave => Self::palette(&SYNTHWAVE),
+            ThemeName::Gameboy => Self::palette(&GAMEBOY),
+            ThemeName::Teletext => Self::palette(&TELETEXT),
+            ThemeName::Bsod => Self::palette(&BSOD),
+            ThemeName::HotdogStand => Self::palette(&HOTDOG_STAND),
+            ThemeName::MiamiHeat => Self::palette(&MIAMI_HEAT),
+            ThemeName::Cemetery => Self::palette(&CEMETERY),
+            ThemeName::SummerEvening => Self::palette(&SUMMER_EVENING),
+            ThemeName::Abyss => Self::palette(&ABYSS),
+            ThemeName::Noir => Self::palette(&NOIR),
+            ThemeName::Espresso => Self::palette(&ESPRESSO),
+            ThemeName::Vaporwave => Self::palette(&VAPORWAVE),
+            ThemeName::Radioactive => Self::palette(&RADIOACTIVE),
+            ThemeName::Disco => Self::palette(&DISCO),
         }
     }
 

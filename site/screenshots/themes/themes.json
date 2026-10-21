@@ -1,0 +1,378 @@
+[
+  {
+    "about": "for dark terminals, in their own colours",
+    "accent": "#56b6c2",
+    "bg": "#15161c",
+    "fg": "#d5d8de",
+    "name": "default",
+    "shelf": "plain"
+  },
+  {
+    "about": "for light terminals",
+    "accent": "#008787",
+    "bg": "#fafafa",
+    "fg": "#24292f",
+    "name": "light",
+    "shelf": "plain"
+  },
+  {
+    "about": "no colour: bold, underline and reverse video",
+    "accent": "#d5d8de",
+    "bg": "#15161c",
+    "fg": "#d5d8de",
+    "name": "mono",
+    "shelf": "plain"
+  },
+  {
+    "about": "green phosphor on black",
+    "accent": "#00ff00",
+    "bg": "#15161c",
+    "fg": "#00ff00",
+    "name": "green",
+    "shelf": "monitors"
+  },
+  {
+    "about": "on deep blue in double lines: an 80s airport",
+    "accent": "#00ff00",
+    "bg": "#00005f",
+    "fg": "#00ff00",
+    "name": "green-deep",
+    "shelf": "monitors"
+  },
+  {
+    "about": "neon outlines on pure black",
+    "accent": "#00ff00",
+    "bg": "#000000",
+    "fg": "#00ff00",
+    "name": "green-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "blue on black",
+    "accent": "#00afff",
+    "bg": "#15161c",
+    "fg": "#00afff",
+    "name": "blue",
+    "shelf": "monitors"
+  },
+  {
+    "about": "on deep blue in double lines: an 80s airport",
+    "accent": "#87ffff",
+    "bg": "#00005f",
+    "fg": "#87ffff",
+    "name": "blue-deep",
+    "shelf": "monitors"
+  },
+  {
+    "about": "neon outlines on pure black",
+    "accent": "#00afff",
+    "bg": "#000000",
+    "fg": "#00afff",
+    "name": "blue-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "red on black, like a Virtual Boy",
+    "accent": "#ff0000",
+    "bg": "#15161c",
+    "fg": "#ff0000",
+    "name": "red",
+    "shelf": "monitors"
+  },
+  {
+    "about": "on deep blue in double lines: an 80s airport",
+    "accent": "#ff0000",
+    "bg": "#00005f",
+    "fg": "#ff0000",
+    "name": "red-deep",
+    "shelf": "monitors"
+  },
+  {
+    "about": "neon outlines on pure black",
+    "accent": "#ff0000",
+    "bg": "#000000",
+    "fg": "#ff0000",
+    "name": "red-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "amber on black",
+    "accent": "#ffaf00",
+    "bg": "#15161c",
+    "fg": "#ffaf00",
+    "name": "amber",
+    "shelf": "monitors"
+  },
+  {
+    "about": "on deep blue in double lines: an 80s airport",
+    "accent": "#ffaf00",
+    "bg": "#00005f",
+    "fg": "#ffaf00",
+    "name": "amber-deep",
+    "shelf": "monitors"
+  },
+  {
+    "about": "neon outlines on pure black",
+    "accent": "#ffaf00",
+    "bg": "#000000",
+    "fg": "#ffaf00",
+    "name": "amber-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "violet on black",
+    "accent": "#d75fff",
+    "bg": "#15161c",
+    "fg": "#d75fff",
+    "name": "purple",
+    "shelf": "monitors"
+  },
+  {
+    "about": "on deep blue in double lines: an 80s airport",
+    "accent": "#d7afff",
+    "bg": "#00005f",
+    "fg": "#d7afff",
+    "name": "purple-deep",
+    "shelf": "monitors"
+  },
+  {
+    "about": "neon outlines on pure black",
+    "accent": "#d75fff",
+    "bg": "#000000",
+    "fg": "#d75fff",
+    "name": "purple-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "Tron in greys, on pure black",
+    "accent": "#d0d0d0",
+    "bg": "#000000",
+    "fg": "#d0d0d0",
+    "name": "mono-tron",
+    "shelf": "monitors"
+  },
+  {
+    "about": "IBM's green monochrome display, framed in ASCII",
+    "accent": "#00ff66",
+    "bg": "#000000",
+    "fg": "#00ff66",
+    "name": "ibm5151",
+    "shelf": "monitors"
+  },
+  {
+    "about": "Turbo Pascal: yellow on DOS blue",
+    "accent": "#ffffff",
+    "bg": "#0000aa",
+    "fg": "#ffff55",
+    "name": "turbo",
+    "shelf": "classic"
+  },
+  {
+    "about": "a DOS terminal program dialling a BBS",
+    "accent": "#55ffff",
+    "bg": "#000000",
+    "fg": "#aaaaaa",
+    "name": "procomm",
+    "shelf": "classic"
+  },
+  {
+    "about": "Commodore 64 blues",
+    "accent": "#75cec8",
+    "bg": "#40318d",
+    "fg": "#a59bff",
+    "name": "c64",
+    "shelf": "classic"
+  },
+  {
+    "about": "Workbench 1.3: white and orange on blue",
+    "accent": "#ff8800",
+    "bg": "#0055aa",
+    "fg": "#ffffff",
+    "name": "amiga",
+    "shelf": "classic"
+  },
+  {
+    "about": "Delphi 7's editor, in Windows grey",
+    "accent": "#000080",
+    "bg": "#ffffff",
+    "fg": "#000000",
+    "name": "delphi",
+    "shelf": "classic"
+  },
+  {
+    "about": "mIRC's colours on white",
+    "accent": "#009300",
+    "bg": "#ffffff",
+    "fg": "#000000",
+    "name": "mirc",
+    "shelf": "classic"
+  },
+  {
+    "about": "Solarized, dark",
+    "accent": "#268bd2",
+    "bg": "#002b36",
+    "fg": "#839496",
+    "name": "solarized-dark",
+    "shelf": "classic"
+  },
+  {
+    "about": "Solarized, light",
+    "accent": "#268bd2",
+    "bg": "#fdf6e3",
+    "fg": "#657b83",
+    "name": "solarized-light",
+    "shelf": "classic"
+  },
+  {
+    "about": "Monokai",
+    "accent": "#66d9ef",
+    "bg": "#272822",
+    "fg": "#f8f8f2",
+    "name": "monokai",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "Dracula",
+    "accent": "#bd93f9",
+    "bg": "#282a36",
+    "fg": "#f8f8f2",
+    "name": "dracula",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "Nord",
+    "accent": "#88c0d0",
+    "bg": "#2e3440",
+    "fg": "#d8dee9",
+    "name": "nord",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "Gruvbox, dark",
+    "accent": "#8ec07c",
+    "bg": "#282828",
+    "fg": "#ebdbb2",
+    "name": "gruvbox",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "Catppuccin Mocha",
+    "accent": "#cba6f7",
+    "bg": "#1e1e2e",
+    "fg": "#cdd6f4",
+    "name": "catppuccin",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "the 80s: neon pink and cyan on a midnight sky",
+    "accent": "#2de2e6",
+    "bg": "#1b0f2e",
+    "fg": "#f4e9ff",
+    "name": "synthwave",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "the original Game Boy's four greens",
+    "accent": "#0f380f",
+    "bg": "#9bbc0f",
+    "fg": "#0f380f",
+    "name": "gameboy",
+    "shelf": "classic"
+  },
+  {
+    "about": "Ceefax: eight colours on black, yellow on blue up top",
+    "accent": "#ffff00",
+    "bg": "#000000",
+    "fg": "#ffffff",
+    "name": "teletext",
+    "shelf": "classic"
+  },
+  {
+    "about": "a fatal exception has occurred: white on Windows blue",
+    "accent": "#ffffff",
+    "bg": "#0000aa",
+    "fg": "#ffffff",
+    "name": "bsod",
+    "shelf": "classic"
+  },
+  {
+    "about": "Windows 3.1's Hot Dog Stand: ketchup and mustard",
+    "accent": "#ff0000",
+    "bg": "#ffff00",
+    "fg": "#000000",
+    "name": "hotdog-stand",
+    "shelf": "classic"
+  },
+  {
+    "about": "art deco at dusk: flamingo pink and pool aqua over the ocean",
+    "accent": "#2ee6d6",
+    "bg": "#0b2b36",
+    "fg": "#fff2f7",
+    "name": "miami-heat",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "granite, moss and candlelight after midnight",
+    "accent": "#6b8f5a",
+    "bg": "#101112",
+    "fg": "#c9c5bb",
+    "name": "cemetery",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "golden hour: a peach sky, coral and lavender, a firefly or two",
+    "accent": "#8a6bb5",
+    "bg": "#fbeee0",
+    "fg": "#3b2f40",
+    "name": "summer-evening",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "the deep sea: glowing jellyfish and an anglerfish's lure",
+    "accent": "#3ff2e0",
+    "bg": "#02070d",
+    "fg": "#a9d8e6",
+    "name": "abyss",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "black and white film, and red for what matters",
+    "accent": "#f0f0f0",
+    "bg": "#0b0b0b",
+    "fg": "#d6d6d6",
+    "name": "noir",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "a dark roast with crema, and a mint leaf",
+    "accent": "#d4a373",
+    "bg": "#1e1410",
+    "fg": "#ecdcc6",
+    "name": "espresso",
+    "shelf": "nouveau"
+  },
+  {
+    "about": "Ａ Ｅ Ｓ Ｔ Ｈ Ｅ Ｔ Ｉ Ｃ: pastel pink, teal and Windows 95 grey",
+    "accent": "#008b8b",
+    "bg": "#ffd6f2",
+    "fg": "#3d1a5b",
+    "name": "vaporwave",
+    "shelf": "wild"
+  },
+  {
+    "about": "glowing green, hazard stripes, do not lick the screen",
+    "accent": "#39ff14",
+    "bg": "#0a0f05",
+    "fg": "#d4ff4a",
+    "name": "radioactive",
+    "shelf": "wild"
+  },
+  {
+    "about": "a mirror ball: gold and magenta, every nick a different light",
+    "accent": "#ffcc00",
+    "bg": "#0a0a0a",
+    "fg": "#fff6e0",
+    "name": "disco",
+    "shelf": "wild"
+  }
+]
