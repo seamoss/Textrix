@@ -851,6 +851,11 @@ fn link_image(json: &str) -> Option<OwnedMxcUri> {
     og.get("og:image")?.as_str().filter(|u| u.starts_with("mxc://")).map(OwnedMxcUri::from)
 }
 
+/// The verification Textrix does: comparing emoji (SAS). The SDK would
+/// offer QR codes too, which Textrix can't show or scan.
+const EMOJI_ONLY: [matrix_sdk::ruma::events::key::verification::VerificationMethod; 1] =
+    [matrix_sdk::ruma::events::key::verification::VerificationMethod::SasV1];
+
 /// Rooms with their own notification mode, for [`AppEvent::PushRules`].
 async fn push_state(settings: &NotificationSettings, account: AccountName) -> AppEvent {
     let mut modes = HashMap::new();
@@ -3469,7 +3474,9 @@ impl Account {
         });
     }
 
-    /// `/verify [user]`: ask another session (or user) to verify us.
+    /// `/verify [user]`: ask another session (or user) to verify us, by
+    /// emoji. (Only emoji: offered QR codes too, Element opens the camera to
+    /// scan one, and Textrix shows none.)
     pub fn verify_request(&self, user: Option<OwnedUserId>) {
         let acct = self.clone();
         self.spawn_op(None, async move {
@@ -3480,7 +3487,7 @@ impl Account {
                 .get_user_identity(&user)
                 .await?
                 .with_context(|| format!("{user} has no cross-signing identity"))?;
-            let request = identity.request_verification().await?;
+            let request = identity.request_verification_with_methods(EMOJI_ONLY.to_vec()).await?;
             acct.notify.info(format!("verification requested from {user}; accept it on the other side"));
             acct.verify.lock().await.request = Some(request.clone());
             acct.watch_request(request);
@@ -3492,7 +3499,7 @@ impl Account {
         let acct = self.clone();
         self.spawn_op(None, async move {
             let request = acct.verify.lock().await.request.clone().context("no pending verification request")?;
-            request.accept().await?;
+            request.accept_with_methods(EMOJI_ONLY.to_vec()).await?;
             acct.notify.info("verification accepted; start emoji verification on the other side");
             acct.watch_request(request);
             Ok(())

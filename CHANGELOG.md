@@ -7,6 +7,14 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.15.1] - 2026-10-21
+
+### Fixed
+- Verifying with Element no longer opens the phone's camera. Textrix told
+  Element it could verify by QR code as well as by emoji (the SDK's
+  default), so Element offered to scan a code Textrix never shows. It now
+  asks for and accepts emoji only, and Element goes straight to them.
+
 ## [0.15.0] - 2026-10-20
 
 ### Added
