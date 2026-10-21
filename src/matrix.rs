@@ -232,6 +232,11 @@ pub enum AppEvent {
         command: String,
         output: Result<(String, Option<i32>), String>,
     },
+    /// A voice message recorded in this window (`None`: thrown away).
+    Voice {
+        key: crate::app::WinKey,
+        voice: Result<Option<crate::voice::Voice>, String>,
+    },
     /// `/changelog`'s releases from GitHub, for the window it was typed in
     /// (the status window when `into` is `None`).
     Changelog {
@@ -1652,9 +1657,36 @@ impl Account {
     /// Upload a file as an attachment (encrypted in encrypted rooms). The UI
     /// already shows a pending line keyed by `txn_id`.
     pub fn upload(&self, room_id: OwnedRoomId, path: PathBuf, txn_id: OwnedTransactionId) {
+        self.send_file(room_id, path, txn_id, None);
+    }
+
+    /// A voice message: the recording, its length and waveform. The file
+    /// goes once it's sent.
+    pub fn upload_voice(
+        &self,
+        room_id: OwnedRoomId,
+        path: PathBuf,
+        txn_id: OwnedTransactionId,
+        duration: Duration,
+        waveform: Vec<f32>,
+    ) {
+        self.send_file(room_id, path, txn_id, Some((duration, waveform)));
+    }
+
+    fn send_file(
+        &self,
+        room_id: OwnedRoomId,
+        path: PathBuf,
+        txn_id: OwnedTransactionId,
+        voice: Option<(Duration, Vec<f32>)>,
+    ) {
         let acct = self.clone();
         tokio::spawn(async move {
-            let result = acct.upload_file(&room_id, &path, &txn_id).await;
+            let recorded = voice.is_some();
+            let result = acct.upload_file(&room_id, &path, &txn_id, voice).await;
+            if recorded {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
             if result.is_ok() {
                 acct.notify.send(AppEvent::Bell(BellKind::Transfers));
             }
@@ -1671,6 +1703,7 @@ impl Account {
         room_id: &OwnedRoomId,
         path: &Path,
         txn_id: &OwnedTransactionId,
+        voice: Option<(Duration, Vec<f32>)>,
     ) -> Result<OwnedEventId> {
         let room = self.room(room_id)?;
         let data = tokio::fs::read(path).await.with_context(|| format!("reading {}", path.display()))?;
@@ -1684,7 +1717,11 @@ impl Account {
                 human_size(max.into())
             );
         }
-        let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).context("not a file path")?;
+        let filename = match (&voice, path.extension()) {
+            // As Element names them.
+            (Some(_), Some(ext)) => format!("Voice message.{}", ext.to_string_lossy()),
+            _ => path.file_name().map(|n| n.to_string_lossy().into_owned()).context("not a file path")?,
+        };
         let mime = mime_guess::from_path(path).first_or_octet_stream();
         let size = Some(UInt::try_from(data.len() as u64).unwrap_or(UInt::MAX));
         let px = |n: Option<u32>| n.map(UInt::from);
@@ -1711,7 +1748,12 @@ impl Account {
             mime::VIDEO => {
                 AttachmentInfo::Video(BaseVideoInfo { duration: extras.duration, width, height, size, blurhash })
             }
-            mime::AUDIO => AttachmentInfo::Audio(BaseAudioInfo { size, ..Default::default() }),
+            mime::AUDIO => match voice {
+                Some((duration, waveform)) => {
+                    AttachmentInfo::Voice(BaseAudioInfo { duration: Some(duration), size, waveform: Some(waveform) })
+                }
+                None => AttachmentInfo::Audio(BaseAudioInfo { size, ..Default::default() }),
+            },
             _ => AttachmentInfo::File(BaseFileInfo { size }),
         };
         let thumbnail = extras.thumbnail.map(|(data, content_type, width, height)| Thumbnail {

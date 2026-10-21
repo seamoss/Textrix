@@ -2309,6 +2309,16 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {
     let t = &app.cfg.palette;
+    if let Some((_, recording)) = &app.recording {
+        let took = crate::audio::duration(recording.started.elapsed());
+        let blink = if recording.started.elapsed().as_secs().is_multiple_of(2) { "●" } else { " " };
+        let line = TLine::from(vec![
+            Span::styled(format!("{blink} REC {took}"), t.error.add_modifier(Modifier::BOLD)),
+            Span::styled("  recording a voice message · Enter sends it · Esc throws it away", t.dim),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return (area, area.x, 0);
+    }
     let win = &app.windows[app.active];
     let label: String = match app.compose_label() {
         Some(label) => label.chars().take(32).collect(),

@@ -88,7 +88,7 @@ pub fn ogg_opus_to_wav(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// 16-bit PCM in a WAV file.
-fn wav(samples: &[i16], channels: u16, rate: u32) -> Vec<u8> {
+pub fn wav(samples: &[i16], channels: u16, rate: u32) -> Vec<u8> {
     let data_len = (samples.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     out.extend_from_slice(b"RIFF");
@@ -126,10 +126,12 @@ pub fn player(configured: &str) -> Option<Vec<String>> {
             &["aplay", "-q"],
         ]
     };
-    let found = |program: &str| {
-        std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-    };
-    candidates.iter().find(|c| found(c[0])).map(|c| c.iter().map(|s| (*s).to_owned()).collect())
+    candidates.iter().find(|c| on_path(c[0])).map(|c| c.iter().map(|s| (*s).to_owned()).collect())
+}
+
+/// Whether a program is installed (on `$PATH`).
+pub fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 /// The command that plays a video (the file goes on the end):

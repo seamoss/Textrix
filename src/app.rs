@@ -952,6 +952,8 @@ pub struct App {
     pub invites: Vec<Invitation>,
     /// Gallery pictures the renderer wants, fetched after the draw.
     pub tile_requests: Vec<(OwnedEventId, Media)>,
+    /// A voice message being recorded, and the window it's for.
+    pub recording: Option<(WinKey, crate::voice::Recording)>,
     /// `notify_command`s running, and whether the last one failed.
     hooks: (Arc<AtomicUsize>, Arc<AtomicBool>),
     /// Messages to send later (`/later`), soonest first.
@@ -1096,6 +1098,11 @@ const COMMANDS: &[Cmd] = &[
         name: "exec",
         args: "[-o] <command>",
         help: "Run a shell command and show what it prints here; -o sends that to the room (not from scripts)",
+    },
+    Cmd {
+        name: "voice",
+        args: "",
+        help: "Record a voice message here (Ctrl+R too): Enter sends it, Esc throws it away",
     },
     Cmd {
         name: "later",
@@ -1291,6 +1298,7 @@ pub const KEYS: &[(&str, &str)] = &[
         "write the message in your editor (editor in config.toml, $VISUAL, $EDITOR or vi); quitting it brings the text back",
     ),
     ("Ctrl+L", "redraw the screen"),
+    ("Ctrl+R", "record a voice message: Enter sends it, Esc throws it away"),
 ];
 
 pub const SELECT_KEYS: &[(&str, &str)] = &[
@@ -1514,6 +1522,7 @@ impl App {
             home: None,
             invites: Vec::new(),
             tile_requests: Vec::new(),
+            recording: None,
             hooks: Default::default(),
             custom_emoji: HashMap::new(),
             later: Vec::new(),
@@ -2023,6 +2032,7 @@ impl App {
             AppEvent::Quit => self.quit = true,
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
+            AppEvent::Voice { key, voice } => self.voice_done(key, voice),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
                     return;
@@ -3166,6 +3176,10 @@ impl App {
     /// Once a second: last session's split if it's waiting, scripts' live
     /// status items, and their stores saved if they changed.
     pub fn on_clock(&mut self) {
+        if self.recording.as_ref().is_some_and(|(_, r)| r.started.elapsed() >= crate::voice::MAX) {
+            self.info("that's ten minutes, the most a voice message can be: sending it");
+            self.stop_voice(true);
+        }
         // A server that never connects shouldn't hold the split back.
         self.restore_split();
         self.send_due_later();
@@ -3659,6 +3673,16 @@ impl App {
         if !(ctrl && key.code == Char('c')) {
             self.quit_armed = None;
         }
+        if self.recording.is_some() {
+            // Recording: Enter sends it, Esc or Ctrl+C throws it away.
+            match key.code {
+                Enter => self.stop_voice(true),
+                Esc => self.stop_voice(false),
+                Char('c') if ctrl => self.stop_voice(false),
+                _ => {}
+            }
+            return;
+        }
         if let Some(v) = self.viewer.as_mut() {
             match key.code {
                 Esc | Enter | Char('q' | 'z') => self.close_viewer(),
@@ -3843,6 +3867,11 @@ impl App {
                 'n' => self.cycle_window(1),
                 'p' => self.cycle_window(-1),
                 'l' => self.redraw_all = true,
+                'r' => {
+                    if let Err(e) = self.start_voice() {
+                        self.error(e);
+                    }
+                }
                 'x' => self.editor_request = Some(self.input.text()),
                 // With nothing after the cursor to cut, Ctrl+K opens the
                 // switcher.
@@ -4349,6 +4378,56 @@ impl App {
                 .and_then(|html| crate::richtext::render(&html.body));
             self.windows[idx].push(line, cap);
         }
+    }
+
+    /// `/voice`, Ctrl+R: record a voice message for this room.
+    fn start_voice(&mut self) -> Result<(), String> {
+        if self.recording.is_some() {
+            return Err("already recording".into());
+        }
+        let (acct, room_id) = self.room_ctx()?;
+        if self.win().perms.is_some_and(|p| !p.can_send) {
+            return Err("your power level doesn't allow posting here".into());
+        }
+        let key = WinKey { account: acct.name.to_string(), room_id, thread: None };
+        let recording = crate::voice::start(&self.paths.base.join("tmp")).map_err(|e| format!("{e:#}"))?;
+        self.recording = Some((key, recording));
+        Ok(())
+    }
+
+    /// Stop recording: send it (`keep`), or throw it away.
+    fn stop_voice(&mut self, keep: bool) {
+        let Some((key, recording)) = self.recording.take() else { return };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let voice = crate::voice::finish(recording, keep).await.map_err(|e| format!("{e:#}"));
+            let _ = tx.send(AppEvent::Voice { key, voice });
+        });
+    }
+
+    /// A recording, done: shown as it'll look, and sent.
+    fn voice_done(&mut self, key: WinKey, voice: Result<Option<crate::voice::Voice>, String>) {
+        let voice = match voice {
+            Ok(Some(voice)) => voice,
+            Ok(None) => return self.info("voice message thrown away"),
+            Err(e) => return self.error(e),
+        };
+        let Some(acct) = self.connected(&key.account) else {
+            let _ = std::fs::remove_file(&voice.file);
+            return self.error(format!("{} isn't connected; the voice message is gone", key.account));
+        };
+        let bars: Vec<u64> = voice.waveform.iter().map(|v| (v * 1024.0) as u64).collect();
+        let text = format!("[voice] {} {}", audio::duration(voice.duration), audio::waveform(&bars, 24));
+        let mut line = Line::new(LineKind::Message, text);
+        (line.own, line.pending, line.progress) = (true, true, Some(0));
+        let txn_id = TransactionId::new();
+        line.txn_id = Some(txn_id.clone());
+        (line.nick, line.sender) = (self.own_nick(&acct), Some(acct.user_id.clone()));
+        if let Some(idx) = self.window_idx(&key.account, &key.room_id) {
+            let cap = self.cfg.scrollback;
+            self.windows[idx].push(line, cap);
+        }
+        acct.upload_voice(key.room_id, voice.file, txn_id, voice.duration, voice.waveform);
     }
 
     /// `notify_command`, for one notification: `sh -c` with the details in
@@ -5243,6 +5322,7 @@ impl App {
             "poll" => self.cmd_poll(args),
             "later" => self.cmd_later(args),
             "exec" => self.cmd_exec(args),
+            "voice" => self.start_voice(),
             "changelog" => self.cmd_changelog(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
@@ -9269,6 +9349,27 @@ mod tests {
             limited: false,
         });
         assert!(row(&mut app, "and staying").ends_with("and staying"), "{}", row(&mut app, "and staying"));
+    }
+
+    #[test]
+    fn a_voice_message_shows_and_goes() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        let key = app.windows[a].room.clone().unwrap();
+        let file = std::env::temp_dir().join(format!("textrix-voice-test-{}.ogg", std::process::id()));
+        std::fs::write(&file, b"OggS").unwrap();
+        let voice = crate::voice::Voice {
+            file: file.clone(),
+            duration: Duration::from_millis(12_300),
+            waveform: vec![0.1, 0.5, 1.0, 0.5, 0.1],
+        };
+        app.voice_done(key.clone(), Ok(Some(voice)));
+        assert!(!file.exists(), "not connected: not kept either");
+        assert!(app.windows[0].lines.back().unwrap().body.contains("isn't connected"));
+        app.voice_done(key.clone(), Ok(None));
+        assert_eq!(app.windows[0].lines.back().unwrap().body, "voice message thrown away");
+        app.voice_done(key, Err("that was too short to send".into()));
+        assert_eq!(app.windows[0].lines.back().unwrap().body, "that was too short to send");
     }
 
     #[test]

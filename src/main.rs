@@ -36,6 +36,7 @@ mod update;
 mod upload;
 mod vault;
 mod viewer;
+mod voice;
 
 use std::process::ExitCode;
 

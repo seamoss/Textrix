@@ -55,6 +55,11 @@ matrix-sdk-store-encryption = "0.19.1"
 rmp-serde = "1.3"
 blurhash = "0.2"
 
+# Recording voice messages on macOS (CoreAudio); elsewhere a recorder
+# program that comes with the sound system does it.
+[target.'cfg(target_os = "macos")'.dependencies]
+cpal = "0.18"
+
 # opus-decoder 0.1.1 shifts a u8 past its width in CELT's collapse mask on
 # some voice messages; release builds (no overflow checks) play them, so
 # debug builds shouldn't panic on them either.
