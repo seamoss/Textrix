@@ -42,6 +42,7 @@ use crate::{
     config::{BellKind, BellMode, BellStyle, Config, NotifyMode, Paths},
     convert::attachment,
     eggs,
+    emoji_picker::{self, EmojiPicker},
     gallery::{self, Gallery},
     home::{self, Home, Invitation},
     input::{Candidate, Draft, Input},
@@ -704,7 +705,6 @@ const PREVIEWS_MAX: usize = 64;
 #[derive(Clone, Debug)]
 enum Compose {
     Reply { event: OwnedEventId, sender: OwnedUserId, nick: String },
-    React { event: OwnedEventId, nick: String },
 }
 
 /// An edit in progress: ↑/↓ walk through your own messages (each loads
@@ -757,6 +757,10 @@ struct Layout {
     /// Rooms' and spaces' own themes (`/theme here`, `/theme space`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     themes: Vec<(WinKey, ThemeId)>,
+    /// Your latest reactions, newest first: emoji, or `:code:` for custom
+    /// ones (the emoji picker's Recent).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recent_emoji: Vec<String>,
 }
 
 /// Something for scripts to hear about, from a room's timeline.
@@ -930,6 +934,8 @@ pub struct App {
     konami: usize,
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
+    /// Reacting with `+`: the emoji to pick from.
+    pub emoji_picker: Option<EmojiPicker>,
     pub vote: Option<VotePicker>,
     pub profile: Option<ProfileView>,
     /// `/media`: a room's media as tiles, over the messages.
@@ -1286,7 +1292,7 @@ pub const SELECT_KEYS: &[(&str, &str)] = &[
     ("r", "reply"),
     ("e", "edit (your own messages)"),
     ("d", "delete (asks first)"),
-    ("+", "react"),
+    ("+", "react: pick an emoji (arrows, or type to search), Enter sends it"),
     ("t", "open the thread (or start one)"),
     ("p", "pin or unpin it for everyone in the room (if allowed)"),
     ("f", "forward a copy to another room (pick it like the switcher)"),
@@ -1495,6 +1501,7 @@ impl App {
             konami: 0,
             switcher: None,
             theme_picker: None,
+            emoji_picker: None,
             vote: None,
             profile: None,
             gallery: None,
@@ -3048,6 +3055,7 @@ impl App {
             split,
             layouts: self.layout.layouts.clone(),
             themes: self.layout.themes.clone(),
+            recent_emoji: self.layout.recent_emoji.clone(),
         };
         if let Ok(json) = serde_json::to_vec_pretty(&layout)
             && let Err(e) = std::fs::write(self.paths.layout_file(), json)
@@ -3354,6 +3362,12 @@ impl App {
             sw.selected = if up { sw.selected.saturating_sub(1) } else { sw.selected + 1 };
             return;
         }
+        if let Some(p) = self.emoji_picker.as_mut() {
+            let entries = p.entries();
+            let rows = emoji_picker::layout(&entries, p.width);
+            p.step(&entries, &rows, if up { emoji_picker::Way::Up } else { emoji_picker::Way::Down });
+            return;
+        }
         if let Some(p) = self.theme_picker.as_mut() {
             p.selected = if up { p.selected.saturating_sub(1) } else { p.selected + 1 };
             return self.try_picked_theme();
@@ -3426,6 +3440,23 @@ impl App {
                     self.try_picked_theme();
                 }
                 _ if !inside => self.close_theme_picker(false),
+                _ => {}
+            }
+            return;
+        }
+        if self.emoji_picker.is_some() {
+            // An emoji reacts with it; a click outside closes the picker.
+            let hits = self.hits.emoji_picker.as_ref();
+            let picked = hits.and_then(|(_, cells)| cells.iter().find(|(r, _)| r.contains(at))).map(|&(_, n)| n);
+            let inside = hits.is_some_and(|(area, _)| area.contains(at));
+            match (picked, self.emoji_picker.as_ref()) {
+                (Some(n), Some(p)) => {
+                    if let Some(entry) = p.entries().get(n) {
+                        let label = entry.pick.label();
+                        self.react_picked(&label);
+                    }
+                }
+                _ if !inside => self.emoji_picker = None,
                 _ => {}
             }
             return;
@@ -3673,6 +3704,9 @@ impl App {
         }
         if self.theme_picker.is_some() {
             return self.on_theme_picker_key(key);
+        }
+        if self.emoji_picker.is_some() {
+            return self.on_emoji_key(key);
         }
         if self.vote.is_some() {
             return self.on_vote_key(key);
@@ -4610,9 +4644,10 @@ impl App {
             Char('d') => self.request_delete(event, None),
             Char('+' | '=') => {
                 if let Some(here) = key_here {
-                    self.compose = Some((here, Compose::React { event, nick: line.nick.clone() }));
-                    self.input.clear();
-                    self.select = None;
+                    let custom = self.emoji_for(&here.account, Some(&here.room_id));
+                    let nick = self.display_name(line.sender.as_deref(), &line.nick).to_owned();
+                    let recent = self.layout.recent_emoji.clone();
+                    self.emoji_picker = Some(EmojiPicker::new(event, nick, custom, recent));
                 }
             }
             Char('s') => match (line.media.clone(), self.room_ctx()) {
@@ -4902,7 +4937,6 @@ impl App {
         }
         Some(match compose {
             Compose::Reply { nick, .. } => format!("reply to {nick}"),
-            Compose::React { nick, .. } => format!("react to {nick}"),
         })
     }
 
@@ -5103,7 +5137,6 @@ impl App {
         {
             let result = match target {
                 Compose::Reply { event, sender, .. } => self.send_reply(event, sender, &text),
-                Compose::React { event, .. } => self.send_react(event, text.trim()),
             };
             if let Err(e) = result {
                 self.error(e);
@@ -5729,11 +5762,82 @@ impl App {
         let code = key.trim_matches(':');
         let custom =
             self.emoji_for(&acct.name, Some(&room_id)).into_iter().find(|(c, _)| c == code && key.starts_with(':'));
-        match custom {
-            Some((code, picture)) => acct.react_custom(room_id, event_id, picture, code),
-            None => acct.react(room_id, event_id, crate::emoji::expand(key).into_owned()),
+        let label = match custom {
+            Some((code, picture)) => {
+                acct.react_custom(room_id, event_id, picture, code.clone());
+                format!(":{code}:")
+            }
+            None => {
+                let key = crate::emoji::expand(key).into_owned();
+                acct.react(room_id, event_id, key.clone());
+                key
+            }
+        };
+        // The picker's Recent: emoji and custom ones, not words.
+        if label.starts_with(':') || emojis::get(&label).is_some() {
+            let recent = &mut self.layout.recent_emoji;
+            recent.retain(|r| *r != label);
+            recent.insert(0, label);
+            recent.truncate(emoji_picker::RECENT);
+            self.save_layout();
         }
         Ok(())
+    }
+
+    /// The emoji picker: arrows choose, typing searches, Enter reacts
+    /// (with what's typed, when nothing matches it).
+    fn on_emoji_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        use emoji_picker::Way;
+        let Some(p) = self.emoji_picker.as_mut() else { return };
+        let ctrl_or_alt = key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let way = match key.code {
+            Left => Some(Way::Left),
+            Right => Some(Way::Right),
+            Up => Some(Way::Up),
+            Down => Some(Way::Down),
+            PageUp => Some(Way::PageUp),
+            PageDown => Some(Way::PageDown),
+            Home => Some(Way::First),
+            End => Some(Way::Last),
+            _ => None,
+        };
+        if let Some(way) = way {
+            let entries = p.entries();
+            let rows = emoji_picker::layout(&entries, p.width);
+            p.step(&entries, &rows, way);
+            return;
+        }
+        match key.code {
+            Esc => self.emoji_picker = None,
+            Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.emoji_picker = None,
+            Enter => {
+                let entries = p.entries();
+                let label = match entries.get(p.selected) {
+                    Some(entry) => entry.pick.label(),
+                    None => p.query.trim().to_owned(),
+                };
+                self.react_picked(&label);
+            }
+            Backspace => {
+                p.query.pop();
+                (p.selected, p.top) = (0, 0);
+            }
+            Char(c) if !ctrl_or_alt => {
+                p.query.push(c);
+                (p.selected, p.top) = (0, 0);
+            }
+            _ => {}
+        }
+    }
+
+    /// React with the picker's choice, and leave selection mode.
+    fn react_picked(&mut self, label: &str) {
+        let Some(p) = self.emoji_picker.take() else { return };
+        if let Err(e) = self.send_react(p.event, label) {
+            self.error(e);
+        }
+        self.select = None;
     }
 
     /// The custom emoji you can use in `room`: its own pack's, then yours
@@ -9091,6 +9195,27 @@ mod tests {
     }
 
     #[test]
+    fn plus_opens_the_emoji_picker() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "pizza tonight?"));
+        app.switch_to(a);
+        app.layout.recent_emoji = vec!["🍕".into()];
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        app.on_key(key(KeyCode::Char('+')));
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("React to alice") && rows.contains("Recent") && rows.contains("🍕"), "{rows}");
+        for c in "fire".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains("› fire") && rows.contains("fire :fire:"), "{rows}");
+        app.on_key(key(KeyCode::Esc));
+        assert!(app.emoji_picker.is_none() && app.select.is_some(), "Esc closes it, still selecting");
+    }
+
+    #[test]
     fn scripts_cant_exec() {
         let mut app = test_app();
         let source = r#"command("sneaky", "", |args, ctx| run("/exec echo hi"));"#;
@@ -10113,7 +10238,8 @@ mod tests {
         app.input.set_text("half a thought");
         let key = app.windows[a].room.clone().unwrap();
         let event: OwnedEventId = "$1".try_into().unwrap();
-        app.compose = Some((key, Compose::React { event, nick: "bob".into() }));
+        let sender: OwnedUserId = "@bob:x.org".try_into().unwrap();
+        app.compose = Some((key, Compose::Reply { event, sender, nick: "bob".into() }));
 
         app.switch_to(b);
         assert!(app.input.is_empty() && app.compose.is_none(), "the other window starts clean");
@@ -10121,7 +10247,7 @@ mod tests {
         app.input.set_text("for beta");
         app.switch_to(a);
         assert_eq!(app.input.text(), "half a thought");
-        assert!(app.compose.is_some(), "the reaction being written comes back too");
+        assert!(app.compose.is_some(), "the reply being written comes back too");
         assert!(!app.windows[a].has_draft());
         app.switch_to(b);
         assert_eq!(app.input.text(), "for beta");

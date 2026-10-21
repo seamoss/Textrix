@@ -22,6 +22,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::{
     app::{App, ConnStatus, HelpRow, LinkTitle, Preview, help_rows},
     config::{Config, LinkTitles},
+    emoji_picker,
     gallery::{self, Thumb},
     home,
     input::display_width,
@@ -49,6 +50,8 @@ pub struct Hits {
     pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The theme picker's box, and its rows: (row, theme index).
     pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// The emoji picker's box, and its emoji: (where, entry index).
+    pub emoji_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The profile pane.
     pub profile: Option<Rect>,
     /// Gallery tiles: (tile, index among the room's media).
@@ -142,6 +145,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.hits.switcher = Some(draw_switcher(f, app));
     }
     app.hits.theme_picker = app.theme_picker.is_some().then(|| draw_theme_picker(f, app));
+    app.hits.emoji_picker = app.emoji_picker.is_some().then(|| draw_emoji_picker(f, app));
     if app.vote.is_some() {
         draw_vote(f, app);
     }
@@ -294,6 +298,70 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
         f.render_widget(Paragraph::new(Span::styled(format!("{text}{}", " ".repeat(pad)), style)), rect);
         hits.push((rect, n));
     }
+    (area, hits)
+}
+
+/// Reacting (`+`): what's typed, the emoji in rows under their sections,
+/// and what the chosen one is called.
+fn draw_emoji_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    let t = app.cfg.palette.clone();
+    let screen = f.area();
+    let Some(p) = app.emoji_picker.as_mut() else { return (Rect::default(), Vec::new()) };
+    let width = screen.width.saturating_sub(4).min(60);
+    let height = screen.height.saturating_sub(4).min(20);
+    let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 2, width, height };
+    let nick: String = p.nick.chars().filter(|c| !c.is_control()).collect();
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(format!(" React to {nick} "), t.accent))
+        .title_bottom(TLine::from(" ←↑↓→ choose · type to search · Enter react · Esc close ").right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    if inner.height < 3 {
+        return (area, Vec::new());
+    }
+
+    let query: String = p.query.chars().filter(|c| !c.is_control()).collect();
+    let prompt = TLine::from(vec![Span::styled("› ", t.accent), Span::raw(query.clone())]);
+    f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
+    let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
+    f.set_cursor_position(Position::new(cursor_x, inner.y));
+
+    let grid = Rect { y: inner.y + 1, height: inner.height - 2, ..inner };
+    let bottom = Rect { y: inner.bottom() - 1, height: 1, ..inner };
+    let entries = p.entries();
+    p.width = grid.width;
+    if entries.is_empty() {
+        let text = format!(" nothing called that: Enter reacts with “{query}” as it is");
+        f.render_widget(Paragraph::new(Span::styled(fit(&text, grid.width as usize), t.dim)), grid);
+        return (area, Vec::new());
+    }
+    p.selected = p.selected.min(entries.len() - 1);
+    let rows = emoji_picker::layout(&entries, grid.width);
+    p.follow(&rows, grid.height as usize);
+    let mut hits = Vec::new();
+    for (i, row) in rows.iter().skip(p.top).take(grid.height as usize).enumerate() {
+        let y = grid.y + i as u16;
+        match row {
+            emoji_picker::Row::Heading(name) => {
+                let style = t.dim.add_modifier(Modifier::BOLD);
+                f.render_widget(Paragraph::new(Span::styled(*name, style)), Rect { y, height: 1, ..grid });
+            }
+            emoji_picker::Row::Items(items) => {
+                for &(x, w, n) in items {
+                    let rect = Rect { x: grid.x + x, y, width: w.min(grid.width - x), height: 1 };
+                    let style =
+                        if n == p.selected { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+                    f.render_widget(Paragraph::new(Span::styled(entries[n].pick.label(), style)), rect);
+                    hits.push((rect, n));
+                }
+            }
+        }
+    }
+    let about = entries.get(p.selected).map(|e| e.about.clone()).unwrap_or_default();
+    f.render_widget(Paragraph::new(Span::styled(fit(&about, bottom.width as usize), t.dim)), bottom);
     (area, hits)
 }
 

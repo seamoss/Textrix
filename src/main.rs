@@ -9,6 +9,7 @@ mod convert;
 mod editor;
 mod eggs;
 mod emoji;
+mod emoji_picker;
 mod gallery;
 mod highlight;
 mod home;
