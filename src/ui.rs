@@ -1911,6 +1911,9 @@ fn render_line_and_nick(
     if line.edited && !line.redacted {
         push(&mut cells, " (edited)", t.dim);
     }
+    if line.pending && line.waiting {
+        push(&mut cells, " (waiting to send)", t.dim);
+    }
     if let Some(count) = line.thread_count {
         let text = if count == 1 { " [1 reply]".to_owned() } else { format!(" [{count} replies]") };
         push(&mut cells, &text, t.badge);

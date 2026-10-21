@@ -83,6 +83,7 @@ use matrix_sdk::{
         room::{JoinRule, RoomType},
         serde::Raw,
     },
+    send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendHandle, SendQueueUpdate},
     sliding_sync::{SlidingSyncList, SlidingSyncListLoadingState, SlidingSyncMode, Version as SlidingVersion},
     sync::RoomUpdates,
 };
@@ -231,6 +232,19 @@ pub enum AppEvent {
         send: bool,
         command: String,
         output: Result<(String, Option<i32>), String>,
+    },
+    /// A message went into the send queue, which named it `queued`.
+    Queued {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        txn_id: OwnedTransactionId,
+        queued: OwnedTransactionId,
+    },
+    /// A queued message couldn't reach the server: it waits.
+    SendWaiting {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        txn_id: OwnedTransactionId,
     },
     /// A voice message recorded in this window (`None`: thrown away).
     Voice {
@@ -458,6 +472,9 @@ pub struct Account {
     /// Seals files kept for later (scheduled messages), with an encrypted
     /// store only.
     sealer: Option<Arc<crate::sealed::Sealer>>,
+    /// Messages in the send queue, by its transaction ID: to cancel one the
+    /// server refused.
+    queued: Arc<std::sync::Mutex<HashMap<OwnedTransactionId, SendHandle>>>,
 }
 
 /// Settings [`connect`] takes from the config.
@@ -571,6 +588,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         history_cache: opts.history_cache,
         index: Arc::new(std::sync::Mutex::new(index)),
         sealer: sealer.map(Arc::new),
+        queued: Default::default(),
     })
 }
 
@@ -998,6 +1016,7 @@ impl Account {
         if self.index.lock().unwrap().is_some() {
             self.track(tokio::spawn(self.clone().crawl_history()));
         }
+        self.track(tokio::spawn(self.clone().watch_send_queue()));
     }
 
     /// Stop syncing. The session stays on disk for the next `/connect`.
@@ -1168,6 +1187,8 @@ impl Account {
                     self.process_rooms(response.rooms, !first).await;
                     if first || failing {
                         self.notify.send(AppEvent::Synced { account: self.name.clone(), first });
+                        // Messages waiting for the server go now.
+                        self.client.send_queue().set_enabled(true).await;
                     }
                     if first {
                         first = false;
@@ -1259,6 +1280,7 @@ impl Account {
                     Ok(_) => {
                         if first || failing {
                             self.notify.send(AppEvent::Synced { account: self.name.clone(), first });
+                            self.client.send_queue().set_enabled(true).await;
                         }
                         if first {
                             first = false;
@@ -1280,7 +1302,9 @@ impl Account {
                         failing = false;
                         backoff = Duration::from_secs(1);
                     }
-                    Err(e) if first => return Err(e.into()),
+                    // The server answering that it can't is "unavailable";
+                    // not reaching it at all (offline) is retried below.
+                    Err(e) if first && e.as_client_api_error().is_some() => return Err(e.into()),
                     Err(e) => {
                         if let Some(ErrorKind::UnknownToken(_)) = e.client_api_error_kind() {
                             self.notify.send(AppEvent::ConnectFailed {
@@ -1610,19 +1634,82 @@ impl Account {
         });
     }
 
+    /// Into the room's send queue, which sends it when it can (kept in the
+    /// store meanwhile, so not even quitting loses it). The queue names it
+    /// afresh: the app hears which name, then that it went, through
+    /// [`Account::watch_send_queue`].
     pub fn send(&self, room_id: OwnedRoomId, content: RoomMessageEventContent, txn_id: OwnedTransactionId) {
         let acct = self.clone();
         tokio::spawn(async move {
-            let result = match acct.room(&room_id) {
-                Ok(room) => room.send(content).with_transaction_id(txn_id.clone()).await.map_err(anyhow::Error::from),
-                Err(e) => Err(e),
-            };
+            let content = matrix_sdk::ruma::events::AnyMessageLikeEventContent::RoomMessage(content);
+            let queued = async {
+                let queue = acct.room(&room_id)?.send_queue();
+                let (_, mut updates) = queue.subscribe().await?;
+                let handle = queue.send(content).await?;
+                // Its name is in the queue's announcement of it, whose
+                // handle was made at the same moment as ours.
+                loop {
+                    match updates.try_recv() {
+                        Ok(RoomSendQueueUpdate::NewLocalEvent(LocalEcho {
+                            transaction_id,
+                            content: LocalEchoContent::Event { send_handle, .. },
+                        })) if send_handle.created_at == handle.created_at => break Ok((transaction_id, handle)),
+                        Ok(_) => {}
+                        Err(_) => bail!("the send queue didn't say what it named the message"),
+                    }
+                }
+            }
+            .await;
             let account = acct.name.clone();
-            acct.notify.send(match result {
-                Ok(sent) => AppEvent::Sent { account, room_id, txn_id, event_id: sent.response.event_id },
-                Err(e) => AppEvent::SendFailed { account, room_id, txn_id, error: format!("{e:#}") },
-            });
+            match queued {
+                Ok((queued, handle)) => {
+                    acct.queued.lock().unwrap().insert(queued.clone(), handle);
+                    acct.notify.send(AppEvent::Queued { account, room_id, txn_id, queued });
+                }
+                Err(e) => acct.notify.send(AppEvent::SendFailed { account, room_id, txn_id, error: format!("{e:#}") }),
+            }
         });
+    }
+
+    /// What happens to queued messages: sent, waiting for the server (the
+    /// queue pauses; it's tried again every half minute, and as soon as
+    /// syncing works again), or refused (taken out of the queue).
+    async fn watch_send_queue(self) {
+        let queue = self.client.send_queue();
+        let mut updates = queue.subscribe();
+        // Messages left from last time go now.
+        queue.respawn_tasks_for_rooms_with_unsent_requests().await;
+        loop {
+            let SendQueueUpdate { room_id, update } = match updates.recv().await {
+                Ok(update) => update,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            let account = self.name.clone();
+            match update {
+                RoomSendQueueUpdate::SentEvent { transaction_id, event_id } => {
+                    self.queued.lock().unwrap().remove(&transaction_id);
+                    self.notify.send(AppEvent::Sent { account, room_id, txn_id: transaction_id, event_id });
+                }
+                RoomSendQueueUpdate::SendError { transaction_id, is_recoverable: true, .. } => {
+                    self.notify.send(AppEvent::SendWaiting { account, room_id, txn_id: transaction_id });
+                    let client = self.client.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        client.send_queue().set_enabled(true).await;
+                    });
+                }
+                RoomSendQueueUpdate::SendError { transaction_id, error, is_recoverable: false } => {
+                    let handle = self.queued.lock().unwrap().remove(&transaction_id);
+                    if let Some(handle) = handle {
+                        let _ = handle.abort().await;
+                    }
+                    let error = error.to_string();
+                    self.notify.send(AppEvent::SendFailed { account, room_id, txn_id: transaction_id, error });
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `/msg`: send to a user's DM (created if needed) or a joined room.

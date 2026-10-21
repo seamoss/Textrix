@@ -56,6 +56,8 @@ pub struct Line {
     pub media: Option<Media>,
     /// Upload progress of our own pending attachment.
     pub progress: Option<u8>,
+    /// Our own message, kept to send when the server can be reached.
+    pub waiting: bool,
     /// Formatted version of `body`, when the message had HTML formatting.
     pub rich: Option<Vec<crate::richtext::Span>>,
     /// Spoilers shown (toggled with `v` in selection mode).
@@ -109,6 +111,7 @@ impl Line {
             reply_snippet: None,
             media: None,
             progress: None,
+            waiting: false,
             rich: None,
             reveal: false,
             utd_session: None,

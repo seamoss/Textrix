@@ -952,6 +952,8 @@ pub struct App {
     pub invites: Vec<Invitation>,
     /// Gallery pictures the renderer wants, fetched after the draw.
     pub tile_requests: Vec<(OwnedEventId, Media)>,
+    /// Messages the send queue sent before we heard its name for them.
+    sent_early: HashMap<matrix_sdk::ruma::OwnedTransactionId, OwnedEventId>,
     /// A voice message being recorded, and the window it's for.
     pub recording: Option<(WinKey, crate::voice::Recording)>,
     /// `notify_command`s running, and whether the last one failed.
@@ -1523,6 +1525,7 @@ impl App {
             invites: Vec::new(),
             tile_requests: Vec::new(),
             recording: None,
+            sent_early: HashMap::new(),
             hooks: Default::default(),
             custom_emoji: HashMap::new(),
             later: Vec::new(),
@@ -2153,14 +2156,28 @@ impl App {
                         let text = format!("Netsplit over after {}, joins: {rooms}", short_duration(since.elapsed()));
                         self.netsplit_note(&account, Line::info(text));
                     }
+                    Some(since) => {
+                        let server = self.server_host(&account);
+                        let after = short_duration(since.elapsed());
+                        self.status(Line::info(format!("{server} reached after {after}: synced, and up to date")));
+                    }
                     _ => self.status(Line::info(format!("{account}: synced"))),
                 }
             }
             AppEvent::SyncError { account, error } => {
+                let never_synced = self.accounts.get(&account).is_some_and(|s| s.status == ConnStatus::Syncing);
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.status = ConnStatus::Lagging;
                 }
-                if !self.splits.contains_key(&*account) {
+                if never_synced && !self.splits.contains_key(&*account) {
+                    // Started offline: what's saved is there to read.
+                    self.splits.insert(account.to_string(), Instant::now());
+                    let server = self.server_host(&account);
+                    self.status(Line::error(format!(
+                        "can't reach {server} ({error}): showing what's saved here; what you send waits, and goes \
+                         when it's back"
+                    )));
+                } else if !self.splits.contains_key(&*account) {
                     // irssi-style: the server split from you, taking your rooms.
                     self.splits.insert(account.to_string(), Instant::now());
                     let server = self.server_host(&account);
@@ -2405,9 +2422,34 @@ impl App {
                     // The sync echo won the race; drop the stale local echo.
                     w.lines.retain(|l| !(l.pending && l.txn_id.as_ref() == Some(&txn_id)));
                 } else if let Some(line) = w.lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id)) {
-                    line.pending = false;
-                    line.progress = None;
+                    (line.pending, line.waiting, line.progress) = (false, false, None);
                     line.event_id = Some(event_id);
+                } else {
+                    // Sent before we heard the send queue's name for it.
+                    self.sent_early.insert(txn_id, event_id);
+                }
+            }
+            AppEvent::Queued { account, room_id, txn_id, queued } => {
+                let Some(idx) = self.window_idx(&account, &room_id) else { return };
+                if let Some(line) =
+                    self.windows[idx].lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id))
+                {
+                    line.txn_id = Some(queued.clone());
+                }
+                if let Some(event_id) = self.sent_early.remove(&queued) {
+                    self.on_event(AppEvent::Sent { account, room_id, txn_id: queued, event_id });
+                }
+            }
+            AppEvent::SendWaiting { account, room_id, txn_id } => {
+                let Some(idx) = self.window_idx(&account, &room_id) else { return };
+                let w = &mut self.windows[idx];
+                let first = !w.lines.iter().any(|l| l.waiting);
+                let Some(line) = w.lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id)) else { return };
+                line.waiting = true;
+                if first {
+                    let server = self.server_host(&account);
+                    let text = format!("can't reach {server}: what you send here waits, and goes as soon as it can");
+                    self.windows[idx].push(Line::info(text), cap);
                 }
             }
             AppEvent::Bell(kind) => self.ring(kind),
@@ -2416,8 +2458,7 @@ impl App {
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
                 if let Some(line) = w.lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id)) {
-                    line.pending = false;
-                    line.progress = None;
+                    (line.pending, line.waiting, line.progress) = (false, false, None);
                     line.body.push_str("  [not sent]");
                 }
                 w.push(Line::error(format!("not sent: {error}")), cap);
@@ -2804,7 +2845,11 @@ impl App {
 
     /// Where a server lives, for netsplit lines: "example.org".
     fn server_host(&self, account: &str) -> String {
-        let url = self.connected(account).map(|a| a.homeserver).unwrap_or_else(|| account.to_owned());
+        let url = self
+            .connected(account)
+            .map(|a| a.homeserver)
+            .or_else(|| self.accounts.get(account)?.def.homeserver_or_server_name().map(str::to_owned))
+            .unwrap_or_else(|| account.to_owned());
         let host = url.split("://").last().unwrap_or(&url);
         host.trim_end_matches('/').split('/').next().unwrap_or(host).to_owned()
     }
@@ -3270,6 +3315,8 @@ impl App {
         let focused = idx == self.active;
         let Some(key) = self.windows[idx].room.clone() else { return };
         let Some(acct) = self.connected(&key.account) else { return };
+        // Offline, older history can't come; what's cached is there.
+        let online = self.accounts.get(key.account.as_str()).is_some_and(|a| a.status == ConnStatus::Online);
         let w = &mut self.windows[idx];
 
         if !w.members_requested {
@@ -3293,7 +3340,7 @@ impl App {
             }
         }
         let retry_ok = w.history_retry.is_none_or(|t| Instant::now() >= t);
-        if (w.at_top || w.seek.is_some() || w.wants_older) && retry_ok {
+        if (w.at_top || w.seek.is_some() || w.wants_older) && retry_ok && online {
             let from = match &w.history {
                 History::Unloaded => Some(None),
                 History::More(token) => Some(Some(token.clone())),
@@ -10067,6 +10114,77 @@ mod tests {
         assert!(over.starts_with("Netsplit over after 0s, joins: Night Owls, Book Club"), "{over}");
         assert_eq!(short_duration(Duration::from_secs(133)), "2m 13s");
         assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
+    }
+
+    #[test]
+    fn starting_offline_reads_whats_saved_and_queues_what_you_send() {
+        let mut app = test_app();
+        let def = ServerDef {
+            name: "t".into(),
+            homeserver: Some("https://example.org".into()),
+            user: "@me:example.org".into(),
+        };
+        let state = AccountState {
+            user: def.user.clone(),
+            def,
+            nick: None,
+            status: ConnStatus::Syncing,
+            verified: None,
+            away: None,
+            account: None,
+        };
+        app.accounts.insert("t".into(), state);
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        let room_id: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        app.on_event(AppEvent::SyncError { account: "t".into(), error: "connection refused".into() });
+        let said = &app.windows[0].lines.back().unwrap().body;
+        assert!(said.starts_with("can't reach example.org") && said.contains("what you send waits"), "{said}");
+
+        // A message waits in the send queue, under the queue's own name.
+        let mut line = msg("$x", "on the train");
+        (line.event_id, line.pending, line.txn_id) = (None, true, Some("ours".into()));
+        app.windows[a].lines.push_back(line);
+        let queued = |t: &str| AppEvent::Queued {
+            account: "t".into(),
+            room_id: room_id.clone(),
+            txn_id: "ours".into(),
+            queued: t.into(),
+        };
+        app.on_event(queued("q1"));
+        app.on_event(AppEvent::SendWaiting { account: "t".into(), room_id: room_id.clone(), txn_id: "q1".into() });
+        let last = |app: &App| app.windows[a].lines.back().unwrap().clone();
+        assert!(last(&app).body.contains("goes as soon as it can"), "said once, in the room");
+        app.switch_to(a);
+        let rows = screen(&mut app, 120, 20).join("\n");
+        assert!(rows.contains("on the train (waiting to send)"), "{rows}");
+
+        // Back online: it goes.
+        app.on_event(AppEvent::Synced { account: "t".into(), first: true });
+        assert!(app.windows[0].lines.back().unwrap().body.contains("reached after"));
+        let sent = AppEvent::Sent {
+            account: "t".into(),
+            room_id: room_id.clone(),
+            txn_id: "q1".into(),
+            event_id: "$sent".try_into().unwrap(),
+        };
+        app.on_event(sent);
+        let line = app.windows[a].lines.iter().find(|l| l.body == "on the train").unwrap();
+        assert!(!line.pending && !line.waiting && line.event_id.as_ref().map(|e| e.as_str()) == Some("$sent"));
+
+        // Sent before the queue's name for it arrived: put right when it does.
+        let mut line = msg("$y", "quick one");
+        (line.event_id, line.pending, line.txn_id) = (None, true, Some("ours".into()));
+        app.windows[a].lines.push_back(line);
+        let early = AppEvent::Sent {
+            account: "t".into(),
+            room_id: room_id.clone(),
+            txn_id: "q2".into(),
+            event_id: "$early".try_into().unwrap(),
+        };
+        app.on_event(early);
+        app.on_event(queued("q2"));
+        let line = app.windows[a].lines.iter().find(|l| l.body == "quick one").unwrap();
+        assert!(!line.pending && line.event_id.as_ref().map(|e| e.as_str()) == Some("$early"));
     }
 
     #[test]
