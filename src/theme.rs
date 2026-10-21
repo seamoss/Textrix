@@ -1097,9 +1097,9 @@ const CEMETERY: Palette = Palette {
     pane: [0x8a8d88, 0x1a1c1d],
     current: [0x101112, 0x8a8d88],
     accent: 0x6b8f5a,
-    highlight: 0xb3232f,
+    highlight: 0xcf3c46,
     highlight_text: 0xd4545e,
-    error: 0xb3232f,
+    error: 0xcf3c46,
     link: 0x9a8fb5,
     mention: 0xe0a84e,
     code: 0xa8b59a,
@@ -1122,9 +1122,9 @@ const SUMMER_EVENING: Palette = Palette {
     bar_accent: 0xffd08a,
     bar_alert: 0xffe2b3,
     pane: [0x3b2f40, 0xf1dcc8],
-    current: [0xfff7ef, 0xe2725b],
+    current: [0xfff7ef, 0xb9503a],
     accent: 0x8a6bb5,
-    highlight: 0xe2725b,
+    highlight: 0xb9503a,
     highlight_text: 0xb84a32,
     error: 0xc0392b,
     link: 0x5b6cc2,
@@ -1236,7 +1236,7 @@ const VAPORWAVE: Palette = Palette {
     highlight_text: 0x7209b7,
     error: 0xd00050,
     link: 0x0067a0,
-    mention: 0xff3fa4,
+    mention: 0xc2187a,
     code: 0x5a189a,
     syntax: [0x9a6fae, 0xb5179e, 0x008b8b, 0xd9480f, 0x0067a0, 0x7209b7],
     good: 0x05a37c,
@@ -2053,8 +2053,10 @@ mod tests {
     }
 
     #[test]
-    fn classic_and_nouveau_themes_read_well() {
-        for (name, id) in ThemeName::ALL.into_iter().filter(|(_, t)| matches!(t.group(), "classic" | "nouveau")) {
+    fn classic_nouveau_and_wild_themes_read_well() {
+        for (name, id) in
+            ThemeName::ALL.into_iter().filter(|(_, t)| matches!(t.group(), "classic" | "nouveau" | "wild"))
+        {
             let t = Theme::builtin(id);
             let bg = t.base.bg;
             assert!(contrast(t.base.fg, bg) >= 4.0, "{name}: text");
