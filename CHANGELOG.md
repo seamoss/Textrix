@@ -7,6 +7,33 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.16.0] - 2026-10-21
+
+### Added
+- Voice messages: `/voice` (or Ctrl+R) records one; the input line shows
+  `● REC 0:07`, Enter sends it and Esc throws it away (ten minutes at
+  most). It goes as a proper voice message, Ogg Opus with its length and
+  waveform, the way Element sends them. On macOS Textrix records from the
+  microphone itself and the system's `afconvert` encodes it (macOS asks
+  once whether your terminal may use the microphone); on Linux the sound
+  system's recorder (`pw-record`, `parecord`, `arecord`, or sox) records
+  and `opusenc` or ffmpeg encodes, else it goes as a WAV.
+- Offline: Textrix starts without a network, with your rooms and what's
+  cached in them to read, and says it can't reach the server (then that
+  it's back). Messages you send meanwhile show as "(waiting to send)" and
+  go when the server can be reached: they wait in the account's store, so
+  quitting doesn't lose them either.
+
+### Changed
+- Messages go through matrix-sdk's send queue, which retries when the
+  connection drops instead of failing at once.
+- Older history only loads while the server can be reached, so being
+  offline doesn't print an error every quarter minute.
+
+### Fixed
+- A first sliding sync that can't reach the server (starting offline) is
+  retried, instead of being taken as the server lacking sliding sync and
+  switching to classic sync for good.
 ## [0.15.2] - 2026-10-21
 
 ### Changed

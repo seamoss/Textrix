@@ -321,6 +321,17 @@ still loads from the server when you scroll up.
 The cache lives in the encrypted store; `/logout` deletes it, and
 `history_cache = false` turns it off and clears it.
 
+### Offline
+
+Textrix starts without a network too: your rooms and what's cached in
+them are there to read (and `/search` searches what it has indexed), and
+it says it can't reach the server. Messages you send meanwhile show as
+"(waiting to send)" and go out as soon as the server can be reached:
+they wait in the account's store, so even quitting Textrix doesn't lose
+them, and the next start sends them. The same goes for a dropped
+connection while you're online. Older history loads again once you're
+back. (Logging in for the first time needs the network, of course.)
+
 ### Images
 
 Stickers show like images, under their name.
