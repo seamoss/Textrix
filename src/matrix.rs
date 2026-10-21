@@ -168,10 +168,11 @@ pub enum AppEvent {
         nicks: Vec<(OwnedUserId, String)>,
     },
     /// Other members' read receipts: (user, nick, event they read up to).
+    /// Where people have read up to: (who, their name, the event, when).
     Receipts {
         account: AccountName,
         room_id: OwnedRoomId,
-        receipts: Vec<(OwnedUserId, String, OwnedEventId)>,
+        receipts: Vec<(OwnedUserId, String, OwnedEventId, Option<chrono::DateTime<chrono::Local>>)>,
         live: bool,
     },
     UploadProgress {
@@ -1366,7 +1367,8 @@ impl Account {
                             for (user, r) in users {
                                 let main = matches!(r.thread, ReceiptThread::Unthreaded | ReceiptThread::Main);
                                 if *user != self.user_id && main {
-                                    receipts.push((user.clone(), conv.nick(user).await, event_id.clone()));
+                                    let ts = r.ts.map(crate::convert::to_local);
+                                    receipts.push((user.clone(), conv.nick(user).await, event_id.clone(), ts));
                                 }
                             }
                         }
@@ -3297,10 +3299,11 @@ impl Account {
             let mut receipts = Vec::new();
             if !show && members.len() <= 100 {
                 for m in members.iter().filter(|m| m.user_id != acct.user_id) {
-                    if let Ok(Some((event_id, _))) =
+                    if let Ok(Some((event_id, receipt))) =
                         room.load_user_receipt(EventReceiptType::Read, &ReceiptThread::Unthreaded, &m.user_id).await
                     {
-                        receipts.push((m.user_id.clone(), m.name.clone(), event_id));
+                        let ts = receipt.ts.map(crate::convert::to_local);
+                        receipts.push((m.user_id.clone(), m.name.clone(), event_id, ts));
                     }
                 }
             }

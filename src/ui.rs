@@ -1307,6 +1307,13 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         readers.entry(&**event_id).or_default().push((&**user, name));
     }
 
+    // The newest line someone else has read up to (their own messages
+    // count: writing means having read what came before): your messages
+    // after it are sent, not read.
+    let read_up_to = visible.iter().rposition(|l| {
+        l.event_id.as_ref().is_some_and(|id| readers.get::<&EventId>(&&**id).is_some_and(|users| !users.is_empty()))
+    });
+
     // The "new messages" divider only matters if someone else said something.
     let last_from_others = visible.iter().rposition(|l| l.is_message() && !l.own && l.event_id.is_some());
 
@@ -1393,8 +1400,20 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         let below = rows.len();
         let pinned = line.event_id.as_ref().is_some_and(|id| win.pinned.contains(id));
+        let seen = if !read.is_empty() {
+            Seen::Read(&read)
+        } else if line.own
+            && !line.pending
+            && line.event_id.is_some()
+            && line.is_message()
+            && read_up_to.is_none_or(|r| i > r)
+        {
+            Seen::Sent
+        } else {
+            Seen::Nothing
+        };
         let (mut rendered, nick_at) =
-            render_line_and_nick(line, width, cfg, &read, thread_window.as_deref(), pinned, &nicknames);
+            render_line_and_nick(line, width, cfg, seen, thread_window.as_deref(), pinned, &nicknames);
         if set_apart && line.kind == LineKind::Info {
             for span in rendered.iter_mut().flat_map(|row| row.spans.iter_mut()) {
                 span.style = span.style.patch(cfg.palette.dim);
@@ -1699,7 +1718,17 @@ fn day_changed(cfg: &Config, width: usize, ts: DateTime<Local>, quiet: bool) -> 
 /// Format one scrollback line and wrap it to `width`, indenting
 /// continuation rows under the message text.
 pub fn render_line(line: &Line, width: usize, cfg: &Config) -> Vec<TLine<'static>> {
-    render_line_with(line, width, cfg, &[], None, false, &BTreeMap::new())
+    render_line_with(line, width, cfg, Seen::Nothing, None, false, &BTreeMap::new())
+}
+
+/// What a line's read marks say.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seen<'a> {
+    Nothing,
+    /// Your message, on the server, and nobody has read this far yet: `✓`.
+    Sent,
+    /// The people who have read up to here: `✓✓ sam`.
+    Read(&'a [&'a str]),
 }
 
 /// A line as text, with your nicknames (for tests).
@@ -1710,7 +1739,7 @@ pub fn render_line_with_names(
     cfg: &Config,
     names: &BTreeMap<OwnedUserId, String>,
 ) -> String {
-    let rows = render_line_with(line, width, cfg, &[], None, false, names);
+    let rows = render_line_with(line, width, cfg, Seen::Nothing, None, false, names);
     rows.iter().map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
@@ -1721,12 +1750,12 @@ fn render_line_with(
     line: &Line,
     width: usize,
     cfg: &Config,
-    read_by: &[&str],
+    seen: Seen,
     thread_window: Option<&EventId>,
     pinned: bool,
     nicknames: &BTreeMap<OwnedUserId, String>,
 ) -> Vec<TLine<'static>> {
-    render_line_and_nick(line, width, cfg, read_by, thread_window, pinned, nicknames).0
+    render_line_and_nick(line, width, cfg, seen, thread_window, pinned, nicknames).0
 }
 
 /// `render_line_with`, and where on the first row the sender's nick is:
@@ -1735,7 +1764,7 @@ fn render_line_and_nick(
     line: &Line,
     width: usize,
     cfg: &Config,
-    read_by: &[&str],
+    seen: Seen,
     thread_window: Option<&EventId>,
     pinned: bool,
     nicknames: &BTreeMap<OwnedUserId, String>,
@@ -1896,11 +1925,15 @@ fn render_line_and_nick(
         let summary: Vec<String> = line.reactions.iter().map(|(key, nicks)| format!("{key} {}", nicks.len())).collect();
         push(&mut cells, &format!(" [{}]", summary.join(" ")), t.dim);
     }
-    if !read_by.is_empty() {
-        let shown = read_by.iter().take(3).copied().collect::<Vec<_>>().join(", ");
-        let more = read_by.len().saturating_sub(3);
-        let text = if more > 0 { format!(" ✓ {shown} +{more}") } else { format!(" ✓ {shown}") };
-        push(&mut cells, &text, t.receipts);
+    match seen {
+        Seen::Read(names) if !names.is_empty() => {
+            let shown = names.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            let more = names.len().saturating_sub(3);
+            let text = if more > 0 { format!(" ✓✓ {shown} +{more}") } else { format!(" ✓✓ {shown}") };
+            push(&mut cells, &text, t.receipts);
+        }
+        Seen::Sent => push(&mut cells, " ✓", t.dim),
+        _ => {}
     }
 
     // System messages in italic, all but the time.

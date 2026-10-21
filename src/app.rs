@@ -312,7 +312,13 @@ impl Window {
 
     /// The newest loaded event, for read markers.
     fn latest_event(&self) -> Option<OwnedEventId> {
-        self.lines.iter().rev().find(|l| !l.pending && l.event_id.is_some()).and_then(|l| l.event_id.clone())
+        self.latest_event_by(None)
+    }
+
+    /// The latest event from `ts` or before (any, without a time).
+    fn latest_event_by(&self, ts: Option<chrono::DateTime<Local>>) -> Option<OwnedEventId> {
+        let lines = self.lines.iter().rev().filter(|l| !l.pending && l.event_id.is_some());
+        lines.into_iter().find(|l| ts.is_none_or(|ts| l.ts <= ts)).and_then(|l| l.event_id.clone())
     }
 
     /// Append a line, merging our own local echo and skipping duplicates.
@@ -2207,12 +2213,13 @@ impl App {
             AppEvent::Receipts { account, room_id, receipts, live } => {
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
-                for (user, nick, event_id) in receipts {
+                for (user, nick, event_id, ts) in receipts {
                     // Receipts often point at events we don't draw (reactions,
-                    // hidden state); a live one means "read up to now".
+                    // edits); a live one then covers what came before it,
+                    // and never a message sent after it was read.
                     let target = match (w.contains(&event_id), live) {
                         (true, _) | (false, false) => event_id,
-                        (false, true) => match w.latest_event() {
+                        (false, true) => match w.latest_event_by(ts) {
                             Some(latest) => latest,
                             None => continue,
                         },
@@ -9213,6 +9220,55 @@ mod tests {
         assert!(rows.contains("› fire") && rows.contains("fire :fire:"), "{rows}");
         app.on_key(key(KeyCode::Esc));
         assert!(app.emoji_picker.is_none() && app.select.is_some(), "Esc closes it, still selecting");
+    }
+
+    #[test]
+    fn sent_and_read_are_told_apart() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!dm:x.org", "sam");
+        let now = Local::now();
+        let sam: OwnedUserId = "@sam:x.org".try_into().unwrap();
+        let mut theirs = msg("$1", "you around?");
+        (theirs.nick, theirs.sender, theirs.ts) =
+            ("sam".into(), Some(sam.clone()), now - chrono::TimeDelta::minutes(10));
+        let mut mine = msg("$2", "yes, just back");
+        (mine.nick, mine.own, mine.ts) = ("me".into(), true, now - chrono::TimeDelta::minutes(1));
+        app.windows[a].lines.extend([theirs, mine]);
+        app.switch_to(a);
+        let row = |app: &mut App, text: &str| {
+            screen(app, 120, 12).into_iter().find(|r| r.contains(text)).unwrap_or_default().trim_end().to_owned()
+        };
+        assert!(row(&mut app, "just back").ends_with("just back ✓"), "sent, not read: {}", row(&mut app, "just back"));
+
+        // A receipt for something not drawn (their reaction, say), made
+        // before your message: it doesn't cover your message.
+        let receipt = |event: &str, ts| AppEvent::Receipts {
+            account: "t".into(),
+            room_id: "!dm:x.org".try_into().unwrap(),
+            receipts: vec![(sam.clone(), "sam".into(), event.try_into().unwrap(), Some(ts))],
+            live: true,
+        };
+        app.on_event(receipt("$reaction", now - chrono::TimeDelta::minutes(5)));
+        assert!(row(&mut app, "just back").ends_with("just back ✓"), "{}", row(&mut app, "just back"));
+
+        // They read it: two ticks and who.
+        app.on_event(receipt("$2", now));
+        assert!(row(&mut app, "just back").ends_with("just back ✓✓ sam"), "{}", row(&mut app, "just back"));
+
+        // A reply means they read what came before: no marks left there.
+        let mut more = msg("$3", "and staying");
+        (more.nick, more.own, more.ts) = ("me".into(), true, now);
+        let mut reply = msg("$4", "nice");
+        (reply.nick, reply.sender, reply.ts) = ("sam".into(), Some(sam.clone()), now);
+        let items = vec![Item::Line(more), Item::Line(reply)];
+        app.on_event(AppEvent::Timeline {
+            account: "t".into(),
+            room_id: "!dm:x.org".try_into().unwrap(),
+            items,
+            live: true,
+            limited: false,
+        });
+        assert!(row(&mut app, "and staying").ends_with("and staying"), "{}", row(&mut app, "and staying"));
     }
 
     #[test]

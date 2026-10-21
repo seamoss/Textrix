@@ -422,7 +422,12 @@ line for you to send. Esc closes it.
 - A red **new messages** divider marks where you stopped reading. It starts at
   your shared read marker (the same one Element uses) and moves when you leave
   a window or send a message.
-- `✓ nick` after a line shows how far other members have read.
+- Your messages say how far they've got: dim while sending; a dim `✓` once
+  the server has them (Matrix has no "delivered to their phone"); `✓✓ sam`
+  once sam has read that far (from sam's read receipt, so not for people
+  who send theirs privately). On other people's lines `✓✓ nick` shows how
+  far other members have read. Someone shown as away can still read on
+  their phone.
 - Presence: coloured dots in the member list and on DM windows in the
   window list (green online, yellow away, grey offline); a DM's topic bar
   says how the other person is doing ("away: lunch", "last seen 3h ago");

@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.15.2] - 2026-10-21
+
+### Changed
+- Sent and read look different: your message gets a dim `✓` once the
+  server has it, and `✓✓ sam` (in green) once sam has read it. Read marks
+  were a single `✓` before, so a message that had only arrived looked no
+  different from one that had been read.
+
+### Fixed
+- A message you'd just sent could show as read by someone who hadn't read
+  it: a read receipt for something Textrix doesn't draw as a line (a
+  reaction, an edit) was put on the newest line. It now goes on the
+  newest line from before it was sent.
+
 ## [0.15.1] - 2026-10-21
 
 ### Fixed
