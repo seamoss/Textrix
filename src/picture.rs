@@ -65,6 +65,26 @@ impl TextMode {
     }
 }
 
+/// Ask the terminal how it draws pictures, and whether its background is
+/// light (for `theme = "auto"`): one round trip, before anything else reads
+/// stdin. A terminal that doesn't answer gets pictures in text.
+pub fn query_terminal() -> (Picker, Option<bool>) {
+    let options = ratatui_image::picker::cap_parser::QueryStdioOptions {
+        terminal_background_color_osc: true,
+        ..Default::default()
+    };
+    match Picker::from_query_stdio_with_options(options) {
+        Ok(picker) => {
+            let light = picker.capabilities().iter().find_map(|c| match c {
+                ratatui_image::picker::Capability::Background(r, g, b) => Some(crate::term::is_light((*r, *g, *b))),
+                _ => None,
+            });
+            (picker, light)
+        }
+        Err(_) => (Picker::halfblocks(), None),
+    }
+}
+
 /// Draws pictures for one terminal.
 #[derive(Clone)]
 pub struct Painter {

@@ -46,7 +46,6 @@ use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
-use ratatui_image::picker::Picker;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -371,10 +370,14 @@ async fn run() -> Result<()> {
     let mut terminal = ratatui::try_init().map_err(|e| anyhow::anyhow!("Textrix needs a terminal ({e})"))?;
     // Ask the terminal about graphics and key reporting before anything
     // else reads stdin.
-    if previews {
-        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-        app.picker = Some(picture::Painter::new(picker, app.cfg.image_text));
-        app.note_images();
+    if previews || app.wants_background() {
+        let (picker, light) = picture::query_terminal();
+        term::set_light(light);
+        app.refresh_auto_theme();
+        if previews {
+            app.picker = Some(picture::Painter::new(picker, app.cfg.image_text));
+            app.note_images();
+        }
     }
     // Lets terminals that support it (kitty, Ghostty, WezTerm, …) report
     // Shift+Enter distinctly; elsewhere Alt+Enter inserts a newline.

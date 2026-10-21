@@ -6501,10 +6501,17 @@ impl App {
     /// `/themes`: the list, at the theme you have.
     fn open_theme_picker(&mut self) {
         let dir = self.paths.themes_dir();
-        let mut entries: Vec<ThemeChoice> = ThemeName::ALL
-            .iter()
-            .map(|&(_, name)| ThemeChoice { id: name.into(), shelf: name.group(), about: name.about().to_owned() })
-            .collect();
+        let auto = ThemeChoice {
+            id: ThemeId::Auto,
+            shelf: "plain",
+            about: format!("matches your terminal: {} now", crate::theme::auto_choice()),
+        };
+        let builtin = ThemeName::ALL.iter().map(|&(_, name)| ThemeChoice {
+            id: name.into(),
+            shelf: name.group(),
+            about: name.about().to_owned(),
+        });
+        let mut entries: Vec<ThemeChoice> = std::iter::once(auto).chain(builtin).collect();
         for name in crate::theme::files(&dir) {
             let about = match ThemeFile::read(&ThemeFile::path(&dir, &name)) {
                 Ok(file) => file.description.unwrap_or_else(|| "one of yours".into()),
@@ -6653,6 +6660,21 @@ impl App {
         }
     }
 
+    /// Whether a theme in use is `auto`, which needs to know the terminal's
+    /// background.
+    pub fn wants_background(&self) -> bool {
+        self.cfg.theme == ThemeId::Auto || self.layout.themes.iter().any(|(_, t)| *t == ThemeId::Auto)
+    }
+
+    /// Now the terminal's background is known: `auto` follows it.
+    pub fn refresh_auto_theme(&mut self) {
+        if self.palette_for == ThemeId::Auto
+            && let Ok(palette) = Theme::load(&ThemeId::Auto, &self.cfg.colors, &self.paths.themes_dir())
+        {
+            (self.cfg.palette, self.redraw_all) = (palette, true);
+        }
+    }
+
     /// After your own theme changed: say so if this room keeps its own.
     fn note_room_theme(&mut self) {
         if let Some(own) = self.own_theme(self.active) {
@@ -6749,8 +6771,12 @@ impl App {
 
     fn list_themes(&mut self) {
         let custom = if self.cfg.colors.is_empty() { "" } else { ", with your [colors] changes" };
-        self.info(format!("theme: {}{custom}", self.cfg.theme));
-        let mut shelves: Vec<(&str, Vec<&str>)> = Vec::new();
+        let picked = match self.cfg.theme {
+            ThemeId::Auto => format!(" (now {})", crate::theme::auto_choice()),
+            _ => String::new(),
+        };
+        self.info(format!("theme: {}{picked}{custom}", self.cfg.theme));
+        let mut shelves: Vec<(&str, Vec<&str>)> = vec![("plain", vec!["auto"])];
         for (name, theme) in ThemeName::ALL {
             match shelves.last_mut() {
                 Some((group, names)) if *group == theme.group() => names.push(name),
@@ -6824,7 +6850,7 @@ impl App {
                 return Err(format!("“{name}” is a word /theme uses; change the file's name = line"));
             }
             ThemeId::File(_) => {}
-            ThemeId::Builtin(_) => {
+            ThemeId::Builtin(_) | ThemeId::Auto => {
                 return Err(format!("{name} is a built-in theme's name; change the file's name = line"));
             }
         }
@@ -9213,7 +9239,7 @@ mod tests {
         app.command("themes");
         draw(&mut app);
         let (_, rows) = app.hits.theme_picker.clone().unwrap();
-        let (rect, n) = rows.iter().find(|(_, n)| *n == 3).copied().unwrap();
+        let (rect, n) = rows.iter().find(|(_, n)| *n == 4).copied().unwrap();
         let click = |app: &mut App| app.on_click(Position::new(rect.x + 2, rect.y));
         click(&mut app);
         assert_eq!((app.theme_picker.as_ref().unwrap().selected, &app.cfg.theme), (n, &ThemeName::Green.into()));

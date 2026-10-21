@@ -23,6 +23,10 @@ pub struct TermInfo {
     pub tmux: bool,
     /// 24-bit colour (`COLORTERM=truecolor`).
     pub truecolor: bool,
+    /// Whether the background is light, once the terminal said (or
+    /// `COLORFGBG` does), for `theme = "auto"`.
+    #[serde(default)]
+    pub light: Option<bool>,
 }
 
 impl TermInfo {
@@ -33,7 +37,36 @@ impl TermInfo {
             kitty: std::env::var_os("KITTY_WINDOW_ID").is_some(),
             tmux: std::env::var_os("TMUX").is_some(),
             truecolor: std::env::var("COLORTERM").is_ok_and(|c| c == "truecolor" || c == "24bit"),
+            light: std::env::var("COLORFGBG").ok().and_then(|v| light_from_colorfgbg(&v)),
         }
+    }
+}
+
+/// `COLORFGBG` ("15;0", rxvt's and Konsole's): the last number is the
+/// background's colour, 7 and 15 being the light ones.
+fn light_from_colorfgbg(value: &str) -> Option<bool> {
+    let background: u8 = value.rsplit(';').next()?.trim().parse().ok()?;
+    Some(matches!(background, 7 | 15))
+}
+
+/// Whether a background colour is a light one.
+pub fn is_light((r, g, b): (u8, u8, u8)) -> bool {
+    0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b) > 127.5
+}
+
+#[cfg(test)]
+#[test]
+fn light_and_dark_backgrounds() {
+    assert_eq!(light_from_colorfgbg("15;0"), Some(false));
+    assert_eq!(light_from_colorfgbg("0;default;15"), Some(true));
+    assert_eq!(light_from_colorfgbg("default;default"), None);
+    assert!(is_light((0xfd, 0xf6, 0xe3)) && !is_light((0x28, 0x2a, 0x36)));
+}
+
+/// What the terminal said about its background (`None`: it didn't).
+pub fn set_light(light: Option<bool>) {
+    if light.is_some() {
+        INFO.lock().unwrap().light = light;
     }
 }
 

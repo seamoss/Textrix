@@ -19,7 +19,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeId, ThemeName};
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -222,6 +222,9 @@ pub struct Config {
     /// "turbo", "dracula"… /theme list lists them) or a theme file's name, from
     /// `themes/<name>.toml` next to this file.
     pub theme: ThemeId,
+    /// What `theme = "auto"` picks on a dark background, and on a light one.
+    pub theme_dark: ThemeId,
+    pub theme_light: ThemeId,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,
     /// Scripts' settings, by script: `[script_settings.watchwords]`.
@@ -281,6 +284,8 @@ impl Default for Config {
             title: "{window}{activity} — Textrix".into(),
             encrypt_store: true,
             theme: ThemeId::default(),
+            theme_dark: ThemeId::Builtin(ThemeName::Default),
+            theme_light: ThemeId::Builtin(ThemeName::Light),
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
             script_settings: BTreeMap::new(),
@@ -496,6 +501,11 @@ pub const DEFAULT_STATUSBAR: [&str; 10] =
 impl Config {
     /// Settings that the types alone don't check.
     fn check(&self) -> Result<()> {
+        for (key, theme) in [("theme_dark", &self.theme_dark), ("theme_light", &self.theme_light)] {
+            if *theme == ThemeId::Auto {
+                anyhow::bail!("{key} names the theme auto picks, so it can't be auto itself");
+            }
+        }
         for (key, items) in [("statusbar", &self.statusbar), ("statusbar2", &self.statusbar2)] {
             if let Some(bad) = items.iter().find(|i| !STATUS_ITEMS.iter().any(|(name, _)| name == i)) {
                 let names: Vec<&str> = STATUS_ITEMS.iter().map(|(n, _)| *n).collect();
@@ -515,6 +525,7 @@ impl Config {
     pub fn from_table(table: toml::Table, themes: &Path) -> Result<Self> {
         let mut cfg: Self = table.try_into()?;
         cfg.check()?;
+        crate::theme::set_auto(cfg.theme_dark.clone(), cfg.theme_light.clone());
         cfg.palette = Theme::load(&cfg.theme, &cfg.colors, themes)?;
         Ok(cfg)
     }
@@ -524,6 +535,7 @@ impl Config {
             Ok(text) => {
                 let mut cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
                 cfg.check().with_context(|| format!("in {}", path.display()))?;
+                crate::theme::set_auto(cfg.theme_dark.clone(), cfg.theme_light.clone());
                 let themes = path.with_file_name("themes");
                 cfg.palette =
                     Theme::load(&cfg.theme, &cfg.colors, &themes).with_context(|| format!("in {}", path.display()))?;

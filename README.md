@@ -545,6 +545,14 @@ few have other names too: `dark` (default), `phosphor` (green),
 `virtualboy` (red), `solarized` (solarized-dark), `mocha` (catppuccin),
 `ibm` (ibm5151), `outrun` (synthwave).
 
+`theme = "auto"` (first in the list) follows your terminal: when Textrix
+starts it asks the terminal for its background colour (or reads
+`COLORFGBG`, which some terminals set) and takes `theme_dark` on a dark
+one, `theme_light` on a light one: `default` and `light` unless you say
+otherwise, e.g. `theme_dark = "nord"` and `theme_light =
+"solarized-light"`. In the background (`--daemon`) it asks each terminal
+that attaches. A terminal that doesn't answer counts as dark.
+
 A room can keep a theme of its own, so work and play look different at
 a glance: `/theme here amber-deep` (or Ctrl+T in the list, for "just
 here"), `/theme here off` to give it yours again. `/theme space Work
@@ -554,7 +562,7 @@ screen takes the theme of the room you're in. These are kept in
 
 | Shelf | Themes |
 |---|---|
-| Plain | `default` (for dark backgrounds), `light`, `mono` (no colour at all: bold, underline and reverse video) |
+| Plain | `auto` (dark or light to match the terminal, see above), `default` (for dark backgrounds), `light`, `mono` (no colour at all: bold, underline and reverse video) |
 | Monitors | `green`, `blue`, `red` (Virtual Boy), `amber` and `purple`: one colour on black, each also `-deep` (on deep blue with every panel framed in double lines, like an 80s airport terminal) and `-tron` (on pure black with thin neon outlines). `mono-tron` is Tron in greys, and `ibm5151` the IBM monochrome display's green, its panels framed in ASCII |
 | Classic | `turbo` (Turbo Pascal's DOS blue), `procomm` (a DOS terminal program dialling a BBS), `c64`, `amiga` (Workbench 1.3), `delphi` (Delphi 7), `mirc`, `solarized-dark`, `solarized-light` |
 | Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha), `synthwave` (the 80s: neon pink and cyan on a midnight-purple sky, the sun setting in yellow and orange) |
@@ -699,6 +707,8 @@ nicklist = true            # member list (F3)
 mouse = true               # wheel and clicks (hold Shift/Option to select text)
 paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 theme = "default"          # or one of the others /theme list lists, or your own; [colors] overrides
+theme_dark = "default"     # what theme = "auto" picks on a dark background
+theme_light = "light"      # and on a light one
 title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain

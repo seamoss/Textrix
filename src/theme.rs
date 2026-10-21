@@ -190,6 +190,27 @@ pub enum ThemeId {
     Builtin(ThemeName),
     /// `~/.textrix/themes/<name>.toml`.
     File(String),
+    /// `theme_dark` or `theme_light`, to match the terminal's background.
+    Auto,
+}
+
+/// What `auto` picks from: (`theme_dark`, `theme_light`).
+static AUTO: std::sync::RwLock<(ThemeId, ThemeId)> =
+    std::sync::RwLock::new((ThemeId::Builtin(ThemeName::Default), ThemeId::Builtin(ThemeName::Light)));
+
+/// The themes `auto` picks from (neither of them `auto`).
+pub fn set_auto(dark: ThemeId, light: ThemeId) {
+    *AUTO.write().unwrap() = (dark, light);
+}
+
+/// The theme `auto` stands for now: the light one on a light background,
+/// else the dark one (also while the background isn't known).
+pub fn auto_choice() -> ThemeId {
+    pick_auto(AUTO.read().unwrap().clone(), crate::term::info().light)
+}
+
+fn pick_auto((dark, light): (ThemeId, ThemeId), light_background: Option<bool>) -> ThemeId {
+    if light_background == Some(true) { light } else { dark }
 }
 
 impl Default for ThemeId {
@@ -208,6 +229,9 @@ impl ThemeId {
     /// A built-in theme, or else a theme file's name (letters, digits, `-`
     /// and `_`, so it can't point anywhere but the themes folder).
     pub fn parse(name: &str) -> Result<Self> {
+        if name == "auto" {
+            return Ok(ThemeId::Auto);
+        }
         if let Some(builtin) = ThemeName::parse(name) {
             return Ok(ThemeId::Builtin(builtin));
         }
@@ -219,6 +243,7 @@ impl ThemeId {
         match self {
             ThemeId::Builtin(name) => name.name(),
             ThemeId::File(name) => name,
+            ThemeId::Auto => "auto",
         }
     }
 }
@@ -375,6 +400,8 @@ impl ThemeFile {
         let mut file = match id {
             ThemeId::Builtin(name) => ThemeFile { base: Some(name.name().to_owned()), ..ThemeFile::default() },
             ThemeId::File(name) => ThemeFile::read(&ThemeFile::path(dir, name))?,
+            // The one on screen.
+            ThemeId::Auto => return ThemeFile::of(&auto_choice(), overrides, dir),
         };
         file.name = None;
         file.colors.extend(overrides.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1027,6 +1054,7 @@ impl Theme {
     /// The same in full colour.
     fn resolve(id: &ThemeId, overrides: &BTreeMap<String, String>, dir: &Path) -> Result<Self> {
         let mut theme = match id {
+            ThemeId::Auto => return Self::resolve(&auto_choice(), overrides, dir),
             ThemeId::Builtin(name) => Self::builtin(*name),
             ThemeId::File(name) => {
                 let path = ThemeFile::path(dir, name);
@@ -1552,6 +1580,21 @@ mod tests {
         }
         assert_eq!(ThemeName::parse("virtualboy"), Some(ThemeName::Red));
         assert!(ThemeName::parse("chartreuse").is_none());
+    }
+
+    #[test]
+    fn auto_picks_by_the_background() {
+        assert_eq!(ThemeId::parse("auto").unwrap(), ThemeId::Auto);
+        assert_eq!(ThemeId::Auto.to_string(), "auto");
+        let pair = (ThemeId::Builtin(ThemeName::Nord), ThemeId::Builtin(ThemeName::SolarizedLight));
+        assert_eq!(pick_auto(pair.clone(), Some(true)), pair.1);
+        assert_eq!(pick_auto(pair.clone(), Some(false)), pair.0);
+        assert_eq!(pick_auto(pair.clone(), None), pair.0, "dark until the terminal says");
+        let table = |text: &str| toml::from_str::<toml::Table>(text).unwrap();
+        let cfg = crate::config::Config::from_table(table("theme = \"auto\"\ntheme_light = \"delphi\""), Path::new(""));
+        assert_eq!(cfg.unwrap().theme_light, ThemeId::Builtin(ThemeName::Delphi));
+        let err = crate::config::Config::from_table(table("theme_dark = \"auto\""), Path::new("")).unwrap_err();
+        assert!(format!("{err:#}").contains("can't be auto"), "{err:#}");
     }
 
     #[test]

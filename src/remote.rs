@@ -385,7 +385,9 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<bool> {
     let (mut from, mut to) = stream.into_split();
 
     let mut terminal = ratatui::try_init().map_err(|e| anyhow::anyhow!("Textrix needs a terminal ({e})"))?;
-    let picker = previews.then(|| Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()));
+    // The background for `theme = "auto"` too, whatever the daemon's theme.
+    let (picker, light) = crate::picture::query_terminal();
+    let picker = previews.then_some(picker);
     let enhanced_keys = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     let mut out = std::io::stdout();
     if enhanced_keys {
@@ -409,7 +411,7 @@ pub async fn attach(socket: &Path, previews: bool) -> Result<bool> {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             size: (size.width, size.height),
             picker: picker.as_ref().map(PickerInfo::of),
-            term: TermInfo::from_env(),
+            term: TermInfo { light: light.or(TermInfo::from_env().light), ..TermInfo::from_env() },
         };
         send(&mut to, &hello).await?;
         // Read messages in a task of their own: a half-read one must never be
