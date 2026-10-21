@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>~*~ THE THEME-O-RAMA ~*~</title>
+<meta name="description" content="Every Textrix theme, to try on: pick one and see the whole screen in it.">
+<style>
+  :root { --sky: #000033; --ink: #ffff66; --link: #00ffff; --visited: #ff66ff; --panel: #c0c0c0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--sky); }
+  body {
+    color: #fff;
+    font-family: "Comic Sans MS", "Comic Neue", "Chalkboard SE", cursive;
+    font-size: 17px;
+    line-height: 1.5;
+    background-image:
+      radial-gradient(1px 1px at 20px 30px, #fff 50%, transparent 51%),
+      radial-gradient(1px 1px at 140px 90px, #aaf 50%, transparent 51%),
+      radial-gradient(2px 2px at 230px 160px, #fff 50%, transparent 51%);
+    background-size: 280px 240px;
+  }
+  a { color: var(--link); }
+  a:visited { color: var(--visited); }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; }
+  h1 {
+    font-family: Impact, "Arial Black", sans-serif;
+    font-size: clamp(2rem, 7vw, 3.6rem);
+    text-align: center;
+    margin: 0.3em 0 0.1em;
+    letter-spacing: 0.04em;
+    background: linear-gradient(90deg, #f00, #f90, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: rainbow 4s linear infinite;
+    filter: drop-shadow(3px 3px 0 #000);
+  }
+  @keyframes rainbow { to { background-position: 200% center; } }
+  @media (prefers-reduced-motion: reduce) { h1 { animation: none; } }
+  .sub { text-align: center; color: var(--ink); margin: 0 0 18px; }
+
+  .rama { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .rama > * { min-width: 0; }
+  .list {
+    position: sticky;
+    top: 10px;
+    max-height: calc(100vh - 20px);
+    overflow-y: auto;
+    background: var(--panel);
+    border: 4px outset #fff;
+    padding: 4px;
+    color: #000;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 15px;
+  }
+  .list h2 {
+    margin: 8px 4px 2px;
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #000080;
+  }
+  .list button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 2px 6px;
+    border: 0;
+    background: none;
+    color: #000;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .list button:hover { background: #dcdcdc; }
+  .list button[aria-selected="true"] { background: #000080; color: #fff; }
+  .list button:focus-visible { outline: 2px dotted #000; outline-offset: -2px; }
+  .swatch {
+    flex: none;
+    width: 38px;
+    height: 20px;
+    border: 1px solid #000;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 12px;
+    border-bottom-width: 4px;
+  }
+
+  .stage img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 928 / 654;
+    border: 4px outset var(--panel);
+    box-shadow: 8px 8px 0 #000;
+    background: #15161c;
+  }
+  .stage h2 {
+    font-family: "Times New Roman", Times, serif;
+    color: #ff66ff;
+    text-shadow: 2px 2px #000;
+    margin: 18px 0 0;
+    font-size: 2rem;
+  }
+  .stage .shelf { color: #0ff; font-family: "Courier New", monospace; font-size: 0.95rem; }
+  .stage .about { margin: 4px 0 12px; font-size: 1.1rem; }
+  pre.cmd {
+    background: #000;
+    color: #0f0;
+    border: 3px inset var(--panel);
+    padding: 10px 14px;
+    font-family: "SF Mono", Menlo, Consolas, "Courier New", monospace;
+    font-size: 15px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  pre.cmd .c { color: #888; }
+  .tips { color: var(--ink); }
+  .tips code, .more code { background: #002; color: #0f0; padding: 0 4px; }
+  .more {
+    margin-top: 28px;
+    background: #fff;
+    color: #000;
+    border: 4px outset var(--panel);
+    padding: 6px 20px 12px;
+    box-shadow: 8px 8px 0 #000;
+    font-family: "Times New Roman", Times, serif;
+    font-size: 18px;
+  }
+  .more h2 { font-family: "Comic Sans MS", "Comic Neue", cursive; color: #800080; border-bottom: 3px ridge #800080; }
+  .more a { color: #0000ee; }
+  .more code { background: #ffffcc; color: #000; border: 1px solid #ccc; }
+  footer { text-align: center; margin: 30px 0 10px; color: #aaa; font-size: 14px; }
+
+  @media (max-width: 760px) {
+    .rama { grid-template-columns: minmax(0, 1fr); }
+    .list { position: relative; top: 0; max-height: 38vh; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>THE THEME-O-RAMA</h1>
+  <p class="sub"><span id="count">All the</span> themes, to try on. Pick one and the whole screen changes, just like <code>/themes</code> does. <a href="./">← back home</a></p>
+
+  <div class="rama">
+    <nav class="list" id="list" role="listbox" aria-label="Themes"></nav>
+    <section class="stage" aria-live="polite">
+      <img id="shot" src="screenshots/themes/turbo.svg" alt="Textrix in the turbo theme" width="928" height="654">
+      <h2 id="name">turbo</h2>
+      <div class="shelf" id="shelf"></div>
+      <p class="about" id="about"></p>
+      <pre class="cmd">/theme <span id="cmd">turbo</span>       <span class="c"># try it in Textrix; /save keeps it</span>
+theme = "<span id="cfg">turbo</span>"   <span class="c"># or put it in config.toml</span></pre>
+      <p class="tips">↑ ↓ (or j k) flick through them. Send someone a link to the one you're on: it's in the address bar.</p>
+    </section>
+  </div>
+  <noscript><p class="tips">This page needs JavaScript to flick through them; the <a href="https://github.com/seamoss/Textrix#themes">README</a> lists them all.</p></noscript>
+
+  <div class="more">
+    <h2>More things to do with themes</h2>
+    <p><code>theme = "auto"</code> follows your terminal: Textrix asks it for its background colour when it starts and takes <code>theme_dark</code> on a dark one, <code>theme_light</code> on a light one.</p>
+    <p>Give a room a theme of its own, so work looks like work: <code>/theme here turbo</code>, or a whole space with <code>/theme space Work noir</code>.</p>
+    <p>Make your own: <code>/theme save mine</code> writes the one you're on (with your <code>[colors]</code> changes) to a file you can edit and send to a friend, and <code>/theme import mine.toml</code> takes theirs. The <a href="https://github.com/seamoss/Textrix#themes">README</a> says how.</p>
+    <p>The <b>accessible</b> shelf is for colour blindness and low vision: <code>colorblind</code> and <code>colorblind-light</code> never put red against green (online is blue, away is orange), <code>tritan</code> is for blue-yellow colour blindness, and <code>high-contrast</code> is black and white with yellow and cyan.</p>
+  </div>
+
+  <footer>Textrix v{{VERSION}} · <a href="./">home</a> · <a href="changelog.html">what's new</a> · <a href="https://github.com/seamoss/Textrix">source</a></footer>
+</main>
+<script>
+(() => {
+  // Shelves in the order they're shown, with their names.
+  const SHELVES = [
+    ["classic", "Classic"], ["nouveau", "Nouveau"], ["wild", "Wild"],
+    ["accessible", "Accessible"], ["monitors", "Monitors"], ["plain", "Plain"],
+  ];
+  const list = document.getElementById("list");
+  const $ = (id) => document.getElementById(id);
+  let themes = [];
+  let at = 0;
+
+  function show(n, scroll) {
+    at = Math.max(0, Math.min(themes.length - 1, n));
+    const t = themes[at];
+    $("shot").src = `screenshots/themes/${t.name}.svg`;
+    $("shot").alt = `Textrix in the ${t.name} theme: ${t.about}`;
+    $("name").textContent = t.name;
+    $("cmd").textContent = t.name;
+    $("cfg").textContent = t.name;
+    $("about").textContent = t.about.charAt(0).toUpperCase() + t.about.slice(1) + ".";
+    $("shelf").textContent = "» " + (SHELVES.find(([k]) => k === t.shelf) || [, t.shelf])[1];
+    for (const b of list.querySelectorAll("button")) {
+      b.setAttribute("aria-selected", b.dataset.n == at ? "true" : "false");
+      b.tabIndex = b.dataset.n == at ? 0 : -1;
+    }
+    // Keep the chosen one in view in the list (only the list scrolls).
+    const button = list.querySelector(`button[data-n="${at}"]`);
+    if (scroll && button) {
+      const top = button.offsetTop, bottom = top + button.offsetHeight;
+      if (top < list.scrollTop + 24) list.scrollTop = Math.max(0, top - 24);
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight + 4;
+    }
+    history.replaceState(null, "", "#" + t.name);
+    // The next ones are a key press away.
+    for (const k of [at - 1, at + 1]) {
+      if (themes[k]) new Image().src = `screenshots/themes/${themes[k].name}.svg`;
+    }
+  }
+
+  fetch("screenshots/themes/themes.json")
+    .then((r) => r.json())
+    .then((all) => {
+      for (const [shelf, title] of SHELVES) {
+        const here = all.filter((t) => t.shelf === shelf);
+        if (!here.length) continue;
+        const h = document.createElement("h2");
+        h.textContent = title;
+        list.append(h);
+        for (const t of here) {
+          const n = themes.push(t) - 1;
+          const b = document.createElement("button");
+          b.type = "button";
+          b.setAttribute("role", "option");
+          b.dataset.n = n;
+          const sw = document.createElement("span");
+          sw.className = "swatch";
+          sw.style.background = t.bg;
+          sw.style.color = t.fg;
+          sw.style.borderBottomColor = t.accent;
+          sw.textContent = "Aa";
+          b.append(sw, document.createTextNode(t.name));
+          b.addEventListener("click", () => show(n, false));
+          list.append(b);
+        }
+      }
+      $("count").textContent = `${themes.length}`;
+      show(Math.max(0, wanted()), true);
+    });
+
+  // The theme in the address (#dracula), from a link or Back.
+  const wanted = () => themes.findIndex((t) => t.name === decodeURIComponent(location.hash.slice(1)));
+  addEventListener("hashchange", () => {
+    if (wanted() >= 0 && wanted() !== at) show(wanted(), true);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || !themes.length) return;
+    const moves = { ArrowDown: 1, j: 1, ArrowUp: -1, k: -1, PageDown: 8, PageUp: -8 };
+    if (e.key in moves) show(at + moves[e.key], true);
+    else if (e.key === "Home") show(0, true);
+    else if (e.key === "End") show(themes.length - 1, true);
+    else return;
+    e.preventDefault();
+    list.querySelector(`button[data-n="${at}"]`)?.focus({ preventScroll: true });
+  });
+})();
+</script>
+</body>
+</html>

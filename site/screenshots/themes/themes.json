@@ -224,6 +224,38 @@
     "shelf": "classic"
   },
   {
+    "about": "the original Game Boy's four greens",
+    "accent": "#0f380f",
+    "bg": "#9bbc0f",
+    "fg": "#0f380f",
+    "name": "gameboy",
+    "shelf": "classic"
+  },
+  {
+    "about": "Ceefax: eight colours on black, yellow on blue up top",
+    "accent": "#ffff00",
+    "bg": "#000000",
+    "fg": "#ffffff",
+    "name": "teletext",
+    "shelf": "classic"
+  },
+  {
+    "about": "a fatal exception has occurred: white on Windows blue",
+    "accent": "#ffffff",
+    "bg": "#0000aa",
+    "fg": "#ffffff",
+    "name": "bsod",
+    "shelf": "classic"
+  },
+  {
+    "about": "Windows 3.1's Hot Dog Stand: ketchup and mustard",
+    "accent": "#ff0000",
+    "bg": "#ffff00",
+    "fg": "#000000",
+    "name": "hotdog-stand",
+    "shelf": "classic"
+  },
+  {
     "about": "Monokai",
     "accent": "#66d9ef",
     "bg": "#272822",
@@ -270,70 +302,6 @@
     "fg": "#f4e9ff",
     "name": "synthwave",
     "shelf": "nouveau"
-  },
-  {
-    "about": "for red-green colour blindness: blue and orange, never red against green",
-    "accent": "#56b4e9",
-    "bg": "#121417",
-    "fg": "#e6e6e6",
-    "name": "colorblind",
-    "shelf": "accessible"
-  },
-  {
-    "about": "the same on a light background",
-    "accent": "#0072b2",
-    "bg": "#fbfbf8",
-    "fg": "#1d1f23",
-    "name": "colorblind-light",
-    "shelf": "accessible"
-  },
-  {
-    "about": "for blue-yellow colour blindness: red against cyan",
-    "accent": "#4fd1d9",
-    "bg": "#141414",
-    "fg": "#ececec",
-    "name": "tritan",
-    "shelf": "accessible"
-  },
-  {
-    "about": "black and white with yellow and cyan, as clear as it gets",
-    "accent": "#00ffff",
-    "bg": "#000000",
-    "fg": "#ffffff",
-    "name": "high-contrast",
-    "shelf": "accessible"
-  },
-  {
-    "about": "the original Game Boy's four greens",
-    "accent": "#0f380f",
-    "bg": "#9bbc0f",
-    "fg": "#0f380f",
-    "name": "gameboy",
-    "shelf": "classic"
-  },
-  {
-    "about": "Ceefax: eight colours on black, yellow on blue up top",
-    "accent": "#ffff00",
-    "bg": "#000000",
-    "fg": "#ffffff",
-    "name": "teletext",
-    "shelf": "classic"
-  },
-  {
-    "about": "a fatal exception has occurred: white on Windows blue",
-    "accent": "#ffffff",
-    "bg": "#0000aa",
-    "fg": "#ffffff",
-    "name": "bsod",
-    "shelf": "classic"
-  },
-  {
-    "about": "Windows 3.1's Hot Dog Stand: ketchup and mustard",
-    "accent": "#ff0000",
-    "bg": "#ffff00",
-    "fg": "#000000",
-    "name": "hotdog-stand",
-    "shelf": "classic"
   },
   {
     "about": "art deco at dusk: flamingo pink and pool aqua over the ocean",
@@ -406,5 +374,37 @@
     "fg": "#fff6e0",
     "name": "disco",
     "shelf": "wild"
+  },
+  {
+    "about": "for red-green colour blindness: blue and orange, never red against green",
+    "accent": "#56b4e9",
+    "bg": "#121417",
+    "fg": "#e6e6e6",
+    "name": "colorblind",
+    "shelf": "accessible"
+  },
+  {
+    "about": "the same on a light background",
+    "accent": "#0072b2",
+    "bg": "#fbfbf8",
+    "fg": "#1d1f23",
+    "name": "colorblind-light",
+    "shelf": "accessible"
+  },
+  {
+    "about": "for blue-yellow colour blindness: red against cyan",
+    "accent": "#4fd1d9",
+    "bg": "#141414",
+    "fg": "#ececec",
+    "name": "tritan",
+    "shelf": "accessible"
+  },
+  {
+    "about": "black and white with yellow and cyan, as clear as it gets",
+    "accent": "#00ffff",
+    "bg": "#000000",
+    "fg": "#ffffff",
+    "name": "high-contrast",
+    "shelf": "accessible"
   }
 ]

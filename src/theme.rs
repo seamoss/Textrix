@@ -145,20 +145,16 @@ impl ThemeName {
         ("mirc", ThemeName::Mirc),
         ("solarized-dark", ThemeName::SolarizedDark),
         ("solarized-light", ThemeName::SolarizedLight),
+        ("gameboy", ThemeName::Gameboy),
+        ("teletext", ThemeName::Teletext),
+        ("bsod", ThemeName::Bsod),
+        ("hotdog-stand", ThemeName::HotdogStand),
         ("monokai", ThemeName::Monokai),
         ("dracula", ThemeName::Dracula),
         ("nord", ThemeName::Nord),
         ("gruvbox", ThemeName::Gruvbox),
         ("catppuccin", ThemeName::Catppuccin),
         ("synthwave", ThemeName::Synthwave),
-        ("colorblind", ThemeName::Colorblind),
-        ("colorblind-light", ThemeName::ColorblindLight),
-        ("tritan", ThemeName::Tritan),
-        ("high-contrast", ThemeName::HighContrast),
-        ("gameboy", ThemeName::Gameboy),
-        ("teletext", ThemeName::Teletext),
-        ("bsod", ThemeName::Bsod),
-        ("hotdog-stand", ThemeName::HotdogStand),
         ("miami-heat", ThemeName::MiamiHeat),
         ("cemetery", ThemeName::Cemetery),
         ("summer-evening", ThemeName::SummerEvening),
@@ -168,6 +164,10 @@ impl ThemeName {
         ("vaporwave", ThemeName::Vaporwave),
         ("radioactive", ThemeName::Radioactive),
         ("disco", ThemeName::Disco),
+        ("colorblind", ThemeName::Colorblind),
+        ("colorblind-light", ThemeName::ColorblindLight),
+        ("tritan", ThemeName::Tritan),
+        ("high-contrast", ThemeName::HighContrast),
     ];
 
     /// A theme by name (also "dark", "phosphor", "virtualboy",
@@ -2145,6 +2145,18 @@ mod tests {
         }
         assert_eq!(ThemeName::parse("virtualboy"), Some(ThemeName::Red));
         assert!(ThemeName::parse("chartreuse").is_none());
+    }
+
+    #[test]
+    fn each_shelf_is_together() {
+        let shelves: Vec<&str> = ThemeName::ALL.iter().map(|(_, t)| t.group()).collect();
+        let mut seen: Vec<&str> = Vec::new();
+        for shelf in shelves {
+            if seen.last() != Some(&shelf) {
+                assert!(!seen.contains(&shelf), "{shelf} comes twice in ThemeName::ALL");
+                seen.push(shelf);
+            }
+        }
     }
 
     #[test]

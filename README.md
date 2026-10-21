@@ -543,7 +543,8 @@ config.toml. `/theme <name>` goes straight to one, `/theme list` lists
 them in the status window, and `--theme <name>` picks one for a run. A
 few have other names too: `dark` (default), `phosphor` (green),
 `virtualboy` (red), `solarized` (solarized-dark), `mocha` (catppuccin),
-`ibm` (ibm5151), `outrun` (synthwave).
+`ibm` (ibm5151), `outrun` (synthwave), `cemetary` (cemetery),
+`colourblind` (colorblind), and a few more.
 
 `theme = "auto"` (first in the list) follows your terminal: when Textrix
 starts it asks the terminal for its background colour (or reads
@@ -564,8 +565,10 @@ screen takes the theme of the room you're in. These are kept in
 |---|---|
 | Plain | `auto` (dark or light to match the terminal, see above), `default` (for dark backgrounds), `light`, `mono` (no colour at all: bold, underline and reverse video) |
 | Monitors | `green`, `blue`, `red` (Virtual Boy), `amber` and `purple`: one colour on black, each also `-deep` (on deep blue with every panel framed in double lines, like an 80s airport terminal) and `-tron` (on pure black with thin neon outlines). `mono-tron` is Tron in greys, and `ibm5151` the IBM monochrome display's green, its panels framed in ASCII |
-| Classic | `turbo` (Turbo Pascal's DOS blue), `procomm` (a DOS terminal program dialling a BBS), `c64`, `amiga` (Workbench 1.3), `delphi` (Delphi 7), `mirc`, `solarized-dark`, `solarized-light` |
-| Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha), `synthwave` (the 80s: neon pink and cyan on a midnight-purple sky, the sun setting in yellow and orange) |
+| Classic | `turbo` (Turbo Pascal's DOS blue), `procomm` (a DOS terminal program dialling a BBS), `c64`, `amiga` (Workbench 1.3), `delphi` (Delphi 7), `mirc`, `solarized-dark`, `solarized-light`, `gameboy` (the original's four greens), `teletext` (Ceefax), `bsod` (white on Windows blue), `hotdog-stand` (Windows 3.1's red and yellow) |
+| Nouveau | `monokai`, `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha), `synthwave` (the 80s: neon pink and cyan on a midnight-purple sky, the sun setting in yellow and orange), `miami-heat` (art deco at dusk), `cemetery` (granite, moss and candlelight), `summer-evening` (light: a peach sky, coral and lavender), `abyss` (deep-sea glow), `noir` (black and white, red for what matters), `espresso` |
+| Wild | `vaporwave` (pastel pink, teal and Windows 95 grey), `radioactive` (toxic green and hazard stripes), `disco` (a mirror ball) |
+| Accessible | `colorblind` and `colorblind-light` (for red-green colour blindness: blue and orange, never red against green; online is blue, away orange), `tritan` (for blue-yellow colour blindness: red against cyan), `high-contrast` (black and white with yellow and cyan) |
 
 <table>
 <tr>
@@ -580,7 +583,7 @@ screen takes the theme of the room you're in. These are kept in
 </tr>
 </table>
 
-The website has [every theme](https://seamoss.github.io/Textrix/#themes).
+The website has [every theme to try on](https://seamoss.github.io/Textrix/themes.html).
 The plain themes use your terminal's own background; the rest bring their
 own, and the Tron ones are #000000 whatever your terminal's colour scheme
 calls black. In terminals without 24-bit colour (no
