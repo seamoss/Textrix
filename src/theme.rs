@@ -79,6 +79,14 @@ pub enum ThemeName {
     /// The 80s as remembered: neon pink and cyan on a midnight-purple
     /// sky, with a sunset in yellow and orange ("outrun" works too).
     Synthwave,
+    /// For red-green colour blindness: blue and orange, never red against green.
+    Colorblind,
+    /// The same on a light background.
+    ColorblindLight,
+    /// For blue-yellow colour blindness: red against cyan.
+    Tritan,
+    /// Black and white with yellow and cyan, as clear as it gets.
+    HighContrast,
     /// The original Game Boy's four greens.
     Gameboy,
     /// Ceefax: eight colours on black, yellow on blue up top.
@@ -108,7 +116,7 @@ pub enum ThemeName {
 }
 
 impl ThemeName {
-    pub const ALL: [(&str, ThemeName); 47] = [
+    pub const ALL: [(&str, ThemeName); 51] = [
         ("default", ThemeName::Default),
         ("light", ThemeName::Light),
         ("mono", ThemeName::Mono),
@@ -143,6 +151,10 @@ impl ThemeName {
         ("gruvbox", ThemeName::Gruvbox),
         ("catppuccin", ThemeName::Catppuccin),
         ("synthwave", ThemeName::Synthwave),
+        ("colorblind", ThemeName::Colorblind),
+        ("colorblind-light", ThemeName::ColorblindLight),
+        ("tritan", ThemeName::Tritan),
+        ("high-contrast", ThemeName::HighContrast),
         ("gameboy", ThemeName::Gameboy),
         ("teletext", ThemeName::Teletext),
         ("bsod", ThemeName::Bsod),
@@ -170,6 +182,10 @@ impl ThemeName {
             "catppuccin-mocha" | "mocha" => Some(ThemeName::Catppuccin),
             "ibm" | "5151" => Some(ThemeName::Ibm5151),
             "outrun" => Some(ThemeName::Synthwave),
+            "colourblind" | "deutan" | "protan" => Some(ThemeName::Colorblind),
+            "colourblind-light" => Some(ThemeName::ColorblindLight),
+            "tritanopia" => Some(ThemeName::Tritan),
+            "contrast" => Some(ThemeName::HighContrast),
             "dmg" => Some(ThemeName::Gameboy),
             "ceefax" => Some(ThemeName::Teletext),
             "bluescreen" => Some(ThemeName::Bsod),
@@ -220,6 +236,10 @@ impl ThemeName {
             Gruvbox => "Gruvbox, dark",
             Catppuccin => "Catppuccin Mocha",
             Synthwave => "the 80s: neon pink and cyan on a midnight sky",
+            Colorblind => "for red-green colour blindness: blue and orange, never red against green",
+            ColorblindLight => "the same on a light background",
+            Tritan => "for blue-yellow colour blindness: red against cyan",
+            HighContrast => "black and white with yellow and cyan, as clear as it gets",
             Gameboy => "the original Game Boy's four greens",
             Teletext => "Ceefax: eight colours on black, yellow on blue up top",
             Bsod => "a fatal exception has occurred: white on Windows blue",
@@ -248,6 +268,7 @@ impl ThemeName {
             Monokai | Dracula | Nord | Gruvbox | Catppuccin | Synthwave | MiamiHeat | Cemetery | SummerEvening
             | Abyss | Noir | Espresso => "nouveau",
             Vaporwave | Radioactive | Disco => "wild",
+            Colorblind | ColorblindLight | Tritan | HighContrast => "accessible",
         }
     }
 }
@@ -1301,6 +1322,114 @@ const DISCO: Palette = Palette {
     nicks: &[0xff3b3b, 0xff9f1c, 0xffe600, 0x3bff6f, 0x00e5ff, 0x6b5bff, 0xff2fd0],
 };
 
+/// For red-green colour blindness: blue and orange, never red against green.
+const COLORBLIND: Palette = Palette {
+    bg: 0x121417,
+    fg: 0xe6e6e6,
+    dim: 0x8a8f98,
+    muted: 0xb0b4ba,
+    bar: [0x121417, 0x56b4e9],
+    bar_accent: 0x0b3a56,
+    bar_alert: 0x121417,
+    pane: [0xb0b4ba, 0x23272e],
+    current: [0x121417, 0xe69f00],
+    accent: 0x56b4e9,
+    highlight: 0xf0e442,
+    highlight_text: 0xe69f00,
+    error: 0xe0661a,
+    link: 0x56b4e9,
+    mention: 0xf0e442,
+    code: 0xcc79a7,
+    syntax: [0x8a8f98, 0x56b4e9, 0xf0e442, 0xe69f00, 0xcc79a7, 0x9ab8ff],
+    good: 0x56b4e9,
+    warn: 0xe69f00,
+    border: 0x3a3f47,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0xe69f00, 0x56b4e9, 0x009e73, 0xf0e442, 0xcc79a7, 0xe0661a, 0x9ab8ff],
+};
+
+/// The same on a light background.
+const COLORBLIND_LIGHT: Palette = Palette {
+    bg: 0xfbfbf8,
+    fg: 0x1d1f23,
+    dim: 0x6b7078,
+    muted: 0x4d525a,
+    bar: [0xffffff, 0x0072b2],
+    bar_accent: 0xcfe8f7,
+    bar_alert: 0xf0e442,
+    pane: [0x1d1f23, 0xe4e7eb],
+    current: [0x1d1f23, 0xe69f00],
+    accent: 0x0072b2,
+    highlight: 0xa65200,
+    highlight_text: 0x8f4700,
+    error: 0xb33c00,
+    link: 0x0072b2,
+    mention: 0x8a5a00,
+    code: 0x6d3a8c,
+    syntax: [0x6b7078, 0x0072b2, 0x7a6100, 0xa65200, 0x6d3a8c, 0x00664a],
+    good: 0x0072b2,
+    warn: 0xa65200,
+    border: 0xc9cdd3,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0x0072b2, 0xa65200, 0x00795a, 0x7a6100, 0xa6328a, 0xb33c00, 0x4b4fb8],
+};
+
+/// For blue-yellow colour blindness: red against cyan.
+const TRITAN: Palette = Palette {
+    bg: 0x141414,
+    fg: 0xececec,
+    dim: 0x8c8c8c,
+    muted: 0xb5b5b5,
+    bar: [0x141414, 0x4fd1d9],
+    bar_accent: 0x0d4a4e,
+    bar_alert: 0x141414,
+    pane: [0xb5b5b5, 0x262626],
+    current: [0x141414, 0xff6b6b],
+    accent: 0x4fd1d9,
+    highlight: 0xff6b6b,
+    highlight_text: 0xff9d9d,
+    error: 0xff5c8a,
+    link: 0x4fd1d9,
+    mention: 0xff6b6b,
+    code: 0xffb3c1,
+    syntax: [0x8c8c8c, 0xff6b6b, 0x4fd1d9, 0xffb3c1, 0xe0e0e0, 0x8fe3e8],
+    good: 0x4fd1d9,
+    warn: 0xff6b6b,
+    border: 0x3a3a3a,
+    outlines: Outlines::None,
+    message_colors: true,
+    nicks: &[0xff6b6b, 0x4fd1d9, 0xffb3c1, 0xe0e0e0, 0x2bb3bd, 0xff9d9d, 0xc4f1f4],
+};
+
+/// Black and white with yellow and cyan, as clear as it gets.
+const HIGH_CONTRAST: Palette = Palette {
+    bg: 0x000000,
+    fg: 0xffffff,
+    dim: 0xc0c0c0,
+    muted: 0xe0e0e0,
+    bar: [0x000000, 0xffff00],
+    bar_accent: 0x000000,
+    bar_alert: 0x000000,
+    pane: [0xffffff, 0x333333],
+    current: [0x000000, 0x00ffff],
+    accent: 0x00ffff,
+    highlight: 0xffff00,
+    highlight_text: 0xffff00,
+    error: 0xff6060,
+    link: 0x00ffff,
+    mention: 0xffff00,
+    code: 0xffffff,
+    syntax: [0xc0c0c0, 0x00ffff, 0xffff00, 0xff9eff, 0xffffff, 0x9eff9e],
+    good: 0x00ffff,
+    warn: 0xffff00,
+    border: 0xffffff,
+    outlines: Outlines::Plain,
+    message_colors: false,
+    nicks: &[0xffffff, 0xffff00, 0x00ffff, 0xff9eff, 0x9eff9e, 0xffcc66],
+};
+
 const NORD: Palette = Palette {
     bg: 0x2e3440,
     fg: 0xd8dee9,
@@ -1531,6 +1660,10 @@ impl Theme {
             ThemeName::Gruvbox => Self::palette(&GRUVBOX),
             ThemeName::Catppuccin => Self::palette(&CATPPUCCIN),
             ThemeName::Synthwave => Self::palette(&SYNTHWAVE),
+            ThemeName::Colorblind => Self::palette(&COLORBLIND),
+            ThemeName::ColorblindLight => Self::palette(&COLORBLIND_LIGHT),
+            ThemeName::Tritan => Self::palette(&TRITAN),
+            ThemeName::HighContrast => Self::palette(&HIGH_CONTRAST),
             ThemeName::Gameboy => Self::palette(&GAMEBOY),
             ThemeName::Teletext => Self::palette(&TELETEXT),
             ThemeName::Bsod => Self::palette(&BSOD),
@@ -2054,8 +2187,9 @@ mod tests {
 
     #[test]
     fn classic_nouveau_and_wild_themes_read_well() {
-        for (name, id) in
-            ThemeName::ALL.into_iter().filter(|(_, t)| matches!(t.group(), "classic" | "nouveau" | "wild"))
+        for (name, id) in ThemeName::ALL
+            .into_iter()
+            .filter(|(_, t)| matches!(t.group(), "classic" | "nouveau" | "wild" | "accessible"))
         {
             let t = Theme::builtin(id);
             let bg = t.base.bg;

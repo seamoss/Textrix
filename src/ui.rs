@@ -2097,14 +2097,21 @@ fn hanging(cells: &[(char, Style)]) -> Vec<(char, Style)> {
 }
 
 /// A colour on the bar, unless it would vanish into it (the same colour,
-/// or nearly as bright): then the bar's own text, marked by `instead`.
+/// or too little contrast): then the bar's own text, marked by `instead`.
 fn on_bar(t: &Theme, style: Style, instead: Modifier) -> Style {
-    let brightness = |c: Option<Color>| match c {
-        Some(Color::Rgb(r, g, b)) => Some(0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)),
+    // WCAG's relative luminance.
+    let luminance = |c: Option<Color>| match c {
+        Some(Color::Rgb(r, g, b)) => {
+            let lin = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            Some(0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b))
+        }
         _ => None,
     };
-    let lost = style.fg == t.bar.bg
-        || brightness(style.fg).zip(brightness(t.bar.bg)).is_some_and(|(a, b)| (a - b).abs() < 40.0);
+    let contrast = |(a, b): (f64, f64)| (a.max(b) + 0.05) / (a.min(b) + 0.05);
+    let lost = style.fg == t.bar.bg || luminance(style.fg).zip(luminance(t.bar.bg)).is_some_and(|l| contrast(l) < 2.0);
     if lost { t.bar.add_modifier(instead) } else { t.bar.patch(style) }
 }
 
