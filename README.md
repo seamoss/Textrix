@@ -152,7 +152,7 @@ unencrypted too.
 | PgUp / PgDn | scroll (older history loads at the top) |
 | Tab | complete commands, nicks (adds a mention), `:emoji` shortcodes, server names, file paths |
 | Up / Down | input history |
-| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react, `u` who sent it, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details (and what an edited message said before), Esc leaves |
+| Alt+Up | **select** a message: ↑/↓ PgUp/PgDn g/G move; `r` reply, `e` edit, `d` delete, `+` react (an emoji picker: your recent ones and custom emoji first, arrows to choose, type to search; with nothing matching, Enter reacts with what you typed), `u` who sent it, `t` thread, `f` forward, `p` pin/unpin, `z` view an image full screen or play audio or video, Enter vote in a poll, `s` save attachment, `o` open link, `v` spoilers, `c` copy, `i` details (and what an edited message said before), Esc leaves |
 | Shift+Up, or Ctrl+E on an empty line | **edit** your messages: ↑/↓ pick one (it loads into the input line), Enter saves, clear + Enter deletes, Esc restores your draft |
 | Shift+Enter (Alt+Enter in Terminal.app/tmux) | new line in the message |
 | F1 / F2 / F3 / F4 | full-screen help (type to filter) / window list / member list / home (what's waiting) |

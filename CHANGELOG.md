@@ -7,6 +7,49 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.15.0] - 2026-10-20
+
+### Added
+- An emoji picker: `+` on a message in selection mode opens it, with your
+  recent reactions first, then your custom emoji, then every emoji by
+  group. Arrows choose, typing searches by name or shortcode, Enter or a
+  click reacts; with nothing matching, Enter reacts with what you typed.
+- `notify_command`: a command of yours run for each notification
+  (mentions, DMs, rooms set to `/notify all`), with who, where and what in
+  `TEXTRIX_*` environment variables, never in the command itself. Push
+  mentions to your phone, say. Four at most at once, 30 seconds each; a
+  failure is reported once.
+- `theme = "auto"`: Textrix asks the terminal for its background colour
+  (or reads `COLORFGBG`) and takes `theme_dark` or `theme_light`, by
+  default `default` and `light`. Each terminal that attaches to a
+  background Textrix is asked too.
+- Alt+R (or `/jump new`) jumps to the new-messages line in the room, the
+  last message you'd read selected above it, loading history back to it.
+- `/changelog [N]`: what changed in the latest N releases (10 unless you
+  say), from GitHub's release notes, formatted, newest at the bottom.
+- Seventeen themes, fifty-one in all:
+  - `miami-heat`, `cemetery` (or `cemetary`), `summer-evening`, `abyss`,
+    `noir` and `espresso` on the nouveau shelf;
+  - `gameboy`, `teletext`, `bsod` and `hotdog-stand` on the classic shelf;
+  - a wild shelf: `vaporwave`, `radioactive` and `disco`;
+  - an accessible shelf: `colorblind` and `colorblind-light` for red-green
+    colour blindness (blue and orange, never red against green; online is
+    blue, away orange), `tritan` for blue-yellow colour blindness, and
+    `high-contrast`. Checked against simulated colour blindness.
+- The website's themes have a page of their own, to try them on: pick one
+  and see the whole screen in it, with a link to it to send someone.
+
+### Changed
+- Wrapped list items and quotes line up under their own text (quote bars
+  repeated), and a word that ends right at the edge of the window stays on
+  its row.
+- Scripts can't change settings that run programs (`notify_command`,
+  `editor`, `video_player`), as they can't run `/exec`.
+
+### Fixed
+- Activity numbers on the status bar no longer vanish when their colour
+  is the bar's (Game Boy, Hot Dog Stand, vaporwave).
+
 ## [0.14.0] - 2026-10-20
 
 ### Added
