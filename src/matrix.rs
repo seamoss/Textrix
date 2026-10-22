@@ -259,6 +259,12 @@ pub enum AppEvent {
         room_id: OwnedRoomId,
         txn_id: OwnedTransactionId,
     },
+    /// A plugin said something, or ended (`run` tells its runs apart).
+    Plugin {
+        name: String,
+        run: u64,
+        message: crate::plugin::FromPlugin,
+    },
     /// A voice message recorded in this window (`None`: thrown away).
     Voice {
         key: crate::app::WinKey,

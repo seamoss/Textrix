@@ -237,6 +237,7 @@ bindings.
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/changelog [N]` (what changed in the latest N releases, 10 unless you say, from GitHub's release notes), `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
 | Scripts | `/script` (or `/script list`) lists them, `/script load\|unload <name>`, `/script reload [name]` (no name: every file), `/script exec <code>`; see [Scripts](#scripts) |
+| Plugins | `/plugin` (or `/plugin list`), `/plugin new <name>` (a starter, granted the room you're in), `/plugin start\|stop\|restart\|log <name>`; see [Plugins](#plugins) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
 ![Two rooms side by side (/vsplit Book Club) in blue-tron, every panel framed in thin neon lines on pure black; a link in Book Club has its title and picture under it](site/screenshots/panes.svg)
@@ -695,6 +696,35 @@ and rate-limited to 5 messages per 10 seconds.
 [SCRIPTING.md](SCRIPTING.md) has the whole API, and
 [examples/scripts](examples/scripts) has dice, `/seen`, watch words, a
 DM counter and `/remind` to start from.
+
+### Plugins
+
+Plugins are the other half: programs, in any language, that Textrix starts
+and talks to over stdin and stdout (JSON-RPC, a line at a time). They hear
+what happens in the rooms config.toml grants them, add commands, and post,
+reply, react, edit and show a status-bar item there, as you. Unlike
+scripts they aren't sandboxed (they're programs like any you run), but
+they only reach the rooms you list.
+
+`/plugin new greeter` in a room writes a Python starter to
+`~/.textrix/plugins/greeter.py`, grants it that room in config.toml and
+starts it; `/plugin` lists them, `/plugin restart|stop|start|log <name>`.
+Python plugins `import textrix`, a helper Textrix keeps in that folder:
+
+```python
+import textrix
+
+bot = textrix.Plugin("says pong to !ping")
+
+@bot.on_message
+def heard(msg):
+    if msg["body"] == "!ping":
+        bot.send(msg["room"]["id"], "pong", reply_to=msg["event_id"])
+
+bot.run()
+```
+
+[PLUGINS.md](PLUGINS.md) has the protocol and the helper's API.
 
 ## Optional preferences
 

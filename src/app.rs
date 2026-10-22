@@ -960,6 +960,11 @@ pub struct App {
     pub invites: Vec<Invitation>,
     /// Gallery pictures the renderer wants, fetched after the draw.
     pub tile_requests: Vec<(OwnedEventId, Media)>,
+    /// Plugins from config.toml, running or not.
+    pub plugins: BTreeMap<String, plugins::PluginState>,
+    /// Plugins' messages on their way: our transaction ID → (plugin, the
+    /// request to answer).
+    plugin_sends: HashMap<matrix_sdk::ruma::OwnedTransactionId, (String, serde_json::Value)>,
     /// Messages the send queue sent before we heard its name for them.
     sent_early: HashMap<matrix_sdk::ruma::OwnedTransactionId, OwnedEventId>,
     /// A voice message being recorded, and the window it's for.
@@ -1108,6 +1113,11 @@ const COMMANDS: &[Cmd] = &[
         name: "exec",
         args: "[-o] <command>",
         help: "Run a shell command and show what it prints here; -o sends that to the room (not from scripts)",
+    },
+    Cmd {
+        name: "plugin",
+        args: "[list | start <name> | stop <name> | restart <name> | log <name>]",
+        help: "Plugins from config.toml: programs that hear and post in the rooms you grant them",
     },
     Cmd {
         name: "voice",
@@ -1534,6 +1544,8 @@ impl App {
             invites: Vec::new(),
             tile_requests: Vec::new(),
             recording: None,
+            plugins: BTreeMap::new(),
+            plugin_sends: HashMap::new(),
             sent_early: HashMap::new(),
             hooks: Default::default(),
             custom_emoji: HashMap::new(),
@@ -1594,6 +1606,9 @@ impl App {
         let _ = std::fs::remove_dir_all(self.paths.base.join("tmp"));
         self.scripts.set_data_dir(self.paths.base.join("script-data"));
         self.scripts.configure(&self.cfg.script_settings);
+        self.plugins =
+            self.cfg.plugins.iter().map(|(n, c)| (n.clone(), plugins::PluginState::new(c.clone()))).collect();
+        self.start_plugins();
         if self.cfg.scripts {
             for path in Scripts::available(&self.scripts_dir()) {
                 self.load_script(&path);
@@ -1697,6 +1712,7 @@ impl App {
     /// scripts' hooks.
     fn run_message_scripts(&mut self) {
         for (key, heard) in std::mem::take(&mut self.script_messages) {
+            self.tell_plugins(&key, &heard);
             let context = self.script_context(Some(&key));
             let dm = self.window_idx(&key.account, &key.room_id).is_some_and(|i| self.windows[i].is_dm);
             let member = |line: &Line, name: &str| script::Member {
@@ -2045,6 +2061,7 @@ impl App {
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
             AppEvent::Voice { key, voice } => self.voice_done(key, voice),
+            AppEvent::Plugin { name, run, message } => self.on_plugin(name, run, message),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
                     return;
@@ -2425,6 +2442,7 @@ impl App {
                 }
             }
             AppEvent::Sent { account, room_id, txn_id, event_id } => {
+                self.plugin_sent(&txn_id, Ok(&event_id));
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
                 if w.contains(&event_id) {
@@ -2432,7 +2450,7 @@ impl App {
                     w.lines.retain(|l| !(l.pending && l.txn_id.as_ref() == Some(&txn_id)));
                 } else if let Some(line) = w.lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id)) {
                     (line.pending, line.waiting, line.progress) = (false, false, None);
-                    line.event_id = Some(event_id);
+                    line.event_id = Some(event_id.clone());
                 } else {
                     // Sent before we heard the send queue's name for it.
                     self.sent_early.insert(txn_id, event_id);
@@ -2459,6 +2477,7 @@ impl App {
                 }
             }
             AppEvent::Queued { account, room_id, txn_id, queued } => {
+                self.plugin_renamed(&txn_id, queued.clone());
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 if let Some(line) =
                     self.windows[idx].lines.iter_mut().rev().find(|l| l.txn_id.as_ref() == Some(&txn_id))
@@ -2483,6 +2502,7 @@ impl App {
             }
             AppEvent::Bell(kind) => self.ring(kind),
             AppEvent::SendFailed { account, room_id, txn_id, error } => {
+                self.plugin_sent(&txn_id, Err(&error));
                 self.ring(BellKind::FailedSends);
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 let w = &mut self.windows[idx];
@@ -5465,6 +5485,7 @@ impl App {
             "later" => self.cmd_later(args),
             "exec" => self.cmd_exec(args),
             "voice" => self.start_voice(),
+            "plugin" | "plugins" => self.cmd_plugin(args),
             "changelog" => self.cmd_changelog(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
@@ -5678,16 +5699,19 @@ impl App {
                             Ok(())
                         }
                         Some(Err(e)) => Err(format!("script {e}")),
-                        None => self.egg_command(&other, args).unwrap_or_else(|| {
-                            Err(if other.contains('/') {
-                                format!(
-                                    "/{other} isn't a command, and not a file here either: drop files on an empty \
+                        None => match self.plugin_command(&other, args) {
+                            Some(done) => done,
+                            None => self.egg_command(&other, args).unwrap_or_else(|| {
+                                Err(if other.contains('/') {
+                                    format!(
+                                        "/{other} isn't a command, and not a file here either: drop files on an empty \
                                      input line, or /upload <path>"
-                                )
-                            } else {
-                                format!("unknown command /{other}; try /help")
-                            })
-                        }),
+                                    )
+                                } else {
+                                    format!("unknown command /{other}; try /help")
+                                })
+                            }),
+                        },
                     }
                 }
             },
@@ -7916,7 +7940,11 @@ impl App {
             self.redraw_all = true;
         }
         self.scripts.configure(&cfg.script_settings);
+        let plugins_changed = cfg.plugins != self.cfg.plugins;
         self.cfg = cfg;
+        if plugins_changed {
+            self.sync_plugins();
+        }
         self.palette_for = self.cfg.theme.clone();
         self.apply_logging();
     }
@@ -8137,6 +8165,13 @@ impl App {
                 self.info("Script commands:");
                 for (name, help, script) in scripted {
                     self.info(format!("  /{name:<10} {help} ({script}.rhai)"));
+                }
+            }
+            let plugged = self.plugin_commands();
+            if !plugged.is_empty() {
+                self.info("Plugin commands:");
+                for (plugin, c) in plugged {
+                    self.info(format!("  /{:<10} {} ({plugin} plugin)", c.name, c.help));
                 }
             }
             self.info("F1 shows all of this full-screen, with a filter");
@@ -8632,6 +8667,7 @@ where
     Ok(restart)
 }
 
+mod plugins;
 #[cfg(test)]
 mod shots;
 
@@ -9666,6 +9702,63 @@ mod tests {
         assert_eq!(app.windows[0].lines.back().unwrap().body, "voice message thrown away");
         app.voice_done(key, Err("that was too short to send".into()));
         assert_eq!(app.windows[0].lines.back().unwrap().body, "that was too short to send");
+    }
+
+    /// A plugin as it runs: hello.py, in Python, talking to the app.
+    #[tokio::test]
+    async fn a_plugin_starts_hears_and_answers() {
+        if !crate::audio::on_path("python3") {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("textrix-plugins-{}", std::process::id()));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let paths = Paths { base: dir.clone(), env_file: dir.join("none") };
+        let mut app = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx);
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        room_window(&mut app, "!b:x.org", "Book Club");
+        std::fs::create_dir_all(app.plugins_dir()).unwrap();
+        std::fs::write(app.plugins_dir().join("hello.py"), crate::plugin::starter("hello")).unwrap();
+        let config = crate::plugin::PluginConfig {
+            command: "python3 hello.py".into(),
+            rooms: vec!["Night Owls".into()],
+            enabled: true,
+            settings: toml::Table::new(),
+        };
+        app.plugins.insert("hello".into(), plugins::PluginState::new(config));
+        app.start_plugins();
+        // Until the app has heard what it's waiting for.
+        async fn until(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, done: impl Fn(&App) -> bool) {
+            while !done(app) {
+                let event = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("in time").unwrap();
+                app.on_event(event);
+            }
+        }
+        until(&mut app, &mut rx, |app| app.plugin_status_items() == ["0 pings"]).await;
+        assert_eq!(app.plugin_commands().iter().map(|(_, c)| c.name.as_str()).collect::<Vec<_>>(), ["hello"]);
+        assert!(app.windows[0].lines.iter().any(|l| l.body == "plugin hello started: /hello"));
+
+        // It hears its room, not others, and its reply can't go: no server.
+        let key = app.windows[a].room.clone().unwrap();
+        let mut ping = msg("$p", "!ping");
+        (ping.nick, ping.sender) = ("sam".into(), Some("@sam:x.org".try_into().unwrap()));
+        let elsewhere = WinKey { room_id: "!b:x.org".try_into().unwrap(), ..key.clone() };
+        app.tell_plugins(&elsewhere, &Heard::Message(ping.clone()));
+        app.tell_plugins(&key, &Heard::Message(ping));
+        until(&mut app, &mut rx, |app| {
+            app.windows[0]
+                .lines
+                .iter()
+                .any(|l| l.body.starts_with("hello: heard:") && l.body.contains("isn't connected"))
+        })
+        .await;
+        assert_eq!(app.plugin_status_items(), ["1 ping"], "heard once, in its own room");
+
+        app.cmd_plugin("list").unwrap();
+        assert!(app.windows[0].lines.iter().any(|l| l.body.contains("hello: running for")));
+        app.cmd_plugin("stop hello").unwrap();
+        assert!(app.plugin_commands().is_empty() && app.plugin_status_items().is_empty());
+        assert!(app.plugin_command("hello", "").is_none(), "its command goes with it");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

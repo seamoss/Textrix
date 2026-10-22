@@ -22,6 +22,7 @@ mod matrix;
 mod model;
 mod notify;
 mod picture;
+mod plugin;
 mod remote;
 mod richtext;
 mod script;

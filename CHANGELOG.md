@@ -7,6 +7,23 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.17.0] - 2026-10-22
+
+### Added
+- Plugins: programs in any language that Textrix starts and talks to over
+  stdin and stdout (JSON-RPC, a line at a time). In the rooms config.toml
+  grants them (`[plugins.<name>]`, with `command` and `rooms`) they hear
+  messages, reactions, joins and leaves, add `/commands`, and post, reply,
+  post in threads, react, edit their messages, show typing and a status-bar
+  item, and read recent history, as you, 20 actions per 10 seconds at
+  most. `/plugin new <name>` writes a Python starter granted the room
+  you're in and starts it; `/plugin` lists them, with `start`, `stop`,
+  `restart` and `log`; `/reload` picks up changes. Python plugins
+  `import textrix`, a helper with no dependencies that Textrix keeps in
+  the plugins folder. PLUGINS.md has the protocol. (Plugins aren't
+  sandboxed like scripts: they're programs, and only reach the rooms you
+  list.)
+
 ## [0.16.4] - 2026-10-27
 
 ### Changed

@@ -2318,7 +2318,7 @@ fn status_items(app: &App, items: &[String]) -> Vec<Span<'static>> {
                 item(&mut spans, vec![Span::styled(format!("typing: {}", typing_names(app, &win.typing)), t.bar)]);
             }
             "scripts" => {
-                for text in app.scripts.status_items() {
+                for text in app.scripts.status_items().into_iter().chain(app.plugin_status_items()) {
                     item(&mut spans, vec![Span::styled(text, t.bar)]);
                 }
             }

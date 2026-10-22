@@ -227,6 +227,9 @@ pub struct Config {
     pub theme_light: ThemeId,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,
+    /// Plugins, by name: `[plugins.dice]` with what to run and its rooms.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, crate::plugin::PluginConfig>,
     /// Scripts' settings, by script: `[script_settings.watchwords]`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub script_settings: BTreeMap<String, toml::Table>,
@@ -288,6 +291,7 @@ impl Default for Config {
             theme_light: ThemeId::Builtin(ThemeName::Light),
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            plugins: BTreeMap::new(),
             script_settings: BTreeMap::new(),
             palette: Theme::default(),
         }
@@ -446,6 +450,28 @@ fn implicit_table() -> toml_edit::Table {
     let mut table = toml_edit::Table::new();
     table.set_implicit(true);
     table
+}
+
+/// Add `[plugins.<name>]` to config.toml, keeping the rest of the file as
+/// it is.
+pub fn add_plugin(path: &Path, name: &str, plugin: &crate::plugin::PluginConfig) -> Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parsing {}", path.display()))?;
+    let all = doc.entry("plugins").or_insert_with(|| implicit_table().into());
+    let all = all.as_table_mut().context("plugins in config.toml isn't a table")?;
+    anyhow::ensure!(!all.contains_key(name), "config.toml already has [plugins.{name}]");
+    let mut table = toml_edit::Table::new();
+    table["command"] = toml_edit::value(plugin.command.as_str());
+    table["rooms"] = toml_edit::value(plugin.rooms.iter().map(String::as_str).collect::<toml_edit::Array>());
+    all.insert(name, toml_edit::Item::Table(table));
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string()).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
 }
 
 /// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping
