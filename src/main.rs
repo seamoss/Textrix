@@ -2,6 +2,7 @@
 
 mod app;
 mod audio;
+mod bots;
 mod chatlog;
 mod compose;
 mod config;
@@ -141,6 +142,98 @@ struct Cli {
     /// The background process itself (what --daemon starts)
     #[arg(long, hide = true)]
     daemon_run: bool,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Bots: Textrix in the background as another Matrix account (the
+    /// bot's), from a home of its own, doing what its plugins do
+    #[command(subcommand)]
+    Bot(BotCommand),
+}
+
+#[derive(clap::Subcommand)]
+enum BotCommand {
+    /// Make a bot's home (~/.textrix/bots/<name>): fill in its account,
+    /// then start it
+    New { name: String },
+    /// Start it in the background
+    Start { name: String },
+    /// Stop it
+    Stop { name: String },
+    /// Show it in this terminal: Textrix as the bot (/detach leaves it
+    /// running)
+    Attach { name: String },
+    /// The bots, and whether they're running
+    List,
+}
+
+/// `textrix bot …`. A bot always runs from its own home with its own
+/// dotfile, never yours.
+async fn bot_command(paths: &Paths, command: BotCommand) -> Result<()> {
+    let home = |name: &str| -> Result<std::path::PathBuf> {
+        let home = bots::home(&paths.base, name);
+        anyhow::ensure!(home.join("config.toml").is_file(), "there's no bot {name}; textrix bot new {name} makes one");
+        Ok(home)
+    };
+    match command {
+        BotCommand::New { name } => {
+            // Your own Matrix IDs: the bot accepts your invitations.
+            let yours: Vec<String> = EnvFile::new(paths.env_file.clone())
+                .servers()
+                .map(|s| s.defs.into_iter().map(|d| d.user).collect())
+                .unwrap_or_default();
+            let home = bots::create(&paths.base, &name, &yours)?;
+            println!("Made {}.", home.display());
+            println!(
+                "1. Make a Matrix account for the bot on your server, and put it in {}",
+                bots::env_file(&home).display()
+            );
+            println!("2. textrix bot start {name}");
+            println!(
+                "3. Invite it to a room; it joins when one of {} invites it",
+                if yours.is_empty() { "accept_invites_from (in its config.toml)".to_owned() } else { yours.join(", ") }
+            );
+            println!("4. textrix bot attach {name} shows Textrix as the bot: /nick, /avatar, /verify, /plugin new …");
+            Ok(())
+        }
+        BotCommand::Start { name } => {
+            let home = home(&name)?;
+            if bots::running(&home) {
+                anyhow::bail!("{name} is already running; textrix bot attach {name} shows it");
+            }
+            drop(lock_instance(&home)?);
+            let env = bots::env_file(&home);
+            remote::start(&home, vec!["--home".into(), home.clone().into(), "--env".into(), env.into()])?;
+            println!("{name} is running in the background; textrix bot attach {name} shows it");
+            Ok(())
+        }
+        BotCommand::Stop { name } => {
+            stop_daemon(&home(&name)?)?;
+            println!("stopped {name}");
+            Ok(())
+        }
+        BotCommand::Attach { name } => {
+            let home = home(&name)?;
+            anyhow::ensure!(bots::running(&home), "{name} isn't running; textrix bot start {name}");
+            let previews = Config::load(&home.join("config.toml")).map_or(true, |cfg| cfg.image_previews);
+            remote::attach(&remote::socket_path(&home), previews).await?;
+            Ok(())
+        }
+        BotCommand::List => {
+            let names = bots::names(&paths.base);
+            if names.is_empty() {
+                println!("no bots yet; textrix bot new <name> makes one");
+            }
+            for name in names {
+                let state = if bots::running(&bots::home(&paths.base, &name)) { "running" } else { "stopped" };
+                println!("{name}\t{state}");
+            }
+            Ok(())
+        }
+    }
 }
 
 /// One Textrix per home: two would share one store and can scramble its
@@ -238,7 +331,6 @@ fn stop_daemon(base: &std::path::Path) -> Result<()> {
     anyhow::ensure!(status.success(), "couldn't stop process {pid}");
     for _ in 0..100 {
         if !remote::alive(&socket) {
-            println!("stopped the Textrix running in the background");
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -311,10 +403,15 @@ async fn run() -> Result<()> {
     if cli.check {
         return check(&paths);
     }
+    if let Some(Command::Bot(command)) = cli.command {
+        return bot_command(&paths, command).await;
+    }
     create_private_dir(&paths.base)?;
     let socket = remote::socket_path(&paths.base);
     if cli.stop {
-        return stop_daemon(&paths.base);
+        stop_daemon(&paths.base)?;
+        println!("stopped the Textrix running in the background");
+        return Ok(());
     }
     if cli.daemon {
         if remote::alive(&socket) {
@@ -327,7 +424,9 @@ async fn run() -> Result<()> {
         if let Some(theme) = &cli.theme {
             args.extend(["--theme".into(), theme.into()]);
         }
-        return remote::start(&paths.base, args);
+        remote::start(&paths.base, args)?;
+        println!("Textrix is running in the background; textrix --attach shows it, and /detach leaves it running.");
+        return Ok(());
     }
     if cli.attach || (!cli.daemon_run && remote::alive(&socket)) {
         let previews = Config::load(&paths.config_file()).map_or(true, |cfg| cfg.image_previews);

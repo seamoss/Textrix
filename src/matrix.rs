@@ -3346,15 +3346,16 @@ impl Account {
             let mut invites = Vec::new();
             for room in acct.client.invited_rooms() {
                 let name = room.display_name().await.map_or_else(|_| room.room_id().to_string(), |n| n.to_string());
-                let inviter = match room.invite_details().await {
-                    Ok(details) => details.inviter.map(|m| m.name().to_owned()),
-                    Err(_) => None,
+                let (inviter, inviter_id) = match room.invite_details().await {
+                    Ok(details) => details.inviter.map(|m| (m.name().to_owned(), m.user_id().to_string())).unzip(),
+                    Err(_) => (None, None),
                 };
                 invites.push(Invitation {
                     account: acct.name.to_string(),
                     room_id: room.room_id().to_owned(),
                     name,
                     inviter,
+                    inviter_id,
                 });
             }
             invites.sort_by_key(|a| a.name.to_lowercase());

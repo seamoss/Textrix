@@ -153,8 +153,25 @@ Messages it sends go out like yours: they show at once in the room (as
 sending), wait in the send queue when the server can't be reached, and are
 end-to-end encrypted in encrypted rooms.
 
+## As a bot
+
+In your Textrix a plugin posts as you. To have it post as itself, run it
+in a bot: Textrix in the background as the bot's own Matrix account, from
+a home of its own.
+
+```sh
+textrix bot new helper       # ~/.textrix/bots/helper; put its account in .env there
+textrix bot start helper
+textrix bot attach helper    # then, in a room it's in: /plugin new helper
+```
+
+The bot joins rooms when someone in its `accept_invites_from` invites it
+(`bot new` puts your Matrix IDs there). Its plugins go in its own
+`plugins` folder and config.toml, granted its rooms, often `rooms = ["*"]`:
+everything it's invited to. Messages that mention the bot arrive with
+`highlight: true`.
+
 ## Coming
 
-Plugins speaking as their own Matrix account (a bot, rather than you), and
-on that, a plugin that takes coding requests in a room to a coding agent
-and opens pull requests.
+A plugin that takes coding requests in a room to a coding agent (Codex,
+Claude Code, aider…) on a branch of its own, and opens pull requests.

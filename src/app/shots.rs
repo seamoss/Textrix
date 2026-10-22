@@ -836,6 +836,7 @@ fn screenshots() {
             room_id: room_id("Chess Club"),
             name: "Chess Club".into(),
             inviter: Some("alex".into()),
+            inviter_id: None,
         }],
     });
     home.app.open_home();

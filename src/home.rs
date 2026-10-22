@@ -27,8 +27,14 @@ pub struct Invitation {
     pub account: String,
     pub room_id: OwnedRoomId,
     pub name: String,
-    /// Who invited you, when the server says.
+    /// Who invited you, when the server says: their name, and Matrix ID.
     pub inviter: Option<String>,
+    pub inviter_id: Option<String>,
+}
+
+/// Whether `accept_invites_from` covers an invitation from `inviter`.
+pub fn accepted(from: &[String], inviter: Option<&str>) -> bool {
+    inviter.is_some_and(|id| from.iter().any(|a| a == "*" || a == id))
 }
 
 /// One row, under its section.
@@ -77,6 +83,16 @@ pub fn age(ts: DateTime<Local>, now: DateTime<Local>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invitations_from_who_you_trust() {
+        let from = vec!["@me:example.org".to_owned()];
+        assert!(accepted(&from, Some("@me:example.org")));
+        assert!(!accepted(&from, Some("@stranger:example.org")));
+        assert!(!accepted(&from, None), "nobody said who");
+        assert!(!accepted(&[], Some("@me:example.org")), "nothing, unless asked");
+        assert!(accepted(&["*".to_owned()], Some("@anyone:example.org")));
+    }
 
     #[test]
     fn ages_are_short() {

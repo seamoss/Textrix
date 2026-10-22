@@ -520,6 +520,59 @@ impl App {
         self.start_plugin(name)
     }
 
+    /// `/bot [list | new | start | stop <name>]`: `textrix bot …`, with
+    /// what it says in the status window.
+    pub(super) fn cmd_bot(&mut self, args: &str) -> Result<(), String> {
+        if self.in_script > 0 {
+            return Err("scripts can't manage bots, which run programs".into());
+        }
+        let (sub, name) = split_first(args.trim());
+        let name = name.trim();
+        match sub {
+            "" | "list" => {
+                let names = crate::bots::names(&self.paths.base);
+                if names.is_empty() {
+                    self.info("no bots yet: /bot new <name> makes one");
+                }
+                for name in names {
+                    let running = crate::bots::running(&crate::bots::home(&self.paths.base, &name));
+                    self.info(format!("  {name}: {}", if running { "running" } else { "stopped" }));
+                }
+                Ok(())
+            }
+            "new" | "start" | "stop" if !name.is_empty() => {
+                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+                let mut command = tokio::process::Command::new(exe);
+                command.arg("--home").arg(&self.paths.base).arg("--env").arg(&self.paths.env_file);
+                command.args(["bot", sub, name]).stdin(std::process::Stdio::null());
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let said = match command.output().await {
+                        Ok(out) => {
+                            let text = [out.stdout, out.stderr].concat();
+                            let text = String::from_utf8_lossy(&text).into_owned();
+                            text.lines().map(|l| (out.status.success(), l.to_owned())).collect::<Vec<_>>()
+                        }
+                        Err(e) => vec![(false, format!("couldn't run textrix bot: {e}"))],
+                    };
+                    for (ok, text) in said {
+                        let line = if ok {
+                            Line::info(text)
+                        } else {
+                            Line::error(text.trim_start_matches("textrix: ").to_owned())
+                        };
+                        let _ = tx.send(AppEvent::Notice { account: None, room_id: None, line });
+                    }
+                });
+                if sub == "start" {
+                    self.info(format!("starting {name}; textrix bot attach {name} (in another terminal) shows it"));
+                }
+                Ok(())
+            }
+            _ => Err("usage: /bot [list | new <name> | start <name> | stop <name>]".into()),
+        }
+    }
+
     /// A plugin's message went (or didn't): answer its `send`.
     pub(super) fn plugin_sent(&mut self, txn_id: &TransactionId, outcome: Result<&EventId, &str>) {
         let Some((name, id)) = self.plugin_sends.remove(txn_id) else { return };

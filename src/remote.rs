@@ -361,7 +361,6 @@ pub fn start(base: &Path, args: Vec<std::ffi::OsString>) -> Result<()> {
         .context("starting Textrix in the background")?;
     for _ in 0..150 {
         if alive(&socket) {
-            println!("Textrix is running in the background; textrix --attach shows it, and /detach leaves it running.");
             return Ok(());
         }
         if child.try_wait()?.is_some() {

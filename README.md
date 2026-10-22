@@ -237,6 +237,7 @@ bindings.
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/changelog [N]` (what changed in the latest N releases, 10 unless you say, from GitHub's release notes), `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
 | Scripts | `/script` (or `/script list`) lists them, `/script load\|unload <name>`, `/script reload [name]` (no name: every file), `/script exec <code>`; see [Scripts](#scripts) |
+| Bots | `/bot` (or `/bot list`), `/bot new\|start\|stop <name>`: Textrix in the background as a bot's own account (see [Bots](#bots)); `textrix bot attach <name>` shows it |
 | Plugins | `/plugin` (or `/plugin list`), `/plugin new <name>` (a starter, granted the room you're in), `/plugin start\|stop\|restart\|log <name>`; see [Plugins](#plugins) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
@@ -726,6 +727,30 @@ bot.run()
 
 [PLUGINS.md](PLUGINS.md) has the protocol and the helper's API.
 
+### Bots
+
+A plugin in your Textrix talks as you. For a bot that talks as itself,
+`@helper:yourserver` in the member list, run Textrix as the bot: a
+background Textrix with a home of its own, logged in to the bot's account,
+running its plugins. It keeps going whether or not your Textrix runs, and
+its rooms and keys stay out of yours.
+
+```sh
+textrix bot new helper      # makes ~/.textrix/bots/helper
+textrix bot start helper    # once its account is in ~/.textrix/bots/helper/.env
+textrix bot attach helper   # Textrix as the bot; /detach leaves it running
+textrix bot stop helper
+textrix bot list
+```
+
+`bot new` writes the bot's own dotfile (fill in the account you made for
+it on your server; never your own) and a config.toml that suits a bot: no
+bells or notifications, and `accept_invites_from` set to your Matrix IDs,
+so it joins the rooms you invite it to. Attached, it's Textrix as usual:
+`/nick` and `/avatar` dress it, `/verify` verifies it, and `/plugin new`
+in a room gives it a plugin there. `/bot [list | new | start | stop
+<name>]` does the same from your own Textrix.
+
 ## Optional preferences
 
 `~/.textrix/config.toml` holds your preferences (all keys optional).
@@ -759,6 +784,7 @@ bell_for = ["mentions", "invites", "verification", "failed_sends", "transfers"]
 notifications = "auto"     # or "osc9", "osc777", "osc99" (kitty), "off"
 notify_preview = true      # include message text in notifications
 notify_command = ""        # run this for each notification (see Notification hooks)
+accept_invites_from = []   # Matrix IDs whose invitations are accepted at once ("*": anyone's)
 log = false                # chat logs (plaintext!); /log on|off per session
 log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"

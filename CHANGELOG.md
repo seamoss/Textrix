@@ -23,6 +23,15 @@ release notes.
   the plugins folder. PLUGINS.md has the protocol. (Plugins aren't
   sandboxed like scripts: they're programs, and only reach the rooms you
   list.)
+- Bots: `textrix bot new <name>` makes a home for one
+  (`~/.textrix/bots/<name>`, with its own dotfile for the bot's account and
+  a config.toml without bells or notifications), `textrix bot start`,
+  `stop` and `list` run it in the background, and `textrix bot attach`
+  shows Textrix as the bot. Its plugins post as the bot, not you. `/bot`
+  does the same from your own Textrix.
+- `accept_invites_from`: Matrix IDs whose invitations are accepted at once
+  (`"*"` for anyone's), which is how a bot joins the rooms you invite it
+  to.
 
 ## [0.16.4] - 2026-10-27
 

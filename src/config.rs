@@ -227,6 +227,9 @@ pub struct Config {
     pub theme_light: ThemeId,
     /// Your own commands (`/alias`): name -> what it runs.
     pub aliases: BTreeMap<String, String>,
+    /// Matrix IDs whose invitations are accepted at once ("*": anyone's);
+    /// what bots use to join the rooms they're invited to.
+    pub accept_invites_from: Vec<String>,
     /// Plugins, by name: `[plugins.dice]` with what to run and its rooms.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins: BTreeMap<String, crate::plugin::PluginConfig>,
@@ -291,6 +294,7 @@ impl Default for Config {
             theme_light: ThemeId::Builtin(ThemeName::Light),
             colors: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            accept_invites_from: Vec::new(),
             plugins: BTreeMap::new(),
             script_settings: BTreeMap::new(),
             palette: Theme::default(),

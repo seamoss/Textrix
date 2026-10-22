@@ -965,6 +965,8 @@ pub struct App {
     /// Plugins' messages on their way: our transaction ID → (plugin, the
     /// request to answer).
     plugin_sends: HashMap<matrix_sdk::ruma::OwnedTransactionId, (String, serde_json::Value)>,
+    /// Rooms joined because `accept_invites_from` trusts who invited us.
+    joining: HashSet<OwnedRoomId>,
     /// Messages the send queue sent before we heard its name for them.
     sent_early: HashMap<matrix_sdk::ruma::OwnedTransactionId, OwnedEventId>,
     /// A voice message being recorded, and the window it's for.
@@ -1113,6 +1115,11 @@ const COMMANDS: &[Cmd] = &[
         name: "exec",
         args: "[-o] <command>",
         help: "Run a shell command and show what it prints here; -o sends that to the room (not from scripts)",
+    },
+    Cmd {
+        name: "bot",
+        args: "[list | new <name> | start <name> | stop <name>]",
+        help: "Bots: Textrix in the background as another Matrix account, doing what its plugins do",
     },
     Cmd {
         name: "plugin",
@@ -1546,6 +1553,7 @@ impl App {
             recording: None,
             plugins: BTreeMap::new(),
             plugin_sends: HashMap::new(),
+            joining: HashSet::new(),
             sent_early: HashMap::new(),
             hooks: Default::default(),
             custom_emoji: HashMap::new(),
@@ -2399,8 +2407,22 @@ impl App {
                 }
             }
             AppEvent::Invites { account, invites } => {
+                // From those config.toml trusts: join (as bots do).
+                for invite in &invites {
+                    if home::accepted(&self.cfg.accept_invites_from, invite.inviter_id.as_deref())
+                        && let Some(acct) = self.connected(&account)
+                        && self.joining.insert(invite.room_id.clone())
+                    {
+                        acct.join(invite.room_id.to_string());
+                        let who = invite.inviter.as_deref().unwrap_or("someone");
+                        self.status(Line::info(format!(
+                            "joining {}: {who} invited you (accept_invites_from)",
+                            invite.name
+                        )));
+                    }
+                }
                 self.invites.retain(|i| *i.account != *account);
-                self.invites.extend(invites);
+                self.invites.extend(invites.into_iter().filter(|i| !self.joining.contains(&i.room_id)));
             }
             AppEvent::ImagePreview { event_id, protocol } => {
                 let preview = protocol.map_or(Preview::Failed, Preview::Ready);
@@ -5486,6 +5508,7 @@ impl App {
             "exec" => self.cmd_exec(args),
             "voice" => self.start_voice(),
             "plugin" | "plugins" => self.cmd_plugin(args),
+            "bot" | "bots" => self.cmd_bot(args),
             "changelog" => self.cmd_changelog(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
@@ -9351,6 +9374,7 @@ mod tests {
                 room_id: "!d:x.org".try_into().unwrap(),
                 name: "Synth Nerds".into(),
                 inviter: Some("sam".into()),
+                inviter_id: Some("@sam:x.org".into()),
             }],
         });
         app.on_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
