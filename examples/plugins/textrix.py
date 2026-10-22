@@ -42,6 +42,8 @@ class Plugin:
         self.settings = {}
         #: The rooms it may use, once started: dicts with id, name, server…
         self.rooms = []
+        #: Who it is in Matrix, once started: dicts with server, user, nick.
+        self.me = []
         self.name = None
         self._commands = {}
         self._handlers = {"message": [], "reaction": [], "member": []}
@@ -164,6 +166,7 @@ class Plugin:
         if method == "initialize":
             self.settings = params.get("settings") or {}
             self.rooms = params.get("rooms") or []
+            self.me = params.get("me") or []
             self.name = params.get("name")
             commands = [{"name": n, "args": a, "help": h} for n, (a, h, _) in self._commands.items()]
             self._write({"jsonrpc": "2.0", "id": message["id"], "result": {"description": self.description, "commands": commands}})

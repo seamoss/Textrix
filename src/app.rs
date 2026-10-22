@@ -1123,7 +1123,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "plugin",
-        args: "[list | start <name> | stop <name> | restart <name> | log <name>]",
+        args: "[list | new <name> [hello|codebot] | start <name> | stop <name> | restart <name> | log <name>]",
         help: "Plugins from config.toml: programs that hear and post in the rooms you grant them",
     },
     Cmd {

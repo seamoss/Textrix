@@ -471,6 +471,11 @@ pub fn add_plugin(path: &Path, name: &str, plugin: &crate::plugin::PluginConfig)
     let mut table = toml_edit::Table::new();
     table["command"] = toml_edit::value(plugin.command.as_str());
     table["rooms"] = toml_edit::value(plugin.rooms.iter().map(String::as_str).collect::<toml_edit::Array>());
+    if !plugin.settings.is_empty() {
+        let settings: toml_edit::Table =
+            toml::to_string(&plugin.settings)?.parse::<toml_edit::DocumentMut>()?.as_table().clone();
+        table["settings"] = toml_edit::Item::Table(settings);
+    }
     all.insert(name, toml_edit::Item::Table(table));
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, doc.to_string()).with_context(|| format!("writing {}", tmp.display()))?;

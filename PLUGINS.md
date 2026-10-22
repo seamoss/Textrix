@@ -33,7 +33,7 @@ to config.toml (new plugins start, removed ones stop, changed ones restart).
 | Command | |
 |---|---|
 | `/plugin` | the plugins, whether they're running, their rooms and commands |
-| `/plugin new <name>` | a starter plugin, as above |
+| `/plugin new <name> [hello\|codebot]` | a plugin from a template: the starter above, or codebot (below) |
 | `/plugin start` / `stop` / `restart <name>` | |
 | `/plugin log <name>` | the end of its log (`~/.textrix/plugins/<name>.log`: whatever it prints to stderr) |
 
@@ -76,7 +76,7 @@ bot.run()
 | `bot.edit(room, event_id, text)`, `bot.react(room, event_id, key)` | |
 | `bot.typing(room, typing=True)`, `bot.status(text)`, `bot.log(text, error=False)` | |
 | `bot.history(room, limit=20)` | the room's latest messages, oldest first |
-| `bot.settings`, `bot.rooms`, `bot.name` | known once it's started |
+| `bot.settings`, `bot.rooms`, `bot.name`, `bot.me` | known once it's started; `me` is who it posts as |
 
 Errors from Textrix (not a room it may use, too fast, couldn't send) raise
 `textrix.TextrixError`; in a handler, they're logged to the status window.
@@ -96,7 +96,8 @@ Textrix's first message is a request, `initialize` (id 0):
 {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
   "protocol": 1, "textrix": "0.17.0", "name": "greeter",
   "settings": {"repo": "~/code/thing"},
-  "rooms": [{"id": "!abc:example.org", "name": "Team Tests", "server": "home", "dm": false, "encrypted": true}]}}
+  "rooms": [{"id": "!abc:example.org", "name": "Team Tests", "server": "home", "dm": false, "encrypted": true}],
+  "me": [{"server": "home", "user": "@you:example.org", "nick": "you"}]}}
 ```
 
 The plugin answers with what it is and the commands it adds (names that
@@ -171,7 +172,52 @@ The bot joins rooms when someone in its `accept_invites_from` invites it
 everything it's invited to. Messages that mention the bot arrive with
 `highlight: true`.
 
-## Coming
+## codebot
 
-A plugin that takes coding requests in a room to a coding agent (Codex,
-Claude Code, aider…) on a branch of its own, and opens pull requests.
+codebot takes coding requests in a room to a coding agent (Claude Code,
+Codex, aider, or your own) on a branch of its own, and opens a pull request.
+Run it in a bot, so it talks as itself:
+
+```sh
+textrix bot new codebot          # then put its account in ~/.textrix/bots/codebot/.env
+textrix bot start codebot
+textrix bot attach codebot       # invite it to the room, then, there:
+/plugin new codebot codebot
+```
+
+Then fill in its settings in the bot's config.toml and `/reload`:
+
+```toml
+[plugins.codebot.settings]
+repo = "~/code/project"        # a git checkout whose origin is on GitHub
+base = "main"                  # branches start here; pull requests go here
+agent = "claude"               # "claude", "codex", "aider", or ["my-agent", "{prompt}"]
+allow = ["@you:example.org"]   # who may give it work (bot new fills in yours)
+test = "cargo test"            # optional: run before pushing; the result goes in the PR
+approve = false                # true: it waits for "go" in the thread
+max_minutes = 30               # per task
+max_per_day = 20
+```
+
+In the room, "codebot: make the login form remember the user name" (or
+`!code …`). It reacts 👀, answers in a thread under the request, makes a
+branch `codebot/…` in a worktree of its own, runs the agent there with the
+request, commits what it changed, runs the tests, pushes the branch, opens
+the pull request with `gh pr create`, and posts the link (✅). "stop" in the
+thread (or "codebot: stop") ends a task, whatever the agent started
+included; "codebot: status" says what it's doing. One task at a time, a
+few queued.
+
+What keeps it in check:
+
+- Only people in `allow` can give it work; others are told so (once an
+  hour).
+- The request reaches the agent as one argument, never through a shell.
+- The agent only edits files: codebot commits, and pushes only its own
+  `codebot/…` branch. It never merges, and never pushes to `base`. A pull
+  request is a proposal: read it before merging.
+- A time limit per task and a cap per day.
+- Run the bot as a user (or on a machine) with nothing else worth taking,
+  and give `gh` a token for that repository only. The agent can run what
+  its own settings let it (Claude Code's `acceptEdits` edits files but
+  asks before running commands, which in a bot means it doesn't).

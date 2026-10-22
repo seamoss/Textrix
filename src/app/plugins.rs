@@ -117,6 +117,12 @@ impl App {
         let dir = self.plugins_dir();
         let tx = self.tx.clone();
         let rooms = self.plugin_rooms(name);
+        // Who it is in Matrix: the accounts it posts as.
+        let me: Vec<Value> = self
+            .accounts
+            .iter()
+            .map(|(server, state)| json!({ "server": server.to_string(), "user": state.user, "nick": state.nick }))
+            .collect();
         let p = self.plugins.get_mut(name).ok_or_else(|| format!("there's no plugin {name} in config.toml"))?;
         if p.process.is_some() {
             return Err(format!("{name} is already running"));
@@ -132,6 +138,7 @@ impl App {
                 "name": name,
                 "settings": plugin::settings_json(&p.config.settings),
                 "rooms": rooms,
+                "me": me,
             }),
         ));
         (p.process, p.state, p.status) = (Some(process), PluginRun::Starting, None);
@@ -492,7 +499,10 @@ impl App {
 
     /// `/plugin new <name>`: a starter plugin in the plugins folder, granted
     /// the room you're in, added to config.toml and started.
-    fn new_plugin(&mut self, name: &str) -> Result<(), String> {
+    fn new_plugin(&mut self, name: &str, kind: &str) -> Result<(), String> {
+        let allow = self.cfg.accept_invites_from.clone();
+        let (program, settings) = plugin::template(kind, name, &allow)
+            .ok_or_else(|| format!("there's no plugin template {kind}; there's {}", plugin::TEMPLATES.join(" and ")))?;
         if !plugin::name_ok(name) {
             return Err(format!("“{name}” won't do as a plugin's name: letters, digits, - and _"));
         }
@@ -505,10 +515,9 @@ impl App {
         if file.exists() {
             return Err(format!("{} is there already", file.display()));
         }
-        std::fs::write(&file, plugin::starter(name)).map_err(|e| format!("{}: {e}", file.display()))?;
+        std::fs::write(&file, program).map_err(|e| format!("{}: {e}", file.display()))?;
         let rooms: Vec<String> = self.win().room.iter().map(|_| self.win().title().to_owned()).collect();
-        let config =
-            PluginConfig { command: format!("python3 {name}.py"), rooms, enabled: true, settings: toml::Table::new() };
+        let config = PluginConfig { command: format!("python3 {name}.py"), rooms, enabled: true, settings };
         crate::config::add_plugin(&self.paths.config_file(), name, &config).map_err(|e| format!("{e:#}"))?;
         let granted = if config.rooms.is_empty() { "no rooms yet".to_owned() } else { config.rooms.join(", ") };
         self.cfg.plugins.insert(name.to_owned(), config.clone());
@@ -631,7 +640,9 @@ impl App {
             }
             "new" => {
                 need(name)?;
-                self.new_plugin(name)
+                let (name, kind) = split_first(name);
+                let kind = Some(kind.trim()).filter(|k| !k.is_empty()).unwrap_or("hello");
+                self.new_plugin(name, kind)
             }
             "start" => need(name).and_then(|()| self.start_plugin(name)),
             "stop" => need(name).and_then(|()| self.stop_plugin(name)),

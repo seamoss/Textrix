@@ -751,6 +751,14 @@ so it joins the rooms you invite it to. Attached, it's Textrix as usual:
 in a room gives it a plugin there. `/bot [list | new | start | stop
 <name>]` does the same from your own Textrix.
 
+**codebot** is a plugin for a bot that takes coding requests ("codebot:
+make the login form remember the user name") from the people you allow,
+has a coding agent (Claude Code, Codex, aider, or your own) do it on a
+branch of its own, and opens a pull request, reporting in a thread as it
+goes. It only ever pushes its own `codebot/…` branches and never merges.
+`/plugin new codebot codebot` in the bot sets it up; [PLUGINS.md](PLUGINS.md#codebot)
+has the rest.
+
 ## Optional preferences
 
 `~/.textrix/config.toml` holds your preferences (all keys optional).

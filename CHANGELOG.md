@@ -29,6 +29,17 @@ release notes.
   `stop` and `list` run it in the background, and `textrix bot attach`
   shows Textrix as the bot. Its plugins post as the bot, not you. `/bot`
   does the same from your own Textrix.
+- codebot, a plugin for a bot: coding requests from the people you allow
+  ("codebot: make the login form remember the user name") go to a coding
+  agent (Claude Code, Codex, aider, or your own command) on a branch of
+  its own in a worktree; codebot commits, runs your tests, pushes only
+  that `codebot/…` branch and opens a pull request with `gh`, reporting in
+  a thread under the request. "stop" ends a task (and what the agent
+  started), "status" says what it's doing; one at a time, a time limit
+  each and a cap per day; optionally it waits for "go". It never merges.
+  `/plugin new <name> codebot` sets it up.
+- `/plugin new <name> [hello|codebot]` starts from a template; plugins are
+  told who they post as (`me`).
 - `accept_invites_from`: Matrix IDs whose invitations are accepted at once
   (`"*"` for anyone's), which is how a bot joins the rooms you invite it
   to.
