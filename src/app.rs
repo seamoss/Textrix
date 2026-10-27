@@ -3901,6 +3901,8 @@ impl App {
         if key.code == Esc {
             if self.compose.take().is_some() {
                 self.input.clear();
+            } else if self.input.is_empty() {
+                self.close_thread();
             }
             return;
         }
@@ -4819,6 +4821,13 @@ impl App {
                 (None, _) => self.error("that message has no attachment"),
                 (_, Err(e)) => self.error(e),
             },
+            // Typing a command: stop selecting, and it goes in the input
+            // line (rather than its letters being keys here: "/theme" was
+            // opening a thread).
+            Char('/') => {
+                self.select = None;
+                self.on_key(key);
+            }
             Char('t') => {
                 self.select = None;
                 let root = line.thread_root.clone().unwrap_or(event);
@@ -5487,6 +5496,11 @@ impl App {
                 acct.set_published(room_id, on_off(args, "usage: /publish <on|off>")?);
                 Ok(())
             }),
+            // In a thread window these close it, never the room.
+            "close" | "part" if self.win().thread_root().is_some() => {
+                self.close_thread();
+                Ok(())
+            }
             "close" => self.room_ctx().map(|(acct, room_id)| acct.close_room(room_id, args.trim() == "confirm")),
             "upgrade" => self.room_ctx().map(|(acct, room_id)| {
                 let (version, rest) = split_first(args);
@@ -5501,9 +5515,6 @@ impl App {
                 acct.decline(self.here(), room_id);
                 Ok(())
             }),
-            "part" if self.win().thread_root().is_some() => {
-                Err("this is a thread window: /wc closes it (/part in the room's own window leaves the room)".into())
-            }
             "part" => self.room_ctx().map(|(acct, room_id)| acct.leave(room_id)),
             "thread" => self.cmd_thread(args),
             "threads" => self.room_ctx().map(|(acct, room_id)| acct.list_threads(room_id)),
@@ -6437,6 +6448,17 @@ impl App {
 
     /// Open (or switch to) the window for the thread starting at `root` in
     /// the current room.
+    /// In a thread window: close it and go back to its room's window.
+    /// Whether it was one.
+    fn close_thread(&mut self) -> bool {
+        let Some(key) = self.win().room.clone().filter(|k| k.thread.is_some()) else { return false };
+        self.remove_window(self.active);
+        if let Some(idx) = self.window_idx(&key.account, &key.room_id) {
+            self.switch_to(idx);
+        }
+        true
+    }
+
     fn open_thread(&mut self, root: OwnedEventId) -> Result<(), String> {
         let (acct, room_id) = self.room_ctx()?;
         let account = acct.name.to_string();
@@ -6448,7 +6470,7 @@ impl App {
         let mut w = Window::new(Some(key), thread_name(""));
         if let Some(room) = self.window_idx(&account, &room_id).map(|i| &self.windows[i]) {
             (w.encrypted, w.is_dm, w.members, w.perms) = (room.encrypted, room.is_dm, room.members.clone(), room.perms);
-            w.topic = Some(format!("Thread in {}", room.name));
+            w.topic = Some(format!("Thread in {} · Esc closes it", room.name));
             if let Some(first) = room.lines.iter().find(|l| l.event_id.as_ref() == Some(&root)) {
                 w.name = thread_name(&first.text());
             }
@@ -6635,6 +6657,9 @@ impl App {
                 }
             }
             "close" => {
+                if self.close_thread() {
+                    return Ok(());
+                }
                 if self.win().is_mentions {
                     self.mention_origins.clear();
                     self.remove_window(self.active);
@@ -9357,6 +9382,58 @@ mod tests {
         app.in_script = 1;
         assert!(app.cmd_set("notify_command \"touch x\"").is_err(), "not from scripts");
         assert!(app.cmd_set("editor \"touch x\"").is_err());
+    }
+
+    #[test]
+    fn typing_a_command_while_selecting_runs_it() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "pizza tonight?"));
+        app.switch_to(a);
+        let windows = app.windows.len();
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert!(app.select.is_some());
+        for c in "/theme disco".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(app.select.is_none());
+        assert_eq!(app.input.text(), "/theme disco", "the t is typed, not a thread");
+        assert_eq!(app.windows.len(), windows);
+    }
+
+    #[test]
+    fn thread_windows_close_back_to_their_room() {
+        let mut app = test_app();
+        let room = room_window(&mut app, "!r:x.org", "Night Owls");
+        room_window(&mut app, "!o:x.org", "Book Club");
+        let key = WinKey { thread: Some("$root".try_into().unwrap()), ..app.windows[room].room.clone().unwrap() };
+        let open = |app: &mut App| {
+            app.windows.push(Window::new(Some(key.clone()), "⤷ thread".into()));
+            app.switch_to(app.windows.len() - 1);
+            app.windows.len()
+        };
+        let closed = |app: &App, before: usize| app.windows.len() == before - 1 && app.active == room;
+
+        let before = open(&mut app);
+        app.input.set_text("half a reply");
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.windows.len(), before, "Esc keeps it while you're typing");
+        app.input.clear();
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(closed(&app, before), "Esc closes it");
+
+        for command in ["/wc", "/part", "/close"] {
+            let before = open(&mut app);
+            app.input.set_text(command);
+            app.submit();
+            assert!(closed(&app, before), "{command} closes it");
+            assert_eq!(app.window_idx("t", &"!r:x.org".try_into().unwrap()), Some(room), "the room stays");
+        }
+
+        // Esc in a room's own window closes nothing.
+        let before = app.windows.len();
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.windows.len(), before);
     }
 
     #[test]

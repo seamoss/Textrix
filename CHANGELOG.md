@@ -7,6 +7,18 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.16.3] - 2026-10-27
+
+### Fixed
+- Typing a command while selecting messages runs it: `/` leaves selection
+  mode and starts the command. Before, its letters were selection keys,
+  so `/theme` opened a thread on the selected message (`t`) and the rest
+  went into that thread.
+- Thread windows close the way you'd expect: Esc (with nothing typed),
+  `/part` or `/close` closes one and goes back to its room, as `/wc` does
+  now too. `/close` in a thread window used to offer to close the whole
+  room. The thread's topic line says Esc closes it.
+
 ## [0.16.2] - 2026-10-26
 
 ### Fixed
