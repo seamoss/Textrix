@@ -241,6 +241,11 @@ pub enum AppEvent {
         room_id: OwnedRoomId,
         lines: Vec<Line>,
     },
+    /// Where a verification has got to, for the verification panel.
+    Verify {
+        account: AccountName,
+        stage: VerifyStage,
+    },
     /// A message went into the send queue, which named it `queued`.
     Queued {
         account: AccountName,
@@ -1528,8 +1533,8 @@ impl Account {
             Ok(Some(_)) => self.recover(),
             Ok(None) => self.notify.info(format!(
                 "this device is not verified, so older encrypted messages can't be read. \
-                 Set TEXTRIX_{}_RECOVERY_KEY in the dotfile and run /recover, or run /verify \
-                 and accept on another session",
+                 Set TEXTRIX_{}_RECOVERY_KEY in the dotfile and run /recover, or run /verify, \
+                 accept on another session, and compare the emoji",
                 self.name.to_uppercase()
             )),
             Err(e) => self.notify.error(format!("{e:#}")),
@@ -1646,25 +1651,27 @@ impl Account {
     fn register_verification_handler(&self) {
         let notify = self.notify.clone();
         let slot = self.verify.clone();
+        let account = self.name.clone();
         self.client.add_event_handler(move |ev: ToDeviceKeyVerificationRequestEvent, client: Client| {
             let notify = notify.clone();
             let slot = slot.clone();
+            let account = account.clone();
             async move {
                 let Some(request) =
                     client.encryption().get_verification_request(&ev.sender, &ev.content.transaction_id).await
                 else {
                     return;
                 };
+                let device = client.encryption().get_device(&ev.sender, &ev.content.from_device).await.ok().flatten();
+                let device = device.as_ref().and_then(|d| d.display_name()).unwrap_or(ev.content.from_device.as_str());
                 let who = if request.is_self_verification() {
-                    "another of your sessions".to_owned()
+                    format!("your other session ({device})")
                 } else {
-                    ev.sender.to_string()
+                    format!("{} ({device})", ev.sender)
                 };
-                notify.info(format!(
-                    "verification request from {who} (device {}). Type /verify accept",
-                    ev.content.from_device
-                ));
+                notify.info(format!("verification request from {who}: Enter accepts (or /verify accept)"));
                 notify.send(AppEvent::Bell(BellKind::Verification));
+                notify.send(AppEvent::Verify { account: account.clone(), stage: VerifyStage::Asked { who } });
                 slot.lock().await.request = Some(request);
             }
         });
@@ -3736,7 +3743,9 @@ impl Account {
                 .await?
                 .with_context(|| format!("{user} has no cross-signing identity"))?;
             let request = identity.request_verification_with_methods(EMOJI_ONLY.to_vec()).await?;
-            acct.notify.info(format!("verification requested from {user}; accept it on the other side"));
+            let who = if user == acct.user_id { "your other sessions".to_owned() } else { user.to_string() };
+            acct.notify.info(format!("verification requested from {who}; accept it there"));
+            acct.stage(VerifyStage::Waiting { who, what: "to accept" });
             acct.verify.lock().await.request = Some(request.clone());
             acct.watch_request(request);
             Ok(())
@@ -3748,7 +3757,7 @@ impl Account {
         self.spawn_op(None, async move {
             let request = acct.verify.lock().await.request.clone().context("no pending verification request")?;
             request.accept_with_methods(EMOJI_ONLY.to_vec()).await?;
-            acct.notify.info("verification accepted; start emoji verification on the other side");
+            acct.notify.info("verification accepted; the emoji to compare come next");
             acct.watch_request(request);
             Ok(())
         });
@@ -3778,7 +3787,9 @@ impl Account {
             let mut changes = request.changes();
             while let Some(state) = changes.next().await {
                 match state {
-                    VerificationRequestState::Ready { .. } if request.we_started() => {
+                    // Either side may start comparing emoji once both are
+                    // ready; starting here saves a step on the other device.
+                    VerificationRequestState::Ready { .. } => {
                         if let Some(sas) = request.start_sas().await? {
                             acct.watch_sas(sas);
                             return Ok(());
@@ -3795,6 +3806,7 @@ impl Account {
                     VerificationRequestState::Done => return Ok(()),
                     VerificationRequestState::Cancelled(info) => {
                         acct.notify.info(format!("verification cancelled: {}", info.reason()));
+                        acct.stage(VerifyStage::Cancelled { reason: info.reason().to_owned() });
                         return Ok(());
                     }
                     _ => {}
@@ -3802,6 +3814,10 @@ impl Account {
             }
             Ok(())
         });
+    }
+
+    fn stage(&self, stage: VerifyStage) {
+        self.notify.send(AppEvent::Verify { account: self.name.clone(), stage });
     }
 
     fn watch_sas(&self, sas: SasVerification) {
@@ -3814,17 +3830,21 @@ impl Account {
                 match current {
                     SasState::Started { .. } if !sas.we_started() => sas.accept().await?,
                     SasState::KeysExchanged { emojis, decimals } => {
-                        let code = match emojis {
-                            Some(emojis) => emojis
-                                .emojis
-                                .iter()
-                                .map(|e| format!("{} {}", e.symbol, e.description))
-                                .collect::<Vec<_>>()
-                                .join("  "),
-                            None => format!("{} {} {}", decimals.0, decimals.1, decimals.2),
+                        let emoji: Vec<(String, String)> = emojis
+                            .map(|e| e.emojis.iter().map(|e| (e.symbol.to_owned(), e.description.to_owned())).collect())
+                            .unwrap_or_default();
+                        let code = if emoji.is_empty() {
+                            format!("{} {} {}", decimals.0, decimals.1, decimals.2)
+                        } else {
+                            emoji.iter().map(|(e, name)| format!("{e} {name}")).collect::<Vec<_>>().join("  ")
                         };
                         acct.notify.info(format!("compare with the other device:  {code}"));
-                        acct.notify.info("type /verify confirm if they match, /verify mismatch if not");
+                        acct.notify.info("y in the panel (or /verify confirm) if they match, n if not");
+                        let numbers = emoji.is_empty().then_some(decimals);
+                        acct.stage(VerifyStage::Compare { who: other(&sas), emoji, numbers });
+                    }
+                    SasState::Confirmed => {
+                        acct.stage(VerifyStage::Waiting { who: other(&sas), what: "to confirm too" });
                     }
                     SasState::Done { .. } => {
                         acct.notify.info(format!(
@@ -3832,11 +3852,13 @@ impl Account {
                             sas.other_user_id(),
                             sas.other_device().device_id()
                         ));
+                        acct.stage(VerifyStage::Done { who: other(&sas) });
                         acct.report_trust().await;
                         break;
                     }
                     SasState::Cancelled(info) => {
                         acct.notify.info(format!("verification cancelled: {}", info.reason()));
+                        acct.stage(VerifyStage::Cancelled { reason: info.reason().to_owned() });
                         break;
                     }
                     _ => {}
@@ -3996,6 +4018,45 @@ pub enum Moderation {
     Kick,
     Ban,
     Unban,
+}
+
+/// The other side of a verification, for people.
+fn other(sas: &SasVerification) -> String {
+    let device = sas.other_device();
+    let name = device.display_name().unwrap_or(device.device_id().as_str()).to_owned();
+    if sas.is_self_verification() {
+        format!("your other session ({name})")
+    } else {
+        format!("{} ({name})", sas.other_user_id())
+    }
+}
+
+/// A verification's steps, as the panel shows them. `who` is the other
+/// side: "your other session (Element on iPhone)" or a Matrix ID.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VerifyStage {
+    /// They asked; accepting is up to you.
+    Asked {
+        who: String,
+    },
+    /// Waiting for the other side: to accept, or to confirm the emoji.
+    Waiting {
+        who: String,
+        what: &'static str,
+    },
+    /// Compare these with what the other side shows: (emoji, name), or
+    /// numbers when it can't show emoji.
+    Compare {
+        who: String,
+        emoji: Vec<(String, String)>,
+        numbers: Option<(u16, u16, u16)>,
+    },
+    Done {
+        who: String,
+    },
+    Cancelled {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]

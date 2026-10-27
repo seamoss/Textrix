@@ -27,6 +27,7 @@ use crate::{
     home,
     input::display_width,
     links,
+    matrix::VerifyStage,
     model::{Activity, Fold, Line, LineKind, MediaKind, Poll, PresenceKind},
     richtext::Marks,
     switcher,
@@ -148,6 +149,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.emoji_picker = app.emoji_picker.is_some().then(|| draw_emoji_picker(f, app));
     if app.vote.is_some() {
         draw_vote(f, app);
+    }
+    if app.verify_panel.is_some() {
+        draw_verify(f, app);
     }
     if app.viewer.is_some() {
         draw_viewer(f, app);
@@ -366,6 +370,80 @@ fn draw_emoji_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
 }
 
 /// Voting: the poll's question, and its answers to pick from.
+/// The verification panel, in the middle of the screen: the request, the
+/// emoji to compare (each over its name), and how it ended.
+fn draw_verify(f: &mut Frame, app: &App) {
+    let t = &app.cfg.palette;
+    let Some(panel) = app.verify_panel.as_ref() else { return };
+    let screen = f.area();
+    let width = screen.width.saturating_sub(4).min(82);
+    // Inside the border and a space each side.
+    let inner_w = width.saturating_sub(4) as usize;
+    let mut rows: Vec<TLine> = Vec::new();
+    let keys = match &panel.stage {
+        VerifyStage::Asked { who } => {
+            rows.push(TLine::styled(cut(&format!("Verification request from {who}"), inner_w), t.accent));
+            rows.push(TLine::default());
+            rows.push(TLine::from(cut("Accept, then compare the emoji you both see.", inner_w)));
+            " Enter accept · n decline · Esc later "
+        }
+        VerifyStage::Waiting { who, what } => {
+            rows.push(TLine::from(cut(&format!("Waiting for {who} {what}…"), inner_w)));
+            " Esc cancels "
+        }
+        VerifyStage::Compare { who, emoji, numbers } => {
+            rows.push(TLine::styled(cut(&format!("Do these match what {who} shows?"), inner_w), t.accent));
+            rows.push(TLine::default());
+            if let Some((a, b, c)) = numbers {
+                rows.push(TLine::from(format!("   {a}   {b}   {c}")));
+            }
+            // Seven in a row when they fit (names are up to ten letters),
+            // else two rows.
+            let per_row = if inner_w >= emoji.len() * 11 { emoji.len() } else { emoji.len().div_ceil(2) };
+            let col = inner_w / per_row.max(1);
+            let centred = |text: &str| {
+                let text = cut(text, col);
+                let left = col.saturating_sub(display_len(&text)) / 2;
+                let right = col.saturating_sub(display_len(&text) + left);
+                format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+            };
+            for (n, chunk) in emoji.chunks(per_row.max(1)).enumerate() {
+                if n > 0 {
+                    rows.push(TLine::default());
+                }
+                rows.push(TLine::from(chunk.iter().map(|(e, _)| centred(e)).collect::<String>()));
+                rows.push(TLine::styled(chunk.iter().map(|(_, name)| centred(name)).collect::<String>(), t.dim));
+            }
+            " y they match · n they don't · Esc cancel "
+        }
+        VerifyStage::Done { who } => {
+            rows.push(TLine::styled(cut(&format!("✓ Verified {who}"), inner_w), t.accent));
+            " any key closes "
+        }
+        VerifyStage::Cancelled { reason } => {
+            rows.push(TLine::styled(cut(&format!("Verification cancelled: {reason}"), inner_w), t.error));
+            " any key closes "
+        }
+    };
+    let height = (rows.len() as u16 + 2).min(screen.height);
+    let area = Rect {
+        x: screen.x + (screen.width - width) / 2,
+        y: screen.y + screen.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(" Verify ", t.accent))
+        .title_bottom(TLine::from(keys).right_aligned())
+        .padding(ratatui::widgets::Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    f.render_widget(Paragraph::new(rows), inner);
+}
+
 fn draw_vote(f: &mut Frame, app: &App) {
     let t = &app.cfg.palette;
     let Some(v) = app.vote.as_ref() else { return };

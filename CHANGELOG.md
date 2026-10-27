@@ -7,6 +7,19 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.16.4] - 2026-10-27
+
+### Changed
+- Verifying is a panel over whatever window you're in, a key a step,
+  instead of commands and lines in the status window. A request pops it
+  up (Enter accepts, `n` declines, Esc leaves it for later); the emoji
+  show in a row, each over its name, and `y` or `n` answers whether they
+  match; it says when it's done. `/verify` opens it to wait for your
+  other session. The `/verify` subcommands still work.
+- Accepting a request starts the emoji comparison from Textrix's side, so
+  the other device goes straight to the emoji instead of you starting it
+  there.
+
 ## [0.16.3] - 2026-10-27
 
 ### Fixed

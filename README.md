@@ -123,10 +123,15 @@ unencrypted too.
 - `RECOVERY_KEY` is applied after the first sync (or run `/recover`). It
   verifies this device via cross-signing and downloads your key backup, so
   older history decrypts.
-- `/verify` asks your other sessions to verify this one. `/verify accept`
-  answers a request from Element, then use `/verify confirm` or
-  `/verify mismatch` after comparing the emoji. Textrix verifies by emoji
-  only, so Element goes straight to them (it can't show or scan QR codes).
+- Verifying happens in a panel over whatever window you're in, a key a
+  step. A request from Element pops it up: Enter accepts, and Textrix
+  starts the emoji comparison itself, so Element goes straight to the
+  emoji. The panel shows them, each over its name: `y` if they match what
+  the other side shows, `n` if not, Esc cancels. `/verify` asks your other
+  sessions (or `/verify @user` someone else) and opens the panel to wait.
+  Textrix verifies by emoji only (it can't show or scan QR codes);
+  `/verify accept`, `confirm`, `mismatch` and `cancel` do the same as the
+  panel's keys.
 - The status bar shows `<server>: unverified` until this device is trusted.
 - `/whois <user>` shows identity and per-device trust.
 - `/keys export [file]` saves every room key this device holds (to

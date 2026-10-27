@@ -47,7 +47,7 @@ use crate::{
     home::{self, Home, Invitation},
     input::{Candidate, Draft, Input},
     links,
-    matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer},
+    matrix::{self, Account, AppEvent, Moderation, Tx, VerifyAnswer, VerifyStage},
     model::{
         AccountName, Activity, Fold, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Poll, Presence,
         PresenceKind, RoomMeta, Scheduled, SpaceInfo, ago,
@@ -636,6 +636,12 @@ pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
 /// Custom emoji: (shortcode, picture).
 type Emoji = Vec<(String, OwnedMxcUri)>;
 
+/// The verification panel, over whatever window you're in.
+pub struct VerifyPanel {
+    pub account: AccountName,
+    pub stage: VerifyStage,
+}
+
 /// Voting in a poll: its answers to pick from (Enter in selection mode).
 pub struct VotePicker {
     pub question: String,
@@ -943,6 +949,8 @@ pub struct App {
     /// Reacting with `+`: the emoji to pick from.
     pub emoji_picker: Option<EmojiPicker>,
     pub vote: Option<VotePicker>,
+    /// A verification under way: accept it, compare emoji, see it end.
+    pub verify_panel: Option<VerifyPanel>,
     pub profile: Option<ProfileView>,
     /// `/media`: a room's media as tiles, over the messages.
     pub gallery: Option<Gallery>,
@@ -1519,6 +1527,7 @@ impl App {
             theme_picker: None,
             emoji_picker: None,
             vote: None,
+            verify_panel: None,
             profile: None,
             gallery: None,
             home: None,
@@ -2527,6 +2536,9 @@ impl App {
                     state.nick = Some(nick);
                 }
             }
+            // How it ended only shows in a panel still open: not after Esc.
+            AppEvent::Verify { stage: VerifyStage::Cancelled { .. }, .. } if self.verify_panel.is_none() => {}
+            AppEvent::Verify { account, stage } => self.verify_panel = Some(VerifyPanel { account, stage }),
             AppEvent::Trust { account, verified } => {
                 if let Some(state) = self.accounts.get_mut(&account) {
                     state.verified = Some(verified);
@@ -3791,6 +3803,9 @@ impl App {
             }
             return;
         }
+        if self.verify_panel.is_some() {
+            return self.on_verify_key(key);
+        }
         if self.gallery.is_some() {
             return self.on_gallery_key(key);
         }
@@ -4361,6 +4376,46 @@ impl App {
             poll: id,
             stable: poll.stable,
         });
+    }
+
+    /// The verification panel: one key for each step.
+    fn on_verify_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let Some(panel) = self.verify_panel.as_mut() else { return };
+        let acct = self.accounts.get(&*panel.account).and_then(|s| s.account.clone());
+        let answer = |a| {
+            if let Some(acct) = &acct {
+                acct.verify_answer(a);
+            }
+        };
+        let yes = matches!(key.code, Enter | Char('y' | 'Y'));
+        match (&panel.stage, key.code) {
+            (VerifyStage::Asked { who }, _) if yes => {
+                if let Some(acct) = &acct {
+                    acct.verify_accept();
+                }
+                panel.stage = VerifyStage::Waiting { who: who.clone(), what: "to answer" };
+            }
+            (VerifyStage::Asked { .. }, Char('n' | 'N')) => {
+                answer(VerifyAnswer::Cancel);
+                self.verify_panel = None;
+            }
+            (VerifyStage::Asked { .. }, Esc) => {
+                self.verify_panel = None;
+                self.info("verification left for later: /verify accept takes it up");
+            }
+            (VerifyStage::Compare { who, .. }, _) if yes => {
+                answer(VerifyAnswer::Confirm);
+                panel.stage = VerifyStage::Waiting { who: who.clone(), what: "to confirm too" };
+            }
+            (VerifyStage::Compare { .. }, Char('n' | 'N')) => answer(VerifyAnswer::Mismatch),
+            (VerifyStage::Compare { .. } | VerifyStage::Waiting { .. }, Esc) => {
+                answer(VerifyAnswer::Cancel);
+                self.verify_panel = None;
+            }
+            (VerifyStage::Done { .. } | VerifyStage::Cancelled { .. }, _) => self.verify_panel = None,
+            _ => {}
+        }
     }
 
     fn on_vote_key(&mut self, key: KeyEvent) {
@@ -9382,6 +9437,55 @@ mod tests {
         app.in_script = 1;
         assert!(app.cmd_set("notify_command \"touch x\"").is_err(), "not from scripts");
         assert!(app.cmd_set("editor \"touch x\"").is_err());
+    }
+
+    #[test]
+    fn verification_is_a_panel_with_one_key_a_step() {
+        let mut app = test_app();
+        let verify = |stage| AppEvent::Verify { account: "t".into(), stage };
+        let who = "your other session (Element on iPhone)".to_owned();
+        let waiting_for = |app: &App| match &app.verify_panel.as_ref().unwrap().stage {
+            VerifyStage::Waiting { what, .. } => *what,
+            other => panic!("{other:?}"),
+        };
+
+        app.on_event(verify(VerifyStage::Asked { who: who.clone() }));
+        let rows = screen(&mut app, 100, 30).join("\n");
+        assert!(rows.contains(&format!("Verification request from {who}")) && rows.contains("Enter accept"), "{rows}");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(waiting_for(&app), "to answer");
+
+        let emoji = [
+            ("🐶", "Dog"),
+            ("🔑", "Key"),
+            ("🎸", "Guitar"),
+            ("☂️", "Umbrella"),
+            ("📌", "Pin"),
+            ("🚀", "Rocket"),
+            ("🎧", "Headphones"),
+        ]
+        .map(|(e, name)| (e.to_owned(), name.to_owned()))
+        .to_vec();
+        app.on_event(verify(VerifyStage::Compare { who: who.clone(), emoji, numbers: None }));
+        for width in [100, 50] {
+            let rows = screen(&mut app, width, 30).join("\n");
+            assert!(rows.contains("Do these match") && rows.contains("Dog") && rows.contains("Headphones"), "{rows}");
+        }
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(waiting_for(&app), "to confirm too");
+
+        app.on_event(verify(VerifyStage::Done { who: who.clone() }));
+        assert!(screen(&mut app, 100, 30).join("\n").contains(&format!("✓ Verified {who}")));
+        app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(app.verify_panel.is_none(), "any key closes it");
+
+        // Esc on a request leaves it for later, and its cancelling doesn't
+        // pop up again.
+        app.on_event(verify(VerifyStage::Asked { who: who.clone() }));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.verify_panel.is_none());
+        app.on_event(verify(VerifyStage::Cancelled { reason: "the other side cancelled".into() }));
+        assert!(app.verify_panel.is_none());
     }
 
     #[test]
