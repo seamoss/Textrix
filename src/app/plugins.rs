@@ -656,6 +656,10 @@ impl App {
                 let path = self.plugins_dir().join(format!("{name}.log"));
                 let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
                 let lines: Vec<&str> = text.lines().collect();
+                if lines.is_empty() {
+                    self.info(format!("{} is empty: it has what {name} prints to stderr, errors too", path.display()));
+                    return Ok(());
+                }
                 self.info(format!("the end of {}:", path.display()));
                 for line in &lines[lines.len().saturating_sub(20)..] {
                     self.info(format!("  {line}"));
