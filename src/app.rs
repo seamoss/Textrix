@@ -2429,6 +2429,26 @@ impl App {
                     self.sent_early.insert(txn_id, event_id);
                 }
             }
+            AppEvent::Unsent { account, room_id, lines } => {
+                let nick = self.accounts.get(&*account).and_then(|s| s.nick.clone());
+                let Some(idx) = self.window_idx(&account, &room_id) else { return };
+                for mut line in lines {
+                    let w = &mut self.windows[idx];
+                    // Already back from the server, or sent while starting up.
+                    if w.lines.iter().any(|l| l.txn_id.is_some() && l.txn_id == line.txn_id) {
+                        continue;
+                    }
+                    if let Some(event_id) = line.txn_id.as_ref().and_then(|t| self.sent_early.remove(t)) {
+                        if w.contains(&event_id) {
+                            continue;
+                        }
+                        (line.pending, line.waiting, line.event_id) = (false, false, Some(event_id));
+                    }
+                    let localpart = || line.sender.as_ref().map(|u| u.localpart().to_owned()).unwrap_or_default();
+                    line.nick = nick.clone().unwrap_or_else(localpart);
+                    w.push(line, cap);
+                }
+            }
             AppEvent::Queued { account, room_id, txn_id, queued } => {
                 let Some(idx) = self.window_idx(&account, &room_id) else { return };
                 if let Some(line) =
@@ -10116,9 +10136,8 @@ mod tests {
         assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
     }
 
-    #[test]
-    fn starting_offline_reads_whats_saved_and_queues_what_you_send() {
-        let mut app = test_app();
+    /// Account `t`, @me:example.org, that hasn't reached its server yet.
+    fn offline_account(app: &mut App) {
         let def = ServerDef {
             name: "t".into(),
             homeserver: Some("https://example.org".into()),
@@ -10134,6 +10153,53 @@ mod tests {
             account: None,
         };
         app.accounts.insert("t".into(), state);
+    }
+
+    #[test]
+    fn restarting_offline_shows_what_still_waits() {
+        let mut app = test_app();
+        offline_account(&mut app);
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        let room_id: OwnedRoomId = "!a:x.org".try_into().unwrap();
+        let waiting = |txn: &str, body: &str| {
+            let mut line = Line::new(LineKind::Message, body);
+            (line.own, line.pending, line.waiting) = (true, true, true);
+            (line.txn_id, line.sender) = (Some(txn.into()), Some("@me:example.org".try_into().unwrap()));
+            line
+        };
+        let unsent = |lines: Vec<Line>| AppEvent::Unsent { account: "t".into(), room_id: room_id.clone(), lines };
+        let sent = |txn: &str, event_id: &str| AppEvent::Sent {
+            account: "t".into(),
+            room_id: room_id.clone(),
+            txn_id: txn.into(),
+            event_id: event_id.try_into().unwrap(),
+        };
+        let line = |app: &App, body: &str| app.windows[a].lines.iter().find(|l| l.body == body).unwrap().clone();
+
+        // Written offline, then Textrix quit: back as waiting, under your name.
+        app.on_event(unsent(vec![waiting("q1", "from the train")]));
+        app.switch_to(a);
+        let rows = screen(&mut app, 120, 20).join("\n");
+        assert!(rows.contains("<me>") && rows.contains("from the train (waiting to send)"), "{rows}");
+        app.on_event(unsent(vec![waiting("q1", "from the train")]));
+        assert_eq!(app.windows[a].lines.iter().filter(|l| l.body == "from the train").count(), 1, "shown once");
+
+        // It goes when the server can be reached.
+        app.on_event(sent("q1", "$one"));
+        let gone = line(&app, "from the train");
+        assert!(!gone.pending && !gone.waiting && gone.event_id.is_some());
+
+        // Sent while Textrix was starting, before it was shown: shown as sent.
+        app.on_event(sent("q2", "$two"));
+        app.on_event(unsent(vec![waiting("q2", "and another")]));
+        let early = line(&app, "and another");
+        assert!(!early.waiting && early.event_id.as_ref().map(|e| e.as_str()) == Some("$two"));
+    }
+
+    #[test]
+    fn starting_offline_reads_whats_saved_and_queues_what_you_send() {
+        let mut app = test_app();
+        offline_account(&mut app);
         let a = room_window(&mut app, "!a:x.org", "Night Owls");
         let room_id: OwnedRoomId = "!a:x.org".try_into().unwrap();
         app.on_event(AppEvent::SyncError { account: "t".into(), error: "connection refused".into() });

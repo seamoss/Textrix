@@ -233,6 +233,14 @@ pub enum AppEvent {
         command: String,
         output: Result<(String, Option<i32>), String>,
     },
+    /// Messages still in the send queue from last time (written offline,
+    /// then Textrix quit), to show as waiting: the queue sends them when it
+    /// can.
+    Unsent {
+        account: AccountName,
+        room_id: OwnedRoomId,
+        lines: Vec<Line>,
+    },
     /// A message went into the send queue, which named it `queued`.
     Queued {
         account: AccountName,
@@ -475,6 +483,9 @@ pub struct Account {
     /// Messages in the send queue, by its transaction ID: to cancel one the
     /// server refused.
     queued: Arc<std::sync::Mutex<HashMap<OwnedTransactionId, SendHandle>>>,
+    /// Wakes a sync loop waiting to try again: a queued message just got
+    /// through, so the server can be reached.
+    wake: Arc<tokio::sync::Notify>,
 }
 
 /// Settings [`connect`] takes from the config.
@@ -589,6 +600,7 @@ pub async fn connect(def: ServerDef, paths: Paths, env: EnvFile, opts: ConnectOp
         index: Arc::new(std::sync::Mutex::new(index)),
         sealer: sealer.map(Arc::new),
         queued: Default::default(),
+        wake: Default::default(),
     })
 }
 
@@ -880,6 +892,49 @@ fn link_image(json: &str) -> Option<OwnedMxcUri> {
 const EMOJI_ONLY: [matrix_sdk::ruma::events::key::verification::VerificationMethod; 1] =
     [matrix_sdk::ruma::events::key::verification::VerificationMethod::SasV1];
 
+/// Where the account's store keeps your display name, so it's known while
+/// the server can't be reached.
+const NICK_KEY: &[u8] = b"textrix.nick";
+
+/// Why the server couldn't be reached, for people: its own answer when it
+/// gave one, else [`reason`].
+fn reach_error(e: &matrix_sdk::Error) -> String {
+    if e.as_client_api_error().is_some() { e.to_string() } else { reason(e) }
+}
+
+/// What went wrong underneath an error, in a few words ("connection
+/// refused", "the connection dropped"), without the request's URL or links
+/// to a library's manual.
+fn reason(e: &(dyn std::error::Error + 'static)) -> String {
+    use std::io::ErrorKind::*;
+    let mut cause = e;
+    loop {
+        if cause.to_string().starts_with("dns error") {
+            return "can't look up its address".into();
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                ConnectionRefused => return "connection refused".into(),
+                ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof => {
+                    return "the connection dropped".into();
+                }
+                TimedOut => return "timed out".into(),
+                NetworkDown | NetworkUnreachable | HostUnreachable | NotConnected => return "no network".into(),
+                _ => {}
+            }
+        }
+        match cause.source() {
+            Some(next) => cause = next,
+            None => break,
+        }
+    }
+    let text = cause.to_string();
+    let text = text.split(" (os error").next().unwrap_or_default();
+    let text = text.split(": http").next().unwrap_or_default();
+    let mut chars = text.chars();
+    chars.next().map(|c| c.to_lowercase().chain(chars).collect()).unwrap_or_else(|| e.to_string())
+}
+
 /// Rooms with their own notification mode, for [`AppEvent::PushRules`].
 async fn push_state(settings: &NotificationSettings, account: AccountName) -> AppEvent {
     let mut modes = HashMap::new();
@@ -963,12 +1018,19 @@ impl Account {
 
         let acct = self.clone();
         self.track(tokio::spawn(async move {
+            // The display name from last time, until the server says.
+            if let Ok(Some(nick)) = acct.client.state_store().get_custom_value(NICK_KEY).await
+                && let Ok(nick) = String::from_utf8(nick)
+            {
+                acct.notify.send(AppEvent::Profile { account: acct.name.clone(), nick });
+            }
             let mut rooms = Vec::new();
             for room in acct.client.joined_rooms() {
                 rooms.push(room_meta(&room).await);
             }
             acct.notify.send(AppEvent::Rooms { account: acct.name.clone(), rooms });
             acct.load_cached_history().await;
+            acct.show_unsent().await;
             acct.notify
                 .send(AppEvent::Spaces { account: acct.name.clone(), spaces: joined_spaces(&acct.client).await });
             acct.watch_room_keys().await;
@@ -1213,9 +1275,8 @@ impl Account {
                         return;
                     }
                     failing = true;
-                    self.notify.send(AppEvent::SyncError { account: self.name.clone(), error: e.to_string() });
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(Duration::from_secs(60));
+                    self.notify.send(AppEvent::SyncError { account: self.name.clone(), error: reach_error(&e) });
+                    self.pause(&mut backoff, e.as_client_api_error().is_none()).await;
                 }
             }
         }
@@ -1272,6 +1333,7 @@ impl Account {
         let (mut first, mut trusted, mut failing) = (true, false, false);
         let mut backoff = Duration::from_secs(1);
         loop {
+            let mut unreachable = false;
             let stream = sync.sync();
             futures_util::pin_mut!(stream);
             // The stream ends after an error; restart it after a pause.
@@ -1317,13 +1379,26 @@ impl Account {
                             return Ok(());
                         }
                         failing = true;
-                        self.notify.send(AppEvent::SyncError { account: self.name.clone(), error: e.to_string() });
+                        unreachable = e.as_client_api_error().is_none();
+                        self.notify.send(AppEvent::SyncError { account: self.name.clone(), error: reach_error(&e) });
                     }
                 }
             }
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(Duration::from_secs(60));
+            self.pause(&mut backoff, unreachable).await;
         }
+    }
+
+    /// Wait before syncing again after a failure, twice as long each time:
+    /// up to a minute when the server answered with an error, but only a
+    /// quarter minute when it couldn't be reached at all (trying again
+    /// costs it nothing, and the network may be back). A queued message
+    /// getting through ends the wait.
+    async fn pause(&self, backoff: &mut Duration, unreachable: bool) {
+        tokio::select! {
+            _ = tokio::time::sleep(*backoff) => {}
+            _ = self.wake.notified() => {}
+        }
+        *backoff = (*backoff * 2).min(Duration::from_secs(if unreachable { 15 } else { 60 }));
     }
 
     fn process_presence(&self, events: &[Raw<PresenceEvent>]) {
@@ -1443,7 +1518,7 @@ impl Account {
     async fn after_first_sync(&self) -> bool {
         self.notify.send(push_state(&self.client.notification_settings().await, self.name.clone()).await);
         if let Ok(Some(nick)) = self.client.account().get_display_name().await {
-            self.notify.send(AppEvent::Profile { account: self.name.clone(), nick });
+            self.profile(nick).await;
         }
 
         if self.report_trust().await {
@@ -1671,9 +1746,49 @@ impl Account {
         });
     }
 
-    /// What happens to queued messages: sent, waiting for the server (the
-    /// queue pauses; it's tried again every half minute, and as soon as
-    /// syncing works again), or refused (taken out of the queue).
+    /// Our display name, told to the app and kept in the store for starting
+    /// while the server can't be reached.
+    async fn profile(&self, nick: String) {
+        if let Err(e) = self.client.state_store().set_custom_value(NICK_KEY, nick.clone().into_bytes()).await {
+            tracing::warn!("saving the display name: {e}");
+        }
+        self.notify.send(AppEvent::Profile { account: self.name.clone(), nick });
+    }
+
+    /// Messages left in the send queue from last time (written offline,
+    /// then Textrix quit) show as waiting; the queue sends them when it can.
+    async fn show_unsent(&self) {
+        for room in self.client.joined_rooms() {
+            let Ok((echoes, _)) = room.send_queue().subscribe().await else { continue };
+            let lines: Vec<Line> = echoes
+                .into_iter()
+                .filter_map(|echo| {
+                    let LocalEchoContent::Event { serialized_event, send_handle, .. } = echo.content else {
+                        return None;
+                    };
+                    let matrix_sdk::ruma::events::AnyMessageLikeEventContent::RoomMessage(content) =
+                        serialized_event.deserialize().ok()?
+                    else {
+                        return None;
+                    };
+                    let mut line = crate::convert::unsent_line(content)?;
+                    line.ts = crate::convert::to_local(send_handle.created_at);
+                    (line.own, line.pending, line.waiting) = (true, true, true);
+                    (line.txn_id, line.sender) = (Some(echo.transaction_id), Some(self.user_id.clone()));
+                    Some(line)
+                })
+                .collect();
+            if !lines.is_empty() {
+                let room_id = room.room_id().to_owned();
+                self.notify.send(AppEvent::Unsent { account: self.name.clone(), room_id, lines });
+            }
+        }
+    }
+
+    /// What happens to queued messages: sent (so the server can be reached,
+    /// and a sync waiting to try again goes now), waiting for the server
+    /// (the queue pauses; it's tried again every quarter minute, and as soon
+    /// as syncing works again), or refused (taken out of the queue).
     async fn watch_send_queue(self) {
         let queue = self.client.send_queue();
         let mut updates = queue.subscribe();
@@ -1689,13 +1804,14 @@ impl Account {
             match update {
                 RoomSendQueueUpdate::SentEvent { transaction_id, event_id } => {
                     self.queued.lock().unwrap().remove(&transaction_id);
+                    self.wake.notify_waiters();
                     self.notify.send(AppEvent::Sent { account, room_id, txn_id: transaction_id, event_id });
                 }
                 RoomSendQueueUpdate::SendError { transaction_id, is_recoverable: true, .. } => {
                     self.notify.send(AppEvent::SendWaiting { account, room_id, txn_id: transaction_id });
                     let client = self.client.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        tokio::time::sleep(Duration::from_secs(15)).await;
                         client.send_queue().set_enabled(true).await;
                     });
                 }
@@ -3375,7 +3491,7 @@ impl Account {
         let acct = self.clone();
         self.spawn_op(None, async move {
             acct.client.account().set_display_name(Some(&nick)).await?;
-            acct.notify.send(AppEvent::Profile { account: acct.name.clone(), nick });
+            acct.profile(nick).await;
             Ok(())
         });
     }
@@ -4025,5 +4141,44 @@ mod tests {
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(1536), "1.5 KB");
         assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[tokio::test]
+    async fn unreachable_servers_are_explained_without_the_url() {
+        // Nothing listens on a port that was just let go.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let client = Client::builder()
+            .homeserver_url(format!("http://127.0.0.1:{port}"))
+            .request_config(matrix_sdk::config::RequestConfig::new().disable_retry())
+            .build()
+            .await
+            .unwrap();
+        let e = matrix_sdk::Error::from(client.fetch_server_versions(None).await.unwrap_err());
+        assert!(e.to_string().contains("/_matrix/client/versions"), "the SDK's own words have the URL: {e}");
+        assert_eq!(reach_error(&e), "connection refused");
+    }
+
+    #[test]
+    fn dropped_connections_say_so_without_links() {
+        /// A wrapper like hyper's, with the I/O error as its source.
+        #[derive(Debug)]
+        struct Wrapped(std::io::Error);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "error reading a body from connection")
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let eof = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "peer closed connection without sending TLS close_notify: https://docs.rs/rustls/latest/rustls/",
+        );
+        assert_eq!(reason(&Wrapped(eof)), "the connection dropped");
+        let odd = std::io::Error::other("Something odd: https://example.org/why");
+        assert_eq!(reason(&Wrapped(odd)), "something odd");
     }
 }

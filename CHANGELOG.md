@@ -7,6 +7,21 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.16.1] - 2026-10-26
+
+### Fixed
+- Messages written offline and still waiting when Textrix quit show again
+  as "(waiting to send)" when it starts; they were kept and sent, but not
+  shown until they went.
+- Not reaching the server says why in a few words ("connection refused",
+  "the connection dropped", "can't look up its address") instead of
+  printing the whole sync URL or a link to a library's manual.
+- Starting offline shows your display name, saved from last time, rather
+  than your Matrix ID.
+- When the network comes back, Textrix notices within a quarter minute
+  (it waited up to a minute), and at once when a waiting message gets
+  through.
+
 ## [0.16.0] - 2026-10-26
 
 ### Added

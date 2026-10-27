@@ -14,7 +14,10 @@ use matrix_sdk::{
             poll::{start::PollKind, unstable_start::UnstablePollStartEventContent},
             room::{
                 member::MembershipChange,
-                message::{AudioMessageEventContent, MessageFormat, MessageType, Relation, VideoMessageEventContent},
+                message::{
+                    AudioMessageEventContent, MessageFormat, MessageType, Relation, RoomMessageEventContent,
+                    VideoMessageEventContent,
+                },
                 redaction::SyncRoomRedactionEvent,
             },
         },
@@ -184,35 +187,7 @@ impl<'a> Converter<'a> {
 fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
     match msg {
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Original(ev)) => {
-            let content = ev.content;
-            match content.relates_to {
-                Some(Relation::Replacement(replacement)) => {
-                    let (kind, body) = render_msgtype(&replacement.new_content.msgtype);
-                    line.kind = kind;
-                    line.body = body.clone();
-                    line.rich = rich_of(&replacement.new_content.msgtype);
-                    line.edited = true;
-                    return Some(Item::Edit { target: replacement.event_id, body, fallback: line });
-                }
-                Some(Relation::Reply(reply)) => line.reply_to = Some(reply.in_reply_to.event_id),
-                Some(Relation::Thread(thread)) => {
-                    // Show what it answers: the quoted message for an explicit
-                    // in-thread reply, otherwise the thread's root.
-                    line.thread = true;
-                    line.thread_root = Some(thread.event_id.clone());
-                    line.reply_to = match thread.in_reply_to {
-                        Some(r) if !thread.is_falling_back => Some(r.event_id),
-                        _ => Some(thread.event_id),
-                    };
-                }
-                _ => {}
-            }
-            let (kind, body) = render_msgtype(&content.msgtype);
-            line.kind = kind;
-            line.body = if line.reply_to.is_some() { strip_reply_fallback(&body).to_owned() } else { body };
-            line.media = media_of(&content.msgtype);
-            line.rich = rich_of(&content.msgtype);
-            Some(Item::Line(line))
+            Some(room_message(ev.content, line))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(_)) => {
             line.redacted = true;
@@ -301,6 +276,47 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
 }
 
 /// A custom emoji reaction, by the shortcode clients send with it.
+/// A message (or an edit of one) as what the window shows.
+fn room_message(content: RoomMessageEventContent, mut line: Line) -> Item {
+    match content.relates_to {
+        Some(Relation::Replacement(replacement)) => {
+            let (kind, body) = render_msgtype(&replacement.new_content.msgtype);
+            line.kind = kind;
+            line.body = body.clone();
+            line.rich = rich_of(&replacement.new_content.msgtype);
+            line.edited = true;
+            return Item::Edit { target: replacement.event_id, body, fallback: line };
+        }
+        Some(Relation::Reply(reply)) => line.reply_to = Some(reply.in_reply_to.event_id),
+        Some(Relation::Thread(thread)) => {
+            // Show what it answers: the quoted message for an explicit
+            // in-thread reply, otherwise the thread's root.
+            line.thread = true;
+            line.thread_root = Some(thread.event_id.clone());
+            line.reply_to = match thread.in_reply_to {
+                Some(r) if !thread.is_falling_back => Some(r.event_id),
+                _ => Some(thread.event_id),
+            };
+        }
+        _ => {}
+    }
+    let (kind, body) = render_msgtype(&content.msgtype);
+    line.kind = kind;
+    line.body = if line.reply_to.is_some() { strip_reply_fallback(&body).to_owned() } else { body };
+    line.media = media_of(&content.msgtype);
+    line.rich = rich_of(&content.msgtype);
+    Item::Line(line)
+}
+
+/// A message of ours still waiting in the send queue, as its line; none
+/// for an edit, whose message is already shown.
+pub fn unsent_line(content: RoomMessageEventContent) -> Option<Line> {
+    match room_message(content, Line::new(LineKind::Message, "")) {
+        Item::Line(line) => Some(line),
+        _ => None,
+    }
+}
+
 fn custom_reaction(content: Option<&serde_json::Value>) -> String {
     let code = content.and_then(|c| c.get("shortcode").or_else(|| c.get("com.beeper.reaction.shortcode")));
     match code.and_then(|c| c.as_str()) {
@@ -595,6 +611,29 @@ mod tests {
         let html = format!("<em>meh</em> {SHRUG_BROKEN}");
         let spans = super::rich_of(&MessageType::Text(TextMessageEventContent::html("meh", html))).unwrap();
         assert!(spans.iter().any(|s| s.text.contains(SHRUG_BROKEN)));
+    }
+
+    #[test]
+    fn waiting_messages_show_like_sent_ones() {
+        use matrix_sdk::ruma::{
+            events::{
+                relation::{InReplyTo, Reply},
+                room::message::ReplacementMetadata,
+            },
+            owned_event_id,
+        };
+        let line = unsent_line(RoomMessageEventContent::text_plain("on the train")).unwrap();
+        assert_eq!((line.kind, line.body.as_str()), (LineKind::Message, "on the train"));
+        assert_eq!(unsent_line(RoomMessageEventContent::emote_plain("waves")).unwrap().kind, LineKind::Emote);
+        // A reply still says what it answers.
+        let mut reply = RoomMessageEventContent::text_plain("same here");
+        reply.relates_to = Some(Relation::Reply(Reply::new(InReplyTo::new(owned_event_id!("$q")))));
+        let line = unsent_line(reply).unwrap();
+        assert_eq!(line.reply_to, Some(owned_event_id!("$q")));
+        // An edit changes a message that's already shown.
+        let edit = RoomMessageEventContent::text_plain("fixed")
+            .make_replacement(ReplacementMetadata::new(owned_event_id!("$e"), None));
+        assert!(unsent_line(edit).is_none());
     }
 
     #[test]
