@@ -44,6 +44,15 @@ release notes.
   (`"*"` for anyone's), which is how a bot joins the rooms you invite it
   to.
 
+### Changed
+- A key in config.toml that Textrix doesn't know (a typo, or a newer
+  version's setting) is skipped and named in the status window and by
+  `--check`, instead of stopping Textrix from starting, so going back to
+  an earlier version from here on doesn't lock you out (versions before
+  this one still refuse `[plugins]`). Likewise for `[colors]`. A known
+  setting with a value it can't use still stops it, with the line, and
+  `/set` still refuses a name it doesn't know.
+
 ## [0.16.4] - 2026-10-27
 
 ### Changed

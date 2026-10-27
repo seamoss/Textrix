@@ -2039,7 +2039,8 @@ impl Theme {
     }
 }
 
-const KEYS: &[&str] = &[
+/// What `[colors]` can set.
+pub const KEYS: &[&str] = &[
     "background",
     "foreground",
     "bar_fg",

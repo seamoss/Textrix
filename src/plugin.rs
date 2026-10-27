@@ -88,9 +88,9 @@ pub fn name_ok(name: &str) -> bool {
         && name != "textrix"
 }
 
-/// `[plugins.<name>]` in config.toml.
+/// `[plugins.<name>]` in config.toml. Keys it doesn't have are skipped
+/// with a warning, like the rest of the file's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     /// What to run, by `sh -c` in the plugins folder.
     pub command: String,

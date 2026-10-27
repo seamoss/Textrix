@@ -91,7 +91,12 @@ fn check(paths: &Paths) -> Result<()> {
     }
     let config = paths.config_file();
     match Config::load(&config) {
-        Ok(cfg) if config.exists() => println!("config    {}: ok (theme {})", config.display(), cfg.theme.name()),
+        Ok(cfg) if config.exists() => {
+            println!("config    {}: ok (theme {})", config.display(), cfg.theme.name());
+            if !cfg.ignored.is_empty() {
+                println!("          skipped {}: not settings this Textrix knows", cfg.ignored.join(", "));
+            }
+        }
         Ok(_) => println!("config    {}: none, using defaults", config.display()),
         Err(e) => {
             ok = false;

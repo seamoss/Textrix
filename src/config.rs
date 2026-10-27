@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{Theme, ThemeId, ThemeName};
@@ -103,7 +103,7 @@ pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Config {
     /// strftime format for the timestamp column.
     pub timestamp_format: String,
@@ -241,6 +241,10 @@ pub struct Config {
     /// `theme` with `colors` applied (worked out when loading).
     #[serde(skip)]
     pub palette: Theme,
+    /// Keys in the file this Textrix doesn't know (a newer one's settings,
+    /// or typos), skipped rather than stopping it from starting.
+    #[serde(skip)]
+    pub ignored: Vec<String>,
 }
 
 impl Default for Config {
@@ -298,6 +302,7 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             script_settings: BTreeMap::new(),
             palette: Theme::default(),
+            ignored: Vec::new(),
         }
     }
 }
@@ -555,10 +560,15 @@ impl Config {
         Ok(toml::Table::try_from(self)?)
     }
 
-    /// Settings from TOML, checked like config.toml (unknown keys and wrong
-    /// types are errors); theme files come from `themes`.
+    /// Settings from TOML, as `/set` changes them: unknown keys and wrong
+    /// types are errors (config.toml itself skips unknown keys); theme
+    /// files come from `themes`.
     pub fn from_table(table: toml::Table, themes: &Path) -> Result<Self> {
-        let mut cfg: Self = table.try_into()?;
+        let mut unknown = false;
+        let mut cfg: Self = serde_ignored::deserialize(toml::Value::Table(table), |_| unknown = true)?;
+        if unknown {
+            bail!("no such setting; /set lists them");
+        }
         cfg.check()?;
         crate::theme::set_auto(cfg.theme_dark.clone(), cfg.theme_light.clone());
         cfg.palette = Theme::load(&cfg.theme, &cfg.colors, themes)?;
@@ -568,7 +578,19 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                let mut cfg: Self = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+                let mut ignored = Vec::new();
+                let mut cfg: Self = toml::de::Deserializer::parse(&text)
+                    .and_then(|de| serde_ignored::deserialize(de, |key| ignored.push(key.to_string())))
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                cfg.ignored = ignored;
+                // Colours a newer Textrix has and this one doesn't, likewise.
+                cfg.colors.retain(|key, _| {
+                    let known = crate::theme::KEYS.contains(&key.as_str());
+                    if !known {
+                        cfg.ignored.push(format!("colors.{key}"));
+                    }
+                    known
+                });
                 cfg.check().with_context(|| format!("in {}", path.display()))?;
                 crate::theme::set_auto(cfg.theme_dark.clone(), cfg.theme_light.clone());
                 let themes = path.with_file_name("themes");
@@ -585,6 +607,29 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_settings_are_skipped_and_named() {
+        let dir = std::env::temp_dir().join(format!("textrix-unknown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let text = "theme = \"synthwave\"\ntheem = \"disco\"\n\n[plugins.hello]\ncommand = \"python3 hello.py\"\n\
+                    colour = \"red\"\n\n[from_the_future]\nx = 1\n\n[colors]\nlink = \"lightcyan\"\nsparkles = \"pink\"\n";
+        std::fs::write(&path, text).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert_eq!(cfg.theme.name(), "synthwave", "the rest still applies");
+        assert_eq!(cfg.plugins["hello"].command, "python3 hello.py");
+        let mut ignored = cfg.ignored.clone();
+        ignored.sort();
+        assert_eq!(ignored, ["colors.sparkles", "from_the_future", "plugins.hello.colour", "theem"]);
+        assert_eq!(cfg.colors.keys().collect::<Vec<_>>(), ["link"], "known colours still apply");
+
+        // A setting it knows, with a value it can't use, still says where.
+        std::fs::write(&path, "theme = \"synthwave\"\nbell = \"loud\"\n").unwrap();
+        let e = format!("{:#}", Config::load(&path).unwrap_err());
+        assert!(e.contains("line 2"), "{e}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn bell_settings_parse() {

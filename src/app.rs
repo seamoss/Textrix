@@ -1594,6 +1594,7 @@ impl App {
         for warning in servers.warnings {
             app.status(Line::error(warning));
         }
+        app.note_ignored_settings();
         app.status(Line::info(
             "F1 or /help for commands; Alt+1..0 or Ctrl+N/P switch windows; Alt+Up selects messages",
         ));
@@ -8060,6 +8061,18 @@ impl App {
         Ok(())
     }
 
+    /// Settings in config.toml this Textrix doesn't know, which it skipped.
+    fn note_ignored_settings(&mut self) {
+        if self.cfg.ignored.is_empty() {
+            return;
+        }
+        self.status(Line::error(format!(
+            "{}: skipped {}, which this Textrix doesn't know (a newer one's setting, or a typo?)",
+            self.paths.config_file().display(),
+            self.cfg.ignored.join(", ")
+        )));
+    }
+
     /// `/reload`: apply config.toml and the dotfile without restarting. A
     /// broken file leaves the current settings in place.
     fn cmd_reload(&mut self) {
@@ -8067,6 +8080,7 @@ impl App {
             Ok(cfg) => {
                 self.apply_config(cfg);
                 self.info(format!("reloaded {}", self.paths.config_file().display()));
+                self.note_ignored_settings();
             }
             Err(e) => self.error(format!("{e:#}; keeping the current settings")),
         }
@@ -10396,6 +10410,20 @@ mod tests {
         app.cmd_nickname("@sam:x.org").unwrap();
         assert_eq!(app.windows[1].title(), "sam");
         assert!(app.cmd_nickname("@sam:x.org").is_err(), "nothing to take off");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reload_skips_settings_it_does_not_know_and_says_so() {
+        let mut app = test_app();
+        let dir = std::env::temp_dir().join(format!("textrix-reload-unknown-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.paths.base = dir.clone();
+        std::fs::write(app.paths.config_file(), "theme = \"disco\"\n\n[future_thing]\non = true\n").unwrap();
+        app.cmd_reload();
+        assert_eq!(app.cfg.theme.name(), "disco", "the rest is applied");
+        let said: Vec<&str> = app.windows[0].lines.iter().map(|l| l.body.as_str()).collect();
+        assert!(said.iter().any(|b| b.contains("skipped future_thing, which this Textrix doesn't know")), "{said:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

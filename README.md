@@ -646,7 +646,8 @@ blocks), `badge` (reply counts), `pinned`, `receipts`, `matched`,
 `current_fg`, `current_bg`, `shown`, `inactive`, `activity_event`,
 `activity` (the window list), `op`, `voice`, `online`, `away`, `offline`
 (the member list), `border`, `border_focus` (outlines), and `nicks`. A
-typo stops Textrix with the list of keys rather than being ignored.
+key it doesn't know (a typo, or a newer Textrix's) is skipped, and the
+status window names it.
 
 #### Your own themes
 
@@ -768,7 +769,10 @@ has the rest.
 on take effect at the next start); `/save` writes the session's settings back into
 the file, including what `/theme`, `/bell`, `/log`, F2 and F3 changed,
 leaving your comments alone. After editing the file by hand, `/reload`
-applies it (and picks up servers added to or removed from the dotfile):
+applies it (and picks up servers added to or removed from the dotfile). A
+key Textrix doesn't know, a typo or a newer version's setting, is skipped
+and named in the status window, so going back a version never locks you
+out:
 
 ```toml
 timestamp_format = "%H:%M"
