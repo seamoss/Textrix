@@ -113,10 +113,12 @@ pub enum ThemeName {
     Radioactive,
     /// A mirror ball: gold and magenta, every nick a different light.
     Disco,
+    /// An 80s club at 2am: every neon at once, lasers, no mercy.
+    Shockwave,
 }
 
 impl ThemeName {
-    pub const ALL: [(&str, ThemeName); 51] = [
+    pub const ALL: [(&str, ThemeName); 52] = [
         ("default", ThemeName::Default),
         ("light", ThemeName::Light),
         ("mono", ThemeName::Mono),
@@ -164,6 +166,7 @@ impl ThemeName {
         ("vaporwave", ThemeName::Vaporwave),
         ("radioactive", ThemeName::Radioactive),
         ("disco", ThemeName::Disco),
+        ("shockwave", ThemeName::Shockwave),
         ("colorblind", ThemeName::Colorblind),
         ("colorblind-light", ThemeName::ColorblindLight),
         ("tritan", ThemeName::Tritan),
@@ -253,6 +256,7 @@ impl ThemeName {
             Vaporwave => "Ａ Ｅ Ｓ Ｔ Ｈ Ｅ Ｔ Ｉ Ｃ: pastel pink, teal and Windows 95 grey",
             Radioactive => "glowing green, hazard stripes, do not lick the screen",
             Disco => "a mirror ball: gold and magenta, every nick a different light",
+            Shockwave => "an 80s club at 2am: every neon at once, lasers, no mercy",
         }
     }
 
@@ -267,7 +271,7 @@ impl ThemeName {
             | Bsod | HotdogStand => "classic",
             Monokai | Dracula | Nord | Gruvbox | Catppuccin | Synthwave | MiamiHeat | Cemetery | SummerEvening
             | Abyss | Noir | Espresso => "nouveau",
-            Vaporwave | Radioactive | Disco => "wild",
+            Vaporwave | Radioactive | Disco | Shockwave => "wild",
             Colorblind | ColorblindLight | Tritan | HighContrast => "accessible",
         }
     }
@@ -1430,6 +1434,34 @@ const HIGH_CONTRAST: Palette = Palette {
     nicks: &[0xffffff, 0xffff00, 0x00ffff, 0xff9eff, 0x9eff9e, 0xffcc66],
 };
 
+/// An 80s club at 2am: magenta bars, an acid-green current window, cyan
+/// and yellow and orange everywhere, pink double lines round it all.
+const SHOCKWAVE: Palette = Palette {
+    bg: 0x0a0014,
+    fg: 0xf2f2ff,
+    dim: 0x7b5cff,
+    muted: 0xc8b8ff,
+    bar: [0x0a0014, 0xff00e6],
+    bar_accent: 0x00f0ff,
+    bar_alert: 0xfff200,
+    pane: [0x00f0ff, 0x2b0045],
+    current: [0x0a0014, 0x39ff14],
+    accent: 0x00f0ff,
+    highlight: 0xfff200,
+    highlight_text: 0xff6a00,
+    error: 0xff2052,
+    link: 0x39ff14,
+    mention: 0xff00e6,
+    code: 0xfff200,
+    syntax: [0x7b5cff, 0xff00e6, 0x39ff14, 0xff6a00, 0x00f0ff, 0xfff200],
+    good: 0x39ff14,
+    warn: 0xff6a00,
+    border: 0xff00e6,
+    outlines: Outlines::Double,
+    message_colors: true,
+    nicks: &[0xff00e6, 0x00f0ff, 0x39ff14, 0xfff200, 0xff6a00, 0xb026ff, 0xff2052],
+};
+
 const NORD: Palette = Palette {
     bg: 0x2e3440,
     fg: 0xd8dee9,
@@ -1677,6 +1709,7 @@ impl Theme {
             ThemeName::Vaporwave => Self::palette(&VAPORWAVE),
             ThemeName::Radioactive => Self::palette(&RADIOACTIVE),
             ThemeName::Disco => Self::palette(&DISCO),
+            ThemeName::Shockwave => Self::palette(&SHOCKWAVE),
         }
     }
 

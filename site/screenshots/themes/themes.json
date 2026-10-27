@@ -376,6 +376,14 @@
     "shelf": "wild"
   },
   {
+    "about": "an 80s club at 2am: every neon at once, lasers, no mercy",
+    "accent": "#00f0ff",
+    "bg": "#0a0014",
+    "fg": "#f2f2ff",
+    "name": "shockwave",
+    "shelf": "wild"
+  },
+  {
     "about": "for red-green colour blindness: blue and orange, never red against green",
     "accent": "#56b4e9",
     "bg": "#121417",

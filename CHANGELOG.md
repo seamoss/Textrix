@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.16.0] - 2026-10-21
+## [0.16.0] - 2026-10-26
 
 ### Added
 - Voice messages: `/voice` (or Ctrl+R) records one; the input line shows
@@ -23,6 +23,8 @@ release notes.
   it's back). Messages you send meanwhile show as "(waiting to send)" and
   go when the server can be reached: they wait in the account's store, so
   quitting doesn't lose them either.
+- Theme `shockwave`, on the wild shelf: an 80s club at 2am, magenta bars,
+  an acid-green current window and every other neon at once.
 
 ### Changed
 - Messages go through matrix-sdk's send queue, which retries when the
