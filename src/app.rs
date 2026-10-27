@@ -3863,8 +3863,14 @@ impl App {
             return;
         }
         if self.select.is_some() {
-            self.on_select_key(key);
-            return;
+            if !(alt && matches!(key.code, Char(_))) {
+                self.on_select_key(key);
+                return;
+            }
+            // Esc and the next key typed quickly can come in together, as
+            // Alt+key: leave selecting, and the key does what it does
+            // outside (Esc 1 still goes to window 1, as in irssi).
+            self.select = None;
         }
         // Shift+Enter (or Alt+Enter) starts a new line in the message.
         if key.code == Enter && key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) {
@@ -3920,11 +3926,16 @@ impl App {
                 'k' => self.switcher = Some(Switcher::default()),
                 'b' => self.input.word_left(),
                 'f' => self.input.word_right(),
-                c => {
-                    if let Some(i) = "qwertyuiop".find(c) {
-                        self.switch_to(10 + i);
+                c => match "qwertyuiop".find(c) {
+                    Some(i) => self.switch_to(10 + i),
+                    // Nothing on Alt+c: it was Esc, then c, come in together
+                    // (typed quickly, or through tmux), so "/quit" keeps its
+                    // slash.
+                    None => {
+                        self.on_key(KeyEvent::new(Esc, KeyModifiers::NONE));
+                        self.on_key(KeyEvent::new(Char(c), key.modifiers - KeyModifiers::ALT));
                     }
-                }
+                },
             },
             Char(c) if ctrl => match c {
                 'a' => self.input.home(),
@@ -9346,6 +9357,43 @@ mod tests {
         app.in_script = 1;
         assert!(app.cmd_set("notify_command \"touch x\"").is_err(), "not from scripts");
         assert!(app.cmd_set("editor \"touch x\"").is_err());
+    }
+
+    #[test]
+    fn esc_typed_just_before_a_key_does_not_eat_it() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "pizza tonight?"));
+        app.switch_to(a);
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let type_in = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+        };
+        // Esc and "/" as one Alt+/: the slash stays.
+        app.on_key(alt('/'));
+        type_in(&mut app, "quit");
+        assert_eq!(app.input.text(), "/quit");
+        app.input.clear();
+        app.on_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::ALT | KeyModifiers::SHIFT));
+        assert_eq!(app.input.text(), "Q");
+        app.input.clear();
+
+        // Leaving selection mode the same way.
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert!(app.select.is_some());
+        app.on_key(alt('/'));
+        type_in(&mut app, "me waves");
+        assert!(app.select.is_none());
+        assert_eq!(app.input.text(), "/me waves");
+        app.input.clear();
+
+        // Alt keys that mean something still do, even from selecting.
+        let b = room_window(&mut app, "!b:x.org", "Book Club");
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        app.on_key(alt(char::from(b'1' + a as u8)));
+        assert!(app.select.is_none() && app.active == a && app.input.text().is_empty(), "{b}");
     }
 
     #[test]

@@ -7,6 +7,16 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.16.2] - 2026-10-26
+
+### Fixed
+- Esc typed just before another key no longer eats it: the two can arrive
+  together and read as Alt+key (typing quickly, or through tmux), which
+  turned Esc then `/quit` into a message saying "quit". An Alt+key that
+  means nothing is now Esc, then the key; one that means something still
+  does it (Esc 1 goes to window 1, as in irssi), and from selection mode
+  too.
+
 ## [0.16.1] - 2026-10-26
 
 ### Fixed
