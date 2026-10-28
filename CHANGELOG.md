@@ -52,6 +52,8 @@ release notes.
   this one still refuse `[plugins]`). Likewise for `[colors]`. A known
   setting with a value it can't use still stops it, with the line, and
   `/set` still refuses a name it doesn't know.
+- Clicking the input line ends selecting a message, as typing there means
+  you're done with it.
 
 ## [0.16.4] - 2026-10-27
 

@@ -3635,6 +3635,9 @@ impl App {
         if let Some((area, text_x, skip)) = self.hits.input
             && area.contains(at)
         {
+            // Clicking where you type means typing: no message stays
+            // selected.
+            self.select = None;
             return self.input.click(skip, at.x.saturating_sub(text_x) as usize);
         }
         let Some(pane) = self.hits.panes.iter().find(|p| p.area.contains(at)) else { return };
@@ -9560,6 +9563,22 @@ mod tests {
         assert!(app.verify_panel.is_none());
         app.on_event(verify(VerifyStage::Cancelled { reason: "the other side cancelled".into() }));
         assert!(app.verify_panel.is_none());
+    }
+
+    #[test]
+    fn clicking_the_input_line_stops_selecting() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "pizza tonight?"));
+        app.switch_to(a);
+        app.input.set_text("half typed");
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert!(app.select.is_some());
+        screen(&mut app, 100, 20);
+        let (area, text_x, _) = app.hits.input.unwrap();
+        app.on_click(Position { x: text_x + 4, y: area.y });
+        assert!(app.select.is_none());
+        assert_eq!(app.input.cursor(), 4, "and the cursor goes where you clicked");
     }
 
     #[test]
