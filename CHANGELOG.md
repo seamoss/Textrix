@@ -45,8 +45,9 @@ release notes.
   to.
 - Pasting images: Ctrl+V (or `/paste`) takes the image on the clipboard (a
   screenshot, a picture copied from a browser) into the input line, as
-  terminals only paste text. The status bar says what it is; Enter sends
-  it, with what you've typed as its caption, and Esc drops it. Textrix
+  terminals only paste text. It waits above the input line, with a small
+  picture of it and what it is; Enter sends it, with what you've typed as
+  its caption, and Esc drops it. Textrix
   asks the system for it: `osascript` on macOS, `wl-paste` or `xclip` on
   Linux.
 

@@ -92,9 +92,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_widget(Block::new().style(app.cfg.palette.base), f.area());
     }
     let bars = if app.cfg.statusbar2.is_empty() { 1 } else { 2 };
-    let [topic, middle, status, input] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(bars), Constraint::Length(1)])
-            .areas(f.area());
+    // A pasted image waits just above where you type.
+    let pasted_h = app.pasted.as_ref().map_or(0, |p| 1 + p.picture.as_ref().map_or(0, |pic| pic.size().height));
+    let [topic, middle, status, pasted, input] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(bars),
+        Constraint::Length(pasted_h),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
 
     // Side panes give way on narrow terminals.
     let total = middle.width;
@@ -138,6 +145,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_profile(f, profile, app);
     }
     draw_status(f, status, app);
+    draw_pasted(f, pasted, app);
     app.hits.input = Some(draw_input(f, input, app));
     if app.help.is_some() {
         draw_help(f, app);
@@ -2371,12 +2379,6 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
         format!("send {lines} pasted lines to {}? y/n", win.title())
     } else if let Some(what) = app.upload_summary() {
         format!("upload {what} to {}? Enter/y uploads, n keeps it as text", win.title())
-    } else if let Some(pasted) = &app.pasted {
-        format!(
-            "pasted image {}: Enter sends it to {} (type a caption first if you like), Esc drops it",
-            pasted.summary,
-            win.title()
-        )
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         format!("delete {what}? y/n")
@@ -2392,6 +2394,29 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
         return None;
     };
     Some(Span::styled(text, loud))
+}
+
+/// The image pasted with Ctrl+V, waiting to go: what it is and how to send
+/// it, over a small picture of it.
+fn draw_pasted(f: &mut Frame, area: Rect, app: &App) {
+    let Some(pasted) = &app.pasted else { return };
+    if area.height == 0 {
+        return;
+    }
+    let t = &app.cfg.palette;
+    let line = TLine::from(vec![
+        Span::styled(format!("📎 pasted image, {}", pasted.summary), t.accent),
+        Span::styled("  ·  Enter sends it (what you type is its caption)  ·  Esc drops it", t.dim),
+    ]);
+    f.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
+    if let Some(picture) = &pasted.picture {
+        let size = picture.size();
+        let room = Rect { y: area.y + 1, height: area.height - 1, ..area };
+        let rect = Rect { x: room.x + 3, width: size.width.min(room.width.saturating_sub(3)), ..room };
+        if rect.width == size.width && rect.height >= size.height {
+            f.render_widget(picture, Rect { height: size.height, ..rect });
+        }
+    }
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) -> (Rect, u16, usize) {

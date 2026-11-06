@@ -636,11 +636,12 @@ pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
 /// Custom emoji: (shortcode, picture).
 type Emoji = Vec<(String, OwnedMxcUri)>;
 
-/// An image from the clipboard, saved to send: its file, and "1280×720
-/// PNG, 340 KB".
+/// An image from the clipboard, saved to send: its file, "1280×720 PNG,
+/// 340 KB", and a small picture of it (when the terminal can show one).
 pub struct Pasted {
     pub file: PathBuf,
     pub summary: String,
+    pub picture: Option<Picture>,
 }
 
 /// The verification panel, over whatever window you're in.
@@ -715,6 +716,9 @@ pub enum Preview {
     Ready(Picture),
     Failed,
 }
+
+/// How tall a pasted image's picture is, above the input line.
+pub const PASTED_ROWS: u16 = 6;
 
 /// Encoded previews kept in memory; older ones are fetched again (from the
 /// SDK's media cache) if they scroll back into view.
@@ -2086,7 +2090,7 @@ impl App {
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
             AppEvent::Voice { key, voice } => self.voice_done(key, voice),
-            AppEvent::Pasted(image) => self.pasted_image(image),
+            AppEvent::Pasted { image, picture } => self.pasted_image(image, picture),
             AppEvent::Plugin { name, run, message } => self.on_plugin(name, run, message),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
@@ -4617,14 +4621,29 @@ impl App {
         self.room_ctx()?;
         let dir = self.paths.base.join("tmp");
         let tx = self.tx.clone();
+        let painter = self.picker.clone();
+        let cells = Size::new(self.view_width.saturating_sub(8).clamp(8, 40), PASTED_ROWS);
         tokio::spawn(async move {
             let image = crate::clipboard::image(&dir).await.map_err(|e| format!("{e:#}"));
-            let _ = tx.send(AppEvent::Pasted(image));
+            // A picture of it, to see what's about to go.
+            let picture = match (&image, painter) {
+                (Ok(Some(file)), Some(painter)) => {
+                    let file = file.clone();
+                    tokio::task::spawn_blocking(move || {
+                        image::open(&file).ok().and_then(|img| painter.fit(img, cells).ok())
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                }
+                _ => None,
+            };
+            let _ = tx.send(AppEvent::Pasted { image, picture });
         });
         Ok(())
     }
 
-    fn pasted_image(&mut self, image: Result<Option<PathBuf>, String>) {
+    fn pasted_image(&mut self, image: Result<Option<PathBuf>, String>, picture: Option<Picture>) {
         let file = match image {
             Ok(Some(file)) => file,
             Ok(None) => return self.info("there's no image on the clipboard (text pastes as usual)"),
@@ -4637,7 +4656,7 @@ impl App {
             Err(_) => format!("{kind}, {size}"),
         };
         self.drop_pasted();
-        self.pasted = Some(Pasted { file, summary });
+        self.pasted = Some(Pasted { file, summary, picture });
     }
 
     /// Forget the pasted image, and its file.
@@ -5282,6 +5301,9 @@ impl App {
 
     /// The prompt label while a reply/edit/reaction target is chosen.
     pub fn compose_label(&self) -> Option<String> {
+        if self.pasted.is_some() && self.editing.is_none() {
+            return Some("image caption".into());
+        }
         if let Some(session) = &self.editing {
             let editable = self.editable();
             let pos = editable.iter().position(|l| l.event_id.as_ref() == Some(&session.event))?;
@@ -9664,13 +9686,15 @@ mod tests {
         let paste = |app: &mut App| {
             let file = dir.join("Pasted image.png");
             image::RgbImage::new(4, 3).save(&file).unwrap();
-            app.on_event(AppEvent::Pasted(Ok(Some(file.clone()))));
+            app.on_event(AppEvent::Pasted { image: Ok(Some(file.clone())), picture: None });
             file
         };
         let bar = |app: &mut App| screen(app, 160, 20).join("\n");
 
         let file = paste(&mut app);
-        assert!(bar(&mut app).contains("pasted image 4×3 PNG"), "{}", bar(&mut app));
+        let shown = bar(&mut app);
+        assert!(shown.contains("pasted image, 4×3 PNG") && shown.contains("Esc drops it"), "{shown}");
+        assert!(shown.contains("[image caption]"), "what you type is its caption: {shown}");
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.pasted.is_none() && !file.exists(), "Esc drops it, file and all");
 
@@ -9688,7 +9712,7 @@ mod tests {
         assert!(app.pasted.is_some());
         assert_eq!(app.input.text(), "the view from here");
 
-        app.on_event(AppEvent::Pasted(Ok(None)));
+        app.on_event(AppEvent::Pasted { image: Ok(None), picture: None });
         assert!(app.windows[a].lines.back().unwrap().body.contains("no image on the clipboard"));
         app.drop_pasted();
         std::fs::remove_dir_all(dir).unwrap();

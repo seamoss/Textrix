@@ -469,6 +469,7 @@ async fn run() -> Result<()> {
     highlight::warm_up();
     let base = paths.base.clone();
     let install = install::Install::current();
+    crate::clipboard::clear_leftovers(&paths.base.join("tmp"));
     let mut app = App::new(cfg, paths, env, servers, tx.clone());
     app.install = install.clone();
     if cli.daemon_run {

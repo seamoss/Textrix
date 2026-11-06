@@ -118,6 +118,16 @@ async fn unix(dir: &Path, stem: &str) -> Result<Option<PathBuf>> {
     Ok(Some(file))
 }
 
+/// Pasted images never sent (Textrix quit while one waited).
+pub fn clear_leftovers(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("Pasted image ") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

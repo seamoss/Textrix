@@ -271,8 +271,11 @@ pub enum AppEvent {
         voice: Result<Option<crate::voice::Voice>, String>,
     },
     /// Ctrl+V's image from the clipboard, saved to send (`None`: there
-    /// was none).
-    Pasted(Result<Option<PathBuf>, String>),
+    /// was none), and a picture of it to show while it waits.
+    Pasted {
+        image: Result<Option<PathBuf>, String>,
+        picture: Option<crate::picture::Picture>,
+    },
     /// `/changelog`'s releases from GitHub, for the window it was typed in
     /// (the status window when `into` is `None`).
     Changelog {
