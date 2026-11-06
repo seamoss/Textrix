@@ -270,6 +270,9 @@ pub enum AppEvent {
         key: crate::app::WinKey,
         voice: Result<Option<crate::voice::Voice>, String>,
     },
+    /// Ctrl+V's image from the clipboard, saved to send (`None`: there
+    /// was none).
+    Pasted(Result<Option<PathBuf>, String>),
     /// `/changelog`'s releases from GitHub, for the window it was typed in
     /// (the status window when `into` is `None`).
     Changelog {
@@ -902,6 +905,19 @@ fn link_image(json: &str) -> Option<OwnedMxcUri> {
 /// offer QR codes too, which Textrix can't show or scan.
 const EMOJI_ONLY: [matrix_sdk::ruma::events::key::verification::VerificationMethod; 1] =
     [matrix_sdk::ruma::events::key::verification::VerificationMethod::SasV1];
+
+/// A file's caption: what's typed with it.
+pub type Caption = matrix_sdk::ruma::events::room::message::TextMessageEventContent;
+
+/// What goes with a file being sent.
+#[derive(Default)]
+struct Sending {
+    /// A voice message's length and waveform.
+    voice: Option<(Duration, Vec<f32>)>,
+    caption: Option<Caption>,
+    /// Ours to delete once it's sent (a recording, a pasted image).
+    temporary: bool,
+}
 
 /// Where the account's store keeps your display name, so it's known while
 /// the server can't be reached.
@@ -1873,7 +1889,19 @@ impl Account {
     /// Upload a file as an attachment (encrypted in encrypted rooms). The UI
     /// already shows a pending line keyed by `txn_id`.
     pub fn upload(&self, room_id: OwnedRoomId, path: PathBuf, txn_id: OwnedTransactionId) {
-        self.send_file(room_id, path, txn_id, None);
+        self.send_file(room_id, path, txn_id, Sending::default());
+    }
+
+    /// An image pasted from the clipboard, with its caption. The file goes
+    /// once it's sent.
+    pub fn upload_pasted(
+        &self,
+        room_id: OwnedRoomId,
+        path: PathBuf,
+        txn_id: OwnedTransactionId,
+        caption: Option<Caption>,
+    ) {
+        self.send_file(room_id, path, txn_id, Sending { caption, temporary: true, ..Sending::default() });
     }
 
     /// A voice message: the recording, its length and waveform. The file
@@ -1886,21 +1914,16 @@ impl Account {
         duration: Duration,
         waveform: Vec<f32>,
     ) {
-        self.send_file(room_id, path, txn_id, Some((duration, waveform)));
+        let voice = Some((duration, waveform));
+        self.send_file(room_id, path, txn_id, Sending { voice, temporary: true, ..Sending::default() });
     }
 
-    fn send_file(
-        &self,
-        room_id: OwnedRoomId,
-        path: PathBuf,
-        txn_id: OwnedTransactionId,
-        voice: Option<(Duration, Vec<f32>)>,
-    ) {
+    fn send_file(&self, room_id: OwnedRoomId, path: PathBuf, txn_id: OwnedTransactionId, sending: Sending) {
         let acct = self.clone();
         tokio::spawn(async move {
-            let recorded = voice.is_some();
-            let result = acct.upload_file(&room_id, &path, &txn_id, voice).await;
-            if recorded {
+            let temporary = sending.temporary;
+            let result = acct.upload_file(&room_id, &path, &txn_id, sending.voice, sending.caption).await;
+            if temporary {
                 let _ = tokio::fs::remove_file(&path).await;
             }
             if result.is_ok() {
@@ -1920,6 +1943,7 @@ impl Account {
         path: &Path,
         txn_id: &OwnedTransactionId,
         voice: Option<(Duration, Vec<f32>)>,
+        caption: Option<Caption>,
     ) -> Result<OwnedEventId> {
         let room = self.room(room_id)?;
         let data = tokio::fs::read(path).await.with_context(|| format!("reading {}", path.display()))?;
@@ -1979,7 +2003,7 @@ impl Account {
             width: UInt::from(width),
             height: UInt::from(height),
         });
-        let config = AttachmentConfig::new().txn_id(txn_id.clone()).info(info).thumbnail(thumbnail);
+        let config = AttachmentConfig::new().txn_id(txn_id.clone()).info(info).thumbnail(thumbnail).caption(caption);
 
         let progress = SharedObservable::new(TransmissionProgress::default());
         let mut updates = progress.subscribe();

@@ -2371,6 +2371,12 @@ fn status_prompt(app: &App) -> Option<Span<'static>> {
         format!("send {lines} pasted lines to {}? y/n", win.title())
     } else if let Some(what) = app.upload_summary() {
         format!("upload {what} to {}? Enter/y uploads, n keeps it as text", win.title())
+    } else if let Some(pasted) = &app.pasted {
+        format!(
+            "pasted image {}: Enter sends it to {} (type a caption first if you like), Esc drops it",
+            pasted.summary,
+            win.title()
+        )
     } else if app.confirm_delete.is_some() {
         let what = app.delete_summary().unwrap_or_else(|| "this message".into());
         format!("delete {what}? y/n")

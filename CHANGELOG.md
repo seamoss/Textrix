@@ -43,6 +43,12 @@ release notes.
 - `accept_invites_from`: Matrix IDs whose invitations are accepted at once
   (`"*"` for anyone's), which is how a bot joins the rooms you invite it
   to.
+- Pasting images: Ctrl+V (or `/paste`) takes the image on the clipboard (a
+  screenshot, a picture copied from a browser) into the input line, as
+  terminals only paste text. The status bar says what it is; Enter sends
+  it, with what you've typed as its caption, and Esc drops it. Textrix
+  asks the system for it: `osascript` on macOS, `wl-paste` or `xclip` on
+  Linux.
 
 ### Changed
 - A key in config.toml that Textrix doesn't know (a typo, or a newer

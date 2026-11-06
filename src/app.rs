@@ -636,6 +636,13 @@ pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
 /// Custom emoji: (shortcode, picture).
 type Emoji = Vec<(String, OwnedMxcUri)>;
 
+/// An image from the clipboard, saved to send: its file, and "1280×720
+/// PNG, 340 KB".
+pub struct Pasted {
+    pub file: PathBuf,
+    pub summary: String,
+}
+
 /// The verification panel, over whatever window you're in.
 pub struct VerifyPanel {
     pub account: AccountName,
@@ -951,6 +958,8 @@ pub struct App {
     pub vote: Option<VotePicker>,
     /// A verification under way: accept it, compare emoji, see it end.
     pub verify_panel: Option<VerifyPanel>,
+    /// An image pasted from the clipboard, waiting for Enter to send it.
+    pub pasted: Option<Pasted>,
     pub profile: Option<ProfileView>,
     /// `/media`: a room's media as tiles, over the messages.
     pub gallery: Option<Gallery>,
@@ -1130,6 +1139,11 @@ const COMMANDS: &[Cmd] = &[
         name: "voice",
         args: "",
         help: "Record a voice message here (Ctrl+R too): Enter sends it, Esc throws it away",
+    },
+    Cmd {
+        name: "paste",
+        args: "",
+        help: "Paste the image on the clipboard (Ctrl+V too): Enter sends it, with what you type as its caption",
     },
     Cmd {
         name: "later",
@@ -1326,6 +1340,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     ("Ctrl+L", "redraw the screen"),
     ("Ctrl+R", "record a voice message: Enter sends it, Esc throws it away"),
+    ("Ctrl+V", "paste an image from the clipboard: Enter sends it (what you type is its caption), Esc drops it"),
 ];
 
 pub const SELECT_KEYS: &[(&str, &str)] = &[
@@ -1545,6 +1560,7 @@ impl App {
             emoji_picker: None,
             vote: None,
             verify_panel: None,
+            pasted: None,
             profile: None,
             gallery: None,
             home: None,
@@ -2070,6 +2086,7 @@ impl App {
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
             AppEvent::Voice { key, voice } => self.voice_done(key, voice),
+            AppEvent::Pasted(image) => self.pasted_image(image),
             AppEvent::Plugin { name, run, message } => self.on_plugin(name, run, message),
             AppEvent::UserInfo { account, user, info } => {
                 let Some(p) = self.profile.as_mut().filter(|p| p.user == user && *p.account == *account) else {
@@ -3960,7 +3977,10 @@ impl App {
             return;
         }
         if key.code == Esc {
-            if self.compose.take().is_some() {
+            if self.pasted.is_some() {
+                self.drop_pasted();
+                self.info("pasted image dropped");
+            } else if self.compose.take().is_some() {
                 self.input.clear();
             } else if self.input.is_empty() {
                 self.close_thread();
@@ -4010,6 +4030,11 @@ impl App {
                 'l' => self.redraw_all = true,
                 'r' => {
                     if let Err(e) = self.start_voice() {
+                        self.error(e);
+                    }
+                }
+                'v' => {
+                    if let Err(e) = self.paste_image() {
                         self.error(e);
                     }
                 }
@@ -4584,6 +4609,64 @@ impl App {
             let voice = crate::voice::finish(recording, keep).await.map_err(|e| format!("{e:#}"));
             let _ = tx.send(AppEvent::Voice { key, voice });
         });
+    }
+
+    /// Ctrl+V or `/paste`: the image on the clipboard, to send with Enter
+    /// (terminals only paste text, so Textrix asks the system).
+    fn paste_image(&mut self) -> Result<(), String> {
+        self.room_ctx()?;
+        let dir = self.paths.base.join("tmp");
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let image = crate::clipboard::image(&dir).await.map_err(|e| format!("{e:#}"));
+            let _ = tx.send(AppEvent::Pasted(image));
+        });
+        Ok(())
+    }
+
+    fn pasted_image(&mut self, image: Result<Option<PathBuf>, String>) {
+        let file = match image {
+            Ok(Some(file)) => file,
+            Ok(None) => return self.info("there's no image on the clipboard (text pastes as usual)"),
+            Err(e) => return self.error(e),
+        };
+        let kind = file.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+        let size = std::fs::metadata(&file).map(|m| matrix::human_size(m.len())).unwrap_or_default();
+        let summary = match imagesize::size(&file) {
+            Ok(dims) => format!("{}×{} {kind}, {size}", dims.width, dims.height),
+            Err(_) => format!("{kind}, {size}"),
+        };
+        self.drop_pasted();
+        self.pasted = Some(Pasted { file, summary });
+    }
+
+    /// Forget the pasted image, and its file.
+    fn drop_pasted(&mut self) {
+        if let Some(pasted) = self.pasted.take() {
+            let _ = std::fs::remove_file(pasted.file);
+        }
+    }
+
+    /// Enter with an image pasted: it goes, with what's typed as its caption.
+    fn send_pasted(&mut self) {
+        let (acct, room_id) = match self.room_ctx() {
+            Ok(here) => here,
+            Err(e) => return self.error(e),
+        };
+        let Some(pasted) = self.pasted.take() else { return };
+        let typed = self.input.take();
+        let typed = crate::emoji::expand(typed.trim()).into_owned();
+        let name = pasted.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut line = Line::new(
+            LineKind::Message,
+            attachment("image", Some(&name), if typed.is_empty() { &name } else { &typed }),
+        );
+        line.progress = Some(0);
+        let txn_id = TransactionId::new();
+        self.echo(&acct, line, &txn_id);
+        let caption = (!typed.is_empty())
+            .then(|| if self.cfg.markdown { matrix::Caption::markdown(typed) } else { matrix::Caption::plain(typed) });
+        acct.upload_pasted(room_id, pasted.file, txn_id, caption);
     }
 
     /// A recording, done: shown as it'll look, and sent.
@@ -5381,6 +5464,11 @@ impl App {
     }
 
     fn submit(&mut self) {
+        // A pasted image goes with what's typed as its caption; a command
+        // still runs, and the image waits.
+        if self.pasted.is_some() && !self.input.text().trim_start().starts_with('/') {
+            return self.send_pasted();
+        }
         // Terminals that type a dropped path rather than paste it.
         self.offer_upload();
         if self.confirm_upload.is_some() {
@@ -5511,6 +5599,7 @@ impl App {
             "later" => self.cmd_later(args),
             "exec" => self.cmd_exec(args),
             "voice" => self.start_voice(),
+            "paste" => self.paste_image(),
             "plugin" | "plugins" => self.cmd_plugin(args),
             "bot" | "bots" => self.cmd_bot(args),
             "changelog" => self.cmd_changelog(args),
@@ -9563,6 +9652,46 @@ mod tests {
         assert!(app.verify_panel.is_none());
         app.on_event(verify(VerifyStage::Cancelled { reason: "the other side cancelled".into() }));
         assert!(app.verify_panel.is_none());
+    }
+
+    #[test]
+    fn a_pasted_image_waits_in_the_input_line_to_send() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.switch_to(a);
+        let dir = std::env::temp_dir().join(format!("textrix-pasted-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paste = |app: &mut App| {
+            let file = dir.join("Pasted image.png");
+            image::RgbImage::new(4, 3).save(&file).unwrap();
+            app.on_event(AppEvent::Pasted(Ok(Some(file.clone()))));
+            file
+        };
+        let bar = |app: &mut App| screen(app, 160, 20).join("\n");
+
+        let file = paste(&mut app);
+        assert!(bar(&mut app).contains("pasted image 4×3 PNG"), "{}", bar(&mut app));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.pasted.is_none() && !file.exists(), "Esc drops it, file and all");
+
+        // A command still runs, and the image waits.
+        paste(&mut app);
+        app.input.set_text("/help paste");
+        app.submit();
+        assert!(app.pasted.is_some());
+        let said = &app.windows[a].lines.back().unwrap().body;
+        assert!(said.contains("/paste"), "{said}");
+
+        // Not connected: it can't go, so nothing's lost.
+        app.input.set_text("the view from here");
+        app.submit();
+        assert!(app.pasted.is_some());
+        assert_eq!(app.input.text(), "the view from here");
+
+        app.on_event(AppEvent::Pasted(Ok(None)));
+        assert!(app.windows[a].lines.back().unwrap().body.contains("no image on the clipboard"));
+        app.drop_pasted();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

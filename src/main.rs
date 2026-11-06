@@ -4,6 +4,7 @@ mod app;
 mod audio;
 mod bots;
 mod chatlog;
+mod clipboard;
 mod compose;
 mod config;
 mod convert;
