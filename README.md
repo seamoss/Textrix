@@ -760,7 +760,7 @@ so it joins the rooms you invite it to. Attached, it's Textrix as usual:
 in a room gives it a plugin there. `/bot [list | new | start | stop
 <name>]` does the same from your own Textrix.
 
-**codebot** is a plugin for a bot that takes coding requests ("codebot:
+**codebot** (experimental) is a plugin for a bot that takes coding requests ("codebot:
 make the login form remember the user name") from the people you allow,
 has a coding agent (Claude Code, Codex, aider, or your own) do it on a
 branch of its own, and opens a pull request, reporting in a thread as it

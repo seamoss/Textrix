@@ -5086,7 +5086,7 @@ dependencies = [
 
 [[package]]
 name = "textrix"
-version = "0.16.4"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "blurhash",

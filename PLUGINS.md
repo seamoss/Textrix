@@ -174,6 +174,9 @@ everything it's invited to. Messages that mention the bot arrive with
 
 ## codebot
 
+*Experimental:* it's tested end to end with a stand-in agent, repository
+and `gh`, not yet in real use. Try it on a repository you don't mind.
+
 codebot takes coding requests in a room to a coding agent (Claude Code,
 Codex, aider, or your own) on a branch of its own, and opens a pull request.
 Run it in a bot, so it talks as itself:

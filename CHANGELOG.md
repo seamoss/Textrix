@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.17.0] - 2026-10-22
+## [0.17.0] - 2026-11-09
 
 ### Added
 - Plugins: programs in any language that Textrix starts and talks to over
@@ -29,7 +29,9 @@ release notes.
   `stop` and `list` run it in the background, and `textrix bot attach`
   shows Textrix as the bot. Its plugins post as the bot, not you. `/bot`
   does the same from your own Textrix.
-- codebot, a plugin for a bot: coding requests from the people you allow
+- codebot (experimental: tested end to end with a stand-in agent and
+  repository, not yet in real use), a plugin for a bot: coding requests
+  from the people you allow
   ("codebot: make the login form remember the user name") go to a coding
   agent (Claude Code, Codex, aider, or your own command) on a branch of
   its own in a worktree; codebot commits, runs your tests, pushes only
