@@ -1101,6 +1101,9 @@ fn fit(text: &str, width: usize) -> String {
 /// `/media`: the room's pictures, videos, audio and files as tiles, newest
 /// first, over its messages.
 fn draw_gallery(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> {
+    if app.gallery.as_ref().is_some_and(|g| g.tab == gallery::Tab::Links) {
+        return draw_links(f, area, app);
+    }
     let t = app.cfg.palette.clone();
     let images = app.picker.is_some();
     let nicknames = app.nicknames().clone();
@@ -1108,7 +1111,7 @@ fn draw_gallery(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> 
     let Some(idx) = app.windows.iter().position(|w| w.room.as_ref() == Some(&g.key)) else { return Vec::new() };
     let w = &app.windows[idx];
     let items = gallery::items(&w.lines);
-    let keys = "←↑↓→ move · Enter open · s save · Esc close";
+    let keys = "←↑↓→ move · Enter open · s save · Tab links · Esc close";
     let body = view_frame(f, area, &t, &format!("media · {}", w.title()), keys);
     let (cols, rows) = gallery::TILE;
     let (pw, ph) = gallery::PICTURE;
@@ -1200,14 +1203,7 @@ fn draw_gallery(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> 
 
     // At the bottom: what Textrix said since this opened (saved, playing…),
     // or else about the chosen one.
-    let opened = g.opened;
-    let said = [idx, 0]
-        .iter()
-        .filter_map(|&i| {
-            let lines = app.windows[i].lines.iter().rev().take_while(|l| l.ts >= opened);
-            lines.into_iter().find(|l| matches!(l.kind, LineKind::Info | LineKind::Error))
-        })
-        .max_by_key(|l| l.ts);
+    let said = said_since(&app.windows, idx, g.opened);
     let bottom = Rect { y: body.bottom() - 1, height: 1, ..body };
     let about = match (said, items.get(at)) {
         (Some(note), _) => Span::styled(
@@ -1231,6 +1227,191 @@ fn draw_gallery(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> 
     let want = !w.history_done() && g.top + g.rows + 1 >= all_rows;
     app.tile_requests.extend(wanted);
     app.windows[idx].wants_older = want;
+    hits
+}
+
+/// What Textrix last said, in the room or the status window, since `since`.
+fn said_since(windows: &[crate::app::Window], idx: usize, since: DateTime<Local>) -> Option<&Line> {
+    [idx, 0]
+        .iter()
+        .filter_map(|&i| {
+            let lines = windows[i].lines.iter().rev().take_while(|l| l.ts >= since);
+            lines.into_iter().find(|l| matches!(l.kind, LineKind::Info | LineKind::Error))
+        })
+        .max_by_key(|l| l.ts)
+}
+
+/// Whether a window's links may have their pages' titles fetched: a server
+/// preview of a link in an encrypted room would show the server the link.
+fn titles_allowed(cfg: &Config, win: &crate::app::Window) -> bool {
+    match cfg.link_titles {
+        LinkTitles::Off => false,
+        LinkTitles::Unencrypted => !win.encrypted && win.room.is_some(),
+        LinkTitles::All => win.room.is_some(),
+    }
+}
+
+/// Text broken into rows of `width` columns, at spaces where it can be.
+fn wrap_plain(text: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for word in text.split_inclusive(' ') {
+        if display_len(&row) + display_len(word.trim_end()) > width && !row.is_empty() {
+            rows.push(row.trim_end().to_owned());
+            row.clear();
+        }
+        for c in word.chars().filter_map(sanitize) {
+            if display_len(&row) + c.width().unwrap_or(0) > width {
+                rows.push(std::mem::take(&mut row));
+            }
+            row.push(c);
+        }
+    }
+    if !row.trim().is_empty() {
+        rows.push(row.trim_end().to_owned());
+    }
+    rows
+}
+
+/// `/links`: the room's links, newest first, over its messages, each with
+/// its page's title, who posted it and when; the chosen one's picture and
+/// address at the side when there's room.
+fn draw_links(f: &mut Frame, area: Rect, app: &mut App) -> Vec<(Rect, usize)> {
+    let t = app.cfg.palette.clone();
+    let images = app.picker.is_some() && app.cfg.link_images;
+    let nicknames = app.nicknames().clone();
+    let Some(key) = app.gallery.as_ref().map(|g| g.key.clone()) else { return Vec::new() };
+    let Some(idx) = app.windows.iter().position(|w| w.room.as_ref() == Some(&key)) else { return Vec::new() };
+    let links = app.shown_links(idx);
+    let w = &app.windows[idx];
+    let all = gallery::links(&w.lines).len();
+    let (titles_here, done, older, room) =
+        (titles_allowed(&app.cfg, w), w.history_done(), w.loading_older(), w.title().to_owned());
+    let Some(g) = app.gallery.as_ref() else { return Vec::new() };
+    let (filter, filtering, opened) = (g.filter.clone(), g.filtering, g.opened);
+    let keys = if filtering {
+        "type to narrow it · Enter keeps it · Esc clears it"
+    } else {
+        "↑↓ move · Enter open · c copy · m go to it · / filter · Tab media · Esc close"
+    };
+    let body = view_frame(f, area, &t, &format!("links · {room}"), keys);
+    if body.height < 5 || body.width < 24 {
+        f.render_widget(Paragraph::new(Span::styled(" too small for the list", t.dim)), body);
+        return Vec::new();
+    }
+
+    let found = if all == 1 { "1 link".to_owned() } else { format!("{all} links") };
+    let (summary, style) = if filtering || !filter.is_empty() {
+        let cursor = if filtering { "▏" } else { "" };
+        (format!("/{filter}{cursor} · {} of {found}", links.len()), if filtering { t.accent } else { t.dim })
+    } else {
+        let text = match (all == 0, done, older) {
+            (true, true, _) => "no links here".to_owned(),
+            (true, false, _) => "looking for links…".to_owned(),
+            (false, true, _) => format!("{found}, newest first · that's all of them"),
+            (false, false, true) => format!("{found}, newest first · looking further back…"),
+            (false, false, false) => format!("{found}, newest first"),
+        };
+        (text, t.dim)
+    };
+    f.render_widget(Paragraph::new(Span::styled(fit(&summary, body.width as usize), style)), body);
+
+    // The list, two rows a link; the chosen one's details beside it.
+    const PANEL: u16 = 36;
+    let side = body.width >= 90;
+    let list = Rect {
+        y: body.y + 2,
+        height: body.height - 3,
+        width: if side { body.width - PANEL - 2 } else { body.width },
+        ..body
+    };
+    let Some(g) = app.gallery.as_mut() else { return Vec::new() };
+    g.link_rows = usize::from(list.height / 2).max(1);
+    let at = g.link_index(&links);
+    g.link = links.get(at).map(|l| (l.event_id.clone(), l.url.clone()));
+    g.follow_link(at);
+    let (top, rows) = (g.link_top, g.link_rows);
+
+    let today = Local::now().date_naive();
+    let width = list.width as usize;
+    let mut hits = Vec::new();
+    let mut wanted = Vec::new();
+    for (n, link) in links.iter().enumerate().skip(top).take(rows) {
+        let y = list.y + ((n - top) * 2) as u16;
+        let title = match app.link_titles.get(&link.url) {
+            Some(LinkTitle::Ready(title, _)) => Some(title.clone()),
+            Some(_) => None,
+            None => {
+                if titles_here && links::is_safe(&link.url) {
+                    wanted.push(link.url.clone());
+                }
+                None
+            }
+        };
+        let who = link.sender.as_ref().and_then(|u| nicknames.get(u)).unwrap_or(&link.nick);
+        let when = if link.ts.date_naive() == today { link.ts.format("%H:%M") } else { link.ts.format("%-d %b") };
+        let (first, second) = match &title {
+            Some(title) => (title.clone(), format!("{} · {who} · {when}", link.url)),
+            None => (link.url.clone(), format!("{who} · {when}")),
+        };
+        let (top_style, under_style) = if n == at {
+            (
+                Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                Style::new().add_modifier(Modifier::REVERSED),
+            )
+        } else {
+            (Style::new(), t.dim)
+        };
+        let entry = vec![
+            TLine::from(Span::styled(fit(&format!(" {first}"), width), top_style)),
+            TLine::from(Span::styled(fit(&format!("   {second}"), width), under_style)),
+        ];
+        let rect = Rect { y, height: 2, ..list };
+        f.render_widget(Paragraph::new(entry), rect);
+        hits.push((rect, n));
+    }
+
+    // Beside it: the chosen link's picture, title and whole address.
+    if side && let Some(link) = links.get(at) {
+        let panel = Rect { x: list.right() + 2, y: list.y, width: PANEL, height: list.height };
+        let mut y = panel.y;
+        let mut text: Vec<TLine> = Vec::new();
+        if let Some(LinkTitle::Ready(title, picture)) = app.link_titles.get(&link.url) {
+            if let Some(picture) = picture.as_ref().filter(|_| images) {
+                let size = picture.size();
+                if size.width <= panel.width && size.height + 2 < panel.height {
+                    f.render_widget(picture, Rect { x: panel.x, y, width: size.width, height: size.height });
+                    y += size.height + 1;
+                }
+            }
+            text.extend(wrap_plain(title, PANEL as usize).into_iter().map(|row| TLine::styled(row, t.accent)));
+            text.push(TLine::default());
+        }
+        text.extend(wrap_plain(&link.url, PANEL as usize).into_iter().map(|row| TLine::styled(row, t.link)));
+        let who = link.sender.as_ref().and_then(|u| nicknames.get(u)).unwrap_or(&link.nick);
+        text.push(TLine::styled(format!("from {who}, {}", link.ts.format("%a %-d %b %Y %H:%M")), t.dim));
+        f.render_widget(Paragraph::new(text), Rect { y, height: panel.bottom().saturating_sub(y), ..panel });
+    }
+
+    // At the bottom: what Textrix said since this opened (opening, copied…),
+    // or the chosen link's address.
+    let bottom = Rect { y: body.bottom() - 1, height: 1, ..body };
+    let about = match (said_since(&app.windows, idx, opened), links.get(at)) {
+        (Some(note), _) => Span::styled(
+            fit(&note.body, body.width as usize),
+            if note.kind == LineKind::Error { t.error } else { t.accent },
+        ),
+        (None, Some(link)) => Span::raw(fit(&link.url, body.width as usize)),
+        (None, None) => Span::raw(""),
+    };
+    f.render_widget(Paragraph::new(about), bottom);
+
+    for url in wanted {
+        app.link_titles.insert(url.clone(), LinkTitle::Loading);
+        app.link_title_requests.push((key.account.clone(), url));
+    }
+    // Near the end of what's loaded, load more.
+    app.windows[idx].wants_older = !done && top + rows + 1 >= links.len();
     hits
 }
 
@@ -1372,12 +1553,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     // blank row before and after each run of them, and quieter.
     let set_apart = win.room.is_some();
     let own = |line: &Line| matches!(line.kind, LineKind::Info | LineKind::Error);
-    // A server preview of a link in an encrypted room would show it the link.
-    let titles_here = match cfg.link_titles {
-        LinkTitles::Off => false,
-        LinkTitles::Unencrypted => !win.encrypted && win.room.is_some(),
-        LinkTitles::All => win.room.is_some(),
-    };
+    let titles_here = titles_allowed(cfg, win);
     let mut placements: Vec<(OwnedEventId, usize, u16)> = Vec::new();
     // Link pictures, by the link: the same, but under the title.
     let mut link_placements: Vec<(String, usize, u16)> = Vec::new();

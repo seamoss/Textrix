@@ -221,7 +221,7 @@ bindings.
 | Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [<version> confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all. `/close` shuts a room you own down for everyone: it says what it will do, and `/close confirm` makes it invite-only, takes it off the directory, removes its addresses, withdraws invites, removes every member less powerful than you, then leaves and forgets it. Matrix has no "delete room" for clients (other servers keep their copy while their members are in it), but when you're an admin on your Synapse homeserver, `/close` also has it delete the room and block it there |
 | Directory | `/list [search]` (public rooms) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |
-| Links | `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode, or click one. Links are real hyperlinks in terminals that have them (Ghostty, iTerm2, kitty, WezTerm…): hovering shows where they go and Cmd/Ctrl+click opens them, a link wrapped over lines included; `hyperlinks = false` turns that off. The page title of a message's first link shows under it (`↳ Title — Site`), and under that the page's picture, small, when it has one (`link_images = false` leaves pictures out). Both come from your homeserver's URL preview, picture included, so the site never sees you. That's on in unencrypted rooms, which the server reads anyway; `link_titles = "all"` adds encrypted rooms (the server then sees those links), `"off"` stops it. Synapse needs `url_preview_enabled` for this; Textrix tells you once if it's off |
+| Links | `/links` (the room's links as a list to browse: see [The media gallery](#the-media-gallery)), `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode, or click one. Links are real hyperlinks in terminals that have them (Ghostty, iTerm2, kitty, WezTerm…): hovering shows where they go and Cmd/Ctrl+click opens them, a link wrapped over lines included; `hyperlinks = false` turns that off. The page title of a message's first link shows under it (`↳ Title — Site`), and under that the page's picture, small, when it has one (`link_images = false` leaves pictures out). Both come from your homeserver's URL preview, picture included, so the site never sees you. That's on in unencrypted rooms, which the server reads anyway; `link_titles = "all"` adds encrypted rooms (the server then sees those links), `"off"` stops it. Synapse needs `url_preview_enabled` for this; Textrix tells you once if it's off |
 | Forwarding | `f` in selection mode opens a "Forward to" list of that server's other rooms (closed ones too), filtered as you type like the switcher; Enter sends a copy and leaves you where you are. `/forward [room]` does the same for the latest message here. The copy keeps formatting and attachments but not reply or thread links or mentions, so nobody is pinged again; an edited message goes as its edited text. Forwarding out of an encrypted room into one that isn't says so |
 | Pins | `p` in selection mode pins a message for everyone in the room, or unpins it (needs the power level to change pins). Pinned messages show `[pinned]`, and the topic bar counts them. `/pins` lists them, newest pin first; `/jump N` goes to one |
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Esc (with nothing typed), `/wc` or `/part` closes it and goes back to the room. Thread roots show `[N replies]`; replies also appear in the room with their context |
@@ -432,6 +432,14 @@ played, a file saved) and `s` saves any of them to Downloads; Esc goes
 back. As you get near the end of what's loaded it fetches more of the
 room's history, back to the beginning if you keep going; the line at the
 top says how far it's got.
+
+Tab turns it to the room's links (`/links` opens it there): each link
+once, newest first, with its page's title (from the same server previews
+as under messages), who posted it and when, and, on a wide screen, the
+chosen one's picture, title and whole address beside the list. Enter (or
+a second click) opens it in your browser, `c` copies it, `m` goes to the
+message it was posted in, and `/` narrows the list as you type, by
+address, title or who posted it (Enter keeps the filter, Esc clears it).
 
 ### Who's who
 

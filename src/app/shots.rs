@@ -810,7 +810,7 @@ fn screenshots() {
         })
         .collect();
     media.post("Night Owls", lines);
-    media.app.open_gallery().unwrap();
+    media.app.open_gallery(crate::gallery::Tab::Media).unwrap();
     media.draw(124, 33);
     let painter = media.app.picker.clone().unwrap();
     let (w, h) = gallery::PICTURE;

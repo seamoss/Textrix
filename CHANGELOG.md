@@ -43,6 +43,12 @@ release notes.
 - `accept_invites_from`: Matrix IDs whose invitations are accepted at once
   (`"*"` for anyone's), which is how a bot joins the rooms you invite it
   to.
+- `/links`: the room's links as a list, the other tab of `/media` (Tab
+  switches): each link once, newest first, with its page's title, who
+  posted it and when, and the chosen one's picture and address beside the
+  list on a wide screen. Enter opens it, `c` copies it, `m` goes to its
+  message, `/` filters by address, title or who posted it; it reaches
+  further back into the room's history as you scroll, like the media.
 - Pasting images: Ctrl+V (or `/paste`) takes the image on the clipboard (a
   screenshot, a picture copied from a browser) into the input line, as
   terminals only paste text. It waits above the input line, with a small

@@ -1089,7 +1089,12 @@ const COMMANDS: &[Cmd] = &[
     Cmd {
         name: "media",
         args: "",
-        help: "This room's pictures, videos, audio and files as tiles, newest first: Enter opens, s saves",
+        help: "This room's pictures, videos, audio and files as tiles, newest first: Enter opens, s saves, Tab its links",
+    },
+    Cmd {
+        name: "links",
+        args: "",
+        help: "This room's links, newest first: Enter opens, c copies, m goes to the message, / filters, Tab its media",
     },
     Cmd { name: "home", args: "", help: "What's waiting: the latest mentions, unread rooms and invitations (F4)" },
     Cmd { name: "pins", args: "", help: "List this room's pinned messages (p in selection mode pins)" },
@@ -3512,9 +3517,17 @@ impl App {
         }
         if self.gallery.is_some() {
             let Some(idx) = self.gallery_window() else { return };
+            let way = if up { gallery::Move::Up } else { gallery::Move::Down };
+            if self.gallery.as_ref().is_some_and(|g| g.tab == gallery::Tab::Links) {
+                let links = self.shown_links(idx);
+                if let Some(g) = self.gallery.as_mut() {
+                    g.step_link(&links, way);
+                }
+                return;
+            }
             let items = gallery::items(&self.windows[idx].lines);
             if let Some(g) = self.gallery.as_mut() {
-                g.step(&items, if up { gallery::Move::Up } else { gallery::Move::Down });
+                g.step(&items, way);
             }
             return;
         }
@@ -3562,6 +3575,16 @@ impl App {
             // list closes the gallery and goes there.
             if let Some(&(_, n)) = self.hits.gallery.iter().find(|(r, _)| r.contains(at)) {
                 let Some(idx) = self.gallery_window() else { return };
+                if self.gallery.as_ref().is_some_and(|g| g.tab == gallery::Tab::Links) {
+                    let links = self.shown_links(idx);
+                    let Some(g) = self.gallery.as_mut() else { return };
+                    let again = g.link_index(&links) == n;
+                    g.link = links.get(n).map(|l| (l.event_id.clone(), l.url.clone()));
+                    if let (true, Some(link)) = (again, links.get(n)) {
+                        self.open_url(link.url.clone());
+                    }
+                    return;
+                }
                 let items = gallery::items(&self.windows[idx].lines);
                 let Some(g) = self.gallery.as_mut() else { return };
                 let again = g.index(&items) == n;
@@ -5684,7 +5707,8 @@ impl App {
                 self.switch_to(idx);
                 Ok(())
             }
-            "media" => self.open_gallery(),
+            "media" => self.open_gallery(gallery::Tab::Media),
+            "links" => self.open_gallery(gallery::Tab::Links),
             "home" => {
                 self.open_home();
                 Ok(())
@@ -7395,11 +7419,14 @@ impl App {
         Ok(())
     }
 
-    /// `/media`: the room's media as tiles, over its messages.
-    fn open_gallery(&mut self) -> Result<(), String> {
-        let key = self.win().room.clone().ok_or("/media shows a room's pictures and files: go to the room first")?;
+    /// `/media`: the room's media as tiles, over its messages; `/links`:
+    /// its links, as a list.
+    fn open_gallery(&mut self, tab: gallery::Tab) -> Result<(), String> {
+        let key = self.win().room.clone().ok_or("/media and /links show a room's: go to the room first")?;
         (self.home, self.select) = (None, None);
-        self.gallery = Some(Gallery::new(key));
+        let mut gallery = Gallery::new(key);
+        gallery.tab = tab;
+        self.gallery = Some(gallery);
         // Pictures in the messages under it would linger.
         self.redraw_all = true;
         Ok(())
@@ -7418,10 +7445,43 @@ impl App {
         self.windows.iter().position(|w| w.room.as_ref() == Some(key))
     }
 
+    /// The links tab's links: the room's, narrowed by the filter.
+    pub fn shown_links(&self, idx: usize) -> Vec<gallery::Link> {
+        let filter = self.gallery.as_ref().map_or("", |g| g.filter.as_str());
+        let links = gallery::links(&self.windows[idx].lines);
+        if filter.is_empty() {
+            return links;
+        }
+        let nicknames = self.nicknames();
+        links
+            .into_iter()
+            .filter(|l| {
+                let title = match self.link_titles.get(&l.url) {
+                    Some(LinkTitle::Ready(title, _)) => Some(title.as_str()),
+                    _ => None,
+                };
+                let who = l.sender.as_ref().and_then(|u| nicknames.get(u)).unwrap_or(&l.nick);
+                gallery::wanted(l, title, who, filter)
+            })
+            .collect()
+    }
+
     fn on_gallery_key(&mut self, key: KeyEvent) {
         use KeyCode::*;
         use gallery::Move;
         let Some(idx) = self.gallery_window() else { return self.close_gallery() };
+        let filtering = self.gallery.as_ref().is_some_and(|g| g.filtering);
+        if matches!(key.code, Tab | BackTab) && !filtering {
+            if let Some(g) = self.gallery.as_mut() {
+                g.tab = if g.tab == gallery::Tab::Media { gallery::Tab::Links } else { gallery::Tab::Media };
+            }
+            // Terminal graphics can outlive the frame they were drawn in.
+            self.redraw_all = true;
+            return;
+        }
+        if self.gallery.as_ref().is_some_and(|g| g.tab == gallery::Tab::Links) {
+            return self.on_links_key(idx, key);
+        }
         let way = match key.code {
             Left | Char('h') => Some(Move::Left),
             Right | Char('l') => Some(Move::Right),
@@ -7445,6 +7505,57 @@ impl App {
             Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.close_gallery(),
             Enter | Char('z' | ' ') => self.gallery_open(idx, false),
             Char('s') => self.gallery_open(idx, true),
+            _ => {}
+        }
+    }
+
+    /// The links tab: move, open, copy, go to the message, filter.
+    fn on_links_key(&mut self, idx: usize, key: KeyEvent) {
+        use KeyCode::*;
+        use gallery::Move;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if let Some(g) = self.gallery.as_mut().filter(|g| g.filtering) {
+            match key.code {
+                Char(c) if !ctrl => g.filter.push(c),
+                Backspace => drop(g.filter.pop()),
+                Enter => g.filtering = false,
+                Esc => (g.filter, g.filtering) = (String::new(), false),
+                _ => {}
+            }
+            return;
+        }
+        let links = self.shown_links(idx);
+        let way = match key.code {
+            Up | Char('k') => Some(Move::Up),
+            Down | Char('j') => Some(Move::Down),
+            PageUp => Some(Move::PageUp),
+            PageDown => Some(Move::PageDown),
+            Home | Char('g') => Some(Move::First),
+            End | Char('G') => Some(Move::Last),
+            _ => None,
+        };
+        let Some(g) = self.gallery.as_mut() else { return };
+        if let Some(way) = way {
+            return g.step_link(&links, way);
+        }
+        let chosen = links.get(g.link_index(&links)).cloned();
+        match (key.code, chosen) {
+            (Esc | Char('q'), _) if !g.filter.is_empty() => g.filter.clear(),
+            (Esc | Char('q'), _) => self.close_gallery(),
+            (Char('c'), _) if ctrl => self.close_gallery(),
+            (Char('/'), _) => g.filtering = true,
+            (Enter | Char('o'), Some(link)) => self.open_url(link.url),
+            (Char('c'), Some(link)) => {
+                self.info(format!("copied {}", link.url));
+                self.clipboard = Some(link.url);
+            }
+            (Char('m'), Some(link)) => {
+                let key = g.key.clone();
+                self.close_gallery();
+                if let Err(e) = self.jump_to(key, link.event_id) {
+                    self.error(e);
+                }
+            }
             _ => {}
         }
     }
@@ -9442,6 +9553,52 @@ mod tests {
             size: Some(1_258_291),
         });
         line
+    }
+
+    #[test]
+    fn the_links_tab_lists_a_rooms_links_to_open_copy_and_go_to() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "docs at https://matrix.org/docs"));
+        app.windows[a].lines.push_back(msg("$2", "nice"));
+        app.windows[a].lines.push_back(msg("$3", "cats: https://example.org/cats, and again https://matrix.org/docs"));
+        app.link_titles.insert("https://example.org/cats".into(), LinkTitle::Ready("Cats — Example".into(), None));
+        app.switch_to(a);
+        app.command("links");
+        let key = |app: &mut App, code| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let shown = |app: &mut App| screen(app, 120, 30).join("\n");
+
+        let rows = shown(&mut app);
+        assert!(rows.contains("links · Night Owls") && rows.contains("2 links, newest first"), "{rows}");
+        let (cats, docs) = (rows.find("Cats — Example").unwrap(), rows.find("https://matrix.org/docs").unwrap());
+        assert!(cats < docs, "newest first, each once: {rows}");
+        assert!(rows.contains("from alice"), "the chosen one beside the list: {rows}");
+        let asked: Vec<&str> = app.link_title_requests.iter().map(|(_, url)| url.as_str()).collect();
+        assert_eq!(asked, ["https://matrix.org/docs"], "titles asked for what's untitled");
+
+        key(&mut app, KeyCode::Tab);
+        assert!(shown(&mut app).contains("media · Night Owls"));
+        key(&mut app, KeyCode::Tab);
+
+        key(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.clipboard.as_deref(), Some("https://example.org/cats"));
+
+        // / filters, by address, title or who posted it.
+        key(&mut app, KeyCode::Char('/'));
+        for c in "MATRIX".chars() {
+            key(&mut app, KeyCode::Char(c));
+        }
+        assert!(shown(&mut app).contains("/MATRIX▏ · 1 of 2 links"), "{}", shown(&mut app));
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.gallery.as_ref().unwrap().filtering);
+        key(&mut app, KeyCode::Esc);
+        assert!(app.gallery.as_ref().is_some_and(|g| g.filter.is_empty()), "Esc clears the filter first");
+
+        // m goes to the message, where the link was posted last.
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char('m'));
+        assert!(app.gallery.is_none());
+        assert_eq!((app.active, app.select.as_ref().map(|e| e.as_str())), (a, Some("$3")));
     }
 
     #[test]
