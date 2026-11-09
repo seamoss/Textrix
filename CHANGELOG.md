@@ -7,6 +7,16 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.17.1] - 2026-11-09
+
+### Fixed
+- Scrolling while Textrix is busy (switching windows, or coming back to
+  the terminal) no longer leaves pieces of mouse reports like
+  `[<65;247;37M` in the input line. When a report came apart, its Escape
+  read on its own and the rest read as typing; now an Escape waits a
+  moment (30 ms) for what follows, and a report that comes together is
+  the scroll or click it was.
+
 ## [0.17.0] - 2026-11-09
 
 ### Added

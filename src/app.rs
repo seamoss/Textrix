@@ -875,6 +875,8 @@ pub struct App {
     last_bell: Option<Instant>,
     /// The visual bell: the status bar flashes until then.
     pub flash_until: Option<Instant>,
+    /// An Escape held a moment: it may be a mouse report's, come apart.
+    esc_hold: Option<EscHold>,
     /// The terminal title last set.
     last_title: Option<String>,
     /// The hyperlinks last written over the screen's links.
@@ -1533,6 +1535,7 @@ impl App {
             typing_since: None,
             mentions: Vec::new(),
             focused: true,
+            esc_hold: None,
             notify_mode: NotifyMode::Off,
             notifications: Vec::new(),
             select: None,
@@ -3466,8 +3469,12 @@ impl App {
     // ---- terminal input --------------------------------------------------
 
     pub fn on_terminal(&mut self, ev: Event) {
+        // Whatever an Escape is held for, it goes first.
+        if !matches!(ev, Event::Key(_)) {
+            self.esc_timeout();
+        }
         match ev {
-            Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key_in(key),
             Event::Paste(text) => {
                 let empty = self.input.is_empty();
                 self.input.paste(&text);
@@ -5465,6 +5472,50 @@ impl App {
     /// Ctrl+C on an empty input line: once asks, and again within two
     /// seconds quits (in the background, detaches, as closing the terminal
     /// would).
+    /// A key from the terminal. In a busy moment a mouse report can come
+    /// apart, its Escape read on its own and the rest read as typing
+    /// (`[<65;247;37M` in the input line), so an Escape waits a moment for
+    /// what follows: a report that comes together is the mouse event it
+    /// was, and anything else is keys as usual.
+    fn on_key_in(&mut self, key: KeyEvent) {
+        if let Some(mut hold) = self.esc_hold.take() {
+            if let KeyCode::Char(c) = key.code
+                && (key.modifiers - KeyModifiers::SHIFT).is_empty()
+            {
+                hold.text.push(c);
+                match split_mouse(&hold.text) {
+                    Ok(Some(mouse)) => return self.on_mouse(mouse),
+                    Ok(None) => {
+                        self.esc_hold = Some(hold);
+                        return;
+                    }
+                    Err(()) => drop(hold.text.pop()),
+                }
+            }
+            self.release_esc(hold);
+        }
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            self.esc_hold = Some(EscHold { at: Instant::now(), text: String::new() });
+        } else {
+            self.on_key(key);
+        }
+    }
+
+    /// The held Escape, and what came after it, as the keys they were.
+    fn release_esc(&mut self, hold: EscHold) {
+        self.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        for c in hold.text.chars() {
+            self.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    }
+
+    /// Nothing more came: a held Escape was a key.
+    fn esc_timeout(&mut self) {
+        if let Some(hold) = self.esc_hold.take() {
+            self.release_esc(hold);
+        }
+    }
+
     fn ctrl_c_quits(&mut self) {
         if self.quit_armed.is_some_and(|at| at.elapsed() < QUIT_WINDOW) {
             self.quit_armed = None;
@@ -8810,7 +8861,64 @@ pub fn set_mouse_capture(on: bool) {
     }
 }
 
-async fn flash_end(until: Option<Instant>) {
+/// How long an Escape waits for the rest of a mouse report.
+const ESC_WAIT: Duration = Duration::from_millis(30);
+
+/// An Escape from the terminal, and what's come after it so far.
+struct EscHold {
+    at: Instant,
+    text: String,
+}
+
+/// The rest of an SGR mouse report whose Escape came on its own
+/// (`[<65;247;37M`: button 65, the wheel down, at column 247, row 37): the
+/// event, `None` while more could still make one, `Err` when it can't.
+fn split_mouse(text: &str) -> Result<Option<MouseEvent>, ()> {
+    let Some(body) = text.strip_prefix("[<") else {
+        return if "[<".starts_with(text) { Ok(None) } else { Err(()) };
+    };
+    let (fields, end) = match body.chars().last() {
+        Some(end @ ('M' | 'm')) => (&body[..body.len() - 1], Some(end)),
+        _ => (body, None),
+    };
+    let parts: Vec<&str> = fields.split(';').collect();
+    let digits = |p: &&str| p.chars().all(|c| c.is_ascii_digit());
+    if parts.len() > 3 || !parts.iter().all(digits) || parts[..parts.len() - 1].iter().any(|p| p.is_empty()) {
+        return Err(());
+    }
+    let Some(end) = end else { return Ok(None) };
+    let [code, x, y] = parts[..] else { return Err(()) };
+    let number = |p: &str| p.parse::<u16>().map_err(drop);
+    let (code, column, row) = (number(code)?, number(x)?.saturating_sub(1), number(y)?.saturating_sub(1));
+    let mut modifiers = KeyModifiers::NONE;
+    for (bit, modifier) in [(4, KeyModifiers::SHIFT), (8, KeyModifiers::ALT), (16, KeyModifiers::CONTROL)] {
+        if code & bit != 0 {
+            modifiers |= modifier;
+        }
+    }
+    let button = |n: u16| match n & 3 {
+        0 => Some(MouseButton::Left),
+        1 => Some(MouseButton::Middle),
+        2 => Some(MouseButton::Right),
+        _ => None,
+    };
+    let kind = match code & !28 {
+        64 => MouseEventKind::ScrollUp,
+        65 => MouseEventKind::ScrollDown,
+        66 => MouseEventKind::ScrollLeft,
+        67 => MouseEventKind::ScrollRight,
+        n if n & 32 != 0 => button(n).map_or(MouseEventKind::Moved, MouseEventKind::Drag),
+        n => match (button(n), end) {
+            (Some(b), 'M') => MouseEventKind::Down(b),
+            (Some(b), _) => MouseEventKind::Up(b),
+            (None, _) => return Err(()),
+        },
+    };
+    Ok(Some(MouseEvent { kind, column, row, modifiers }))
+}
+
+/// Wait until `until`, or forever.
+async fn until(until: Option<Instant>) {
     match until {
         Some(at) => tokio::time::sleep_until(at.into()).await,
         None => std::future::pending().await,
@@ -8921,7 +9029,9 @@ where
             }
             _ = clock.tick() => app.on_clock(),
             // Redraw when the visual bell's flash ends.
-            _ = flash_end(app.flash_until) => app.flash_until = None,
+            _ = until(app.flash_until) => app.flash_until = None,
+            // An Escape held for the rest of a mouse report that didn't come.
+            _ = until(app.esc_hold.as_ref().map(|h| h.at + ESC_WAIT)) => app.esc_timeout(),
         }
     }
     let restart = app.restart;
@@ -8946,6 +9056,60 @@ mod tests {
 
     fn ids(w: &Window) -> Vec<&str> {
         w.lines.iter().map(|l| l.event_id.as_ref().unwrap().as_str()).collect()
+    }
+
+    #[test]
+    fn mouse_reports_that_came_apart_are_read_back() {
+        let at = |kind, column, row, modifiers| Ok(Some(MouseEvent { kind, column, row, modifiers }));
+        assert_eq!(split_mouse("[<65;247;37M"), at(MouseEventKind::ScrollDown, 246, 36, KeyModifiers::NONE));
+        assert_eq!(split_mouse("[<64;1;1M"), at(MouseEventKind::ScrollUp, 0, 0, KeyModifiers::NONE));
+        let shift_click = at(MouseEventKind::Down(MouseButton::Left), 9, 4, KeyModifiers::SHIFT);
+        assert_eq!(split_mouse("[<4;10;5M"), shift_click);
+        assert_eq!(split_mouse("[<2;3;4m"), at(MouseEventKind::Up(MouseButton::Right), 2, 3, KeyModifiers::NONE));
+        assert_eq!(split_mouse("[<32;3;4M"), at(MouseEventKind::Drag(MouseButton::Left), 2, 3, KeyModifiers::NONE));
+        for partial in ["[", "[<", "[<65", "[<65;", "[<65;247;37"] {
+            assert_eq!(split_mouse(partial), Ok(None), "{partial}");
+        }
+        for not in ["x", "[a", "[<6x", "[<65;;", "[<;", "[<1;2;3;4M", "[<1;2M"] {
+            assert_eq!(split_mouse(not), Err(()), "{not}");
+        }
+    }
+
+    #[test]
+    fn an_escape_waits_a_moment_for_the_rest_of_a_mouse_report() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        app.windows[a].lines.push_back(msg("$1", "first"));
+        app.windows[a].lines.push_back(msg("$2", "second"));
+        app.switch_to(a);
+        let typed = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                app.on_terminal(Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)));
+            }
+        };
+        let esc = |app: &mut App| app.on_terminal(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+
+        // Its Escape alone, then the rest: the wheel, not typing, not Escape.
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert!(app.select.is_some());
+        esc(&mut app);
+        typed(&mut app, "[<65;10;5M");
+        assert_eq!(app.input.text(), "");
+        assert!(app.select.is_some(), "still selecting");
+
+        // Escape, then typing: both, in order.
+        esc(&mut app);
+        typed(&mut app, "[x");
+        assert!(app.select.is_none());
+        assert_eq!(app.input.text(), "[x");
+
+        // Escape on its own goes once the moment's passed.
+        app.input.clear();
+        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        esc(&mut app);
+        assert!(app.select.is_some(), "held");
+        app.esc_timeout();
+        assert!(app.select.is_none());
     }
 
     #[test]
