@@ -60,6 +60,7 @@ impl Scene {
         let rooms = rooms
             .iter()
             .map(|&(name, topic, dm)| RoomMeta {
+                favourite: false,
                 room_id: room_id(name),
                 name: name.into(),
                 topic: (!topic.is_empty()).then(|| topic.into()),

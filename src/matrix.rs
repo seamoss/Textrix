@@ -868,6 +868,7 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         unread: counts.notification_count,
         highlights: counts.highlight_count,
         pinned: room.pinned_event_ids().unwrap_or_default(),
+        favourite: room.is_favourite(),
     }
 }
 
@@ -1724,6 +1725,7 @@ impl Account {
             unread: counts.notification_count,
             highlights: counts.highlight_count,
             pinned: room.pinned_event_ids().unwrap_or_default(),
+            favourite: room.is_favourite(),
         })
     }
 
@@ -3900,6 +3902,16 @@ impl Account {
                 state = changes.next().await;
             }
             acct.verify.lock().await.sas = None;
+            Ok(())
+        });
+    }
+
+    /// Tag a room `m.favourite`, or untag it: Element lists it under
+    /// Favourites too.
+    pub fn set_favourite(&self, room_id: OwnedRoomId, on: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            acct.room(&room_id)?.set_is_favourite(on, None).await?;
             Ok(())
         });
     }

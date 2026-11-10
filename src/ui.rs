@@ -210,7 +210,13 @@ fn draw_switcher(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
             if matches!(sw.purpose, switcher::Purpose::Forward { .. }) { " Forward to " } else { " Go to " },
             t.accent,
         ))
-        .title_bottom(TLine::from(" ↑↓ choose · Enter go · Esc close ").right_aligned());
+        .title_bottom(
+            TLine::from(match sw.purpose {
+                switcher::Purpose::Go => " ↑↓ choose · Enter go · Ctrl+F favourite · Esc close ",
+                _ => " ↑↓ choose · Enter go · Esc close ",
+            })
+            .right_aligned(),
+        );
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
@@ -615,11 +621,12 @@ pub enum SidebarEntry {
     Window(usize),
 }
 
-/// Window list layout: the status window; then Unreads (any room or DM
-/// with messages you haven't seen, mentions first), which go back where
-/// they belong once read; then each server's Rooms (grouped under their
-/// spaces when there are any) and DMs, by name. Window numbers never
-/// change, only where they're listed.
+/// Window list layout: the status window; then Favourites (rooms and DMs
+/// tagged `m.favourite`, by name, unread or not); then Unreads (any other
+/// room or DM with messages you haven't seen, mentions first), which go
+/// back where they belong once read; then each server's Rooms (grouped
+/// under their spaces when there are any) and DMs, by name. Window
+/// numbers never change, only where they're listed.
 pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
     // The status window, then other windows that aren't a room (mentions).
     let mut out = vec![SidebarEntry::Window(0)];
@@ -631,7 +638,16 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
         name(a).cmp(&name(b)).then(a.cmp(b))
     };
 
-    let mut unreads: Vec<usize> = (1..app.windows.len()).filter(rooms).filter(unread).collect();
+    let favourite = |i: &usize| app.windows[*i].favourite;
+    let mut favourites: Vec<usize> = (1..app.windows.len()).filter(rooms).filter(favourite).collect();
+    favourites.sort_by(by_name);
+    if !favourites.is_empty() {
+        out.push(SidebarEntry::Header("★ Favourites".into()));
+        out.extend(favourites.into_iter().map(SidebarEntry::Window));
+    }
+
+    let mut unreads: Vec<usize> =
+        (1..app.windows.len()).filter(rooms).filter(|i| !favourite(i)).filter(unread).collect();
     unreads.sort_by(|a, b| app.windows[*b].activity.cmp(&app.windows[*a].activity).then(by_name(a, b)));
     if !unreads.is_empty() {
         out.push(SidebarEntry::Header("Unreads".into()));
@@ -650,7 +666,7 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
     for server in servers {
         let windows: Vec<usize> = (1..app.windows.len())
             .filter(|&i| app.windows[i].account() == Some(server))
-            .filter(|i| !unread(i))
+            .filter(|i| !unread(i) && !favourite(i))
             .collect();
         let (mut dms, mut rooms): (Vec<usize>, Vec<usize>) = windows.into_iter().partition(|&i| app.windows[i].is_dm);
         rooms.sort_by(by_name);

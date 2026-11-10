@@ -120,6 +120,8 @@ pub struct Window {
     pub is_dm: bool,
     pub dm_user: Option<OwnedUserId>,
     pub avatar: Option<OwnedMxcUri>,
+    /// First in the window list (`m.favourite`).
+    pub favourite: bool,
     pub lines: VecDeque<Line>,
     pub activity: Activity,
     /// Rows scrolled up from the bottom.
@@ -198,6 +200,7 @@ impl Window {
             is_dm: false,
             dm_user: None,
             avatar: None,
+            favourite: false,
             lines: VecDeque::new(),
             activity: Activity::None,
             scroll: 0,
@@ -235,6 +238,7 @@ impl Window {
         self.dm_user = meta.dm_user.clone();
         self.avatar = meta.avatar.clone();
         self.pinned = meta.pinned.clone();
+        self.favourite = meta.favourite;
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -1094,6 +1098,11 @@ const COMMANDS: &[Cmd] = &[
         help: "This room's pictures, videos, audio and files as tiles, newest first: Enter opens, s saves, Tab its links",
     },
     Cmd {
+        name: "favourite",
+        args: "[room]",
+        help: "Make this room or DM (or another) a favourite, or not: first in the window list, and in Element's Favourites",
+    },
+    Cmd {
         name: "links",
         args: "",
         help: "This room's links, newest first: Enter opens, c copies, m goes to the message, / filters, Tab its media",
@@ -1320,6 +1329,8 @@ const ALIASES: &[(&str, &str)] = &[
     ("highlight", "hilight"),
     ("unhilight", "dehilight"),
     ("pinned", "pins"),
+    ("fav", "favourite"),
+    ("favorite", "favourite"),
 ];
 
 pub const KEYS: &[(&str, &str)] = &[
@@ -3511,8 +3522,54 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
             MouseEventKind::Down(MouseButton::Left) => self.on_click(at),
+            MouseEventKind::Down(MouseButton::Right) => self.on_right_click(at),
             _ => {}
         }
+    }
+
+    /// A right-click on a room or DM in the window list makes it a
+    /// favourite, or not.
+    fn on_right_click(&mut self, at: Position) {
+        let Some(&(_, idx)) = self.hits.sidebar.iter().find(|(r, _)| r.contains(at)) else { return };
+        let Some(key) = self.windows[idx].room.clone() else { return };
+        if let Err(e) = self.toggle_favourite(&key.account, &key.room_id) {
+            self.error(e);
+        }
+    }
+
+    /// `/favourite [room]`: this room or DM (or the one named) a favourite,
+    /// or not.
+    fn cmd_favourite(&mut self, args: &str) -> Result<(), String> {
+        let idx = match args.trim() {
+            "" => self.active,
+            name => self.find_window(name)?,
+        };
+        let key = self.windows[idx].room.clone().ok_or("only rooms and DMs can be favourites")?;
+        self.toggle_favourite(&key.account, &key.room_id)
+    }
+
+    /// Make a room or DM a favourite, or not: first in the window list,
+    /// and in Element's Favourites everywhere (the `m.favourite` tag).
+    fn toggle_favourite(&mut self, account: &str, room_id: &OwnedRoomId) -> Result<(), String> {
+        let acct = self.connected(account).ok_or_else(|| format!("{account} isn't connected"))?;
+        let idx = self.window_idx(account, room_id);
+        let (was, name) = match idx {
+            Some(i) => (self.windows[i].favourite, self.windows[i].title().to_owned()),
+            None => {
+                let meta = acct.quick_meta(room_id).ok_or("that room isn't available")?;
+                (meta.favourite, meta.name)
+            }
+        };
+        acct.set_favourite(room_id.clone(), !was);
+        if let Some(i) = idx {
+            self.windows[i].favourite = !was;
+        }
+        self.info(if was {
+            format!("{name} isn't a favourite any more")
+        } else {
+            format!("★ {name} is a favourite: first in the window list, and in Element's Favourites")
+        });
+        Ok(())
     }
 
     /// The wheel scrolls the pane under the pointer (older history loads
@@ -4271,10 +4328,17 @@ impl App {
                 entry: switcher::Entry {
                     target: switcher::Target::Window(i),
                     name: w.title().to_owned(),
-                    detail: match (&w.local_name, detail.is_empty()) {
-                        (Some(_), true) => w.name.clone(),
-                        (Some(_), false) => format!("{} · {detail}", w.name),
-                        (None, _) => detail,
+                    detail: {
+                        let detail = match (&w.local_name, detail.is_empty()) {
+                            (Some(_), true) => w.name.clone(),
+                            (Some(_), false) => format!("{} · {detail}", w.name),
+                            (None, _) => detail,
+                        };
+                        match (w.favourite, detail.is_empty()) {
+                            (true, true) => "★".to_owned(),
+                            (true, false) => format!("★ {detail}"),
+                            (false, _) => detail,
+                        }
                     },
                     activity: w.activity,
                     unread: w.unread(),
@@ -4325,11 +4389,28 @@ impl App {
                 sw.query.clear();
                 sw.selected = 0;
             }
+            Char('f') if ctrl && matches!(sw.purpose, switcher::Purpose::Go) => self.switcher_favourite(),
             Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
                 sw.query.push(c);
                 sw.selected = 0;
             }
             _ => {}
+        }
+    }
+
+    /// Ctrl+F in the switcher: the chosen room or DM a favourite, or not.
+    fn switcher_favourite(&mut self) {
+        let entries = self.switcher_entries();
+        let Some(entry) = self.switcher.as_ref().and_then(|sw| entries.get(sw.selected)) else { return };
+        let (account, room_id) = match &entry.target {
+            switcher::Target::Window(i) => match &self.windows[*i].room {
+                Some(key) => (key.account.clone(), key.room_id.clone()),
+                None => return,
+            },
+            switcher::Target::Closed { account, room_id } => (account.clone(), room_id.clone()),
+        };
+        if let Err(e) = self.toggle_favourite(&account, &room_id) {
+            self.error(e);
         }
     }
 
@@ -5760,6 +5841,7 @@ impl App {
             }
             "media" => self.open_gallery(gallery::Tab::Media),
             "links" => self.open_gallery(gallery::Tab::Links),
+            "favourite" => self.cmd_favourite(args),
             "home" => {
                 self.open_home();
                 Ok(())
@@ -11618,6 +11700,46 @@ mod tests {
             sidebar_entries(&app),
             vec![Win(0), Header("Rooms".into()), Header("◆ Work".into()), Win(2), Header("◇ other".into()), Win(1)]
         );
+    }
+
+    #[test]
+    fn favourites_come_first_in_the_window_list_unread_or_not() {
+        use crate::ui::{
+            SidebarEntry::{Header, Window as Win},
+            sidebar_entries,
+        };
+        let mut app = test_app();
+        let night = room_window(&mut app, "!n:x.org", "Night Owls");
+        let sam = room_window(&mut app, "!s:x.org", "sam");
+        let book = room_window(&mut app, "!b:x.org", "Book Club");
+        app.windows[sam].is_dm = true;
+        app.windows[night].favourite = true;
+        app.windows[sam].favourite = true;
+        app.windows[sam].activity = Activity::Highlight;
+        app.windows[book].activity = Activity::Message;
+        assert_eq!(
+            sidebar_entries(&app),
+            vec![Win(0), Header("★ Favourites".into()), Win(night), Win(sam), Header("Unreads".into()), Win(book),],
+            "rooms and DMs together, by name, and they stay put when unread"
+        );
+
+        // In the switcher, a star says which.
+        app.switcher = Some(Switcher::default());
+        let entries = app.switcher_entries();
+        let mut starred: Vec<&str> =
+            entries.iter().filter(|e| e.detail.starts_with('★')).map(|e| e.name.as_str()).collect();
+        starred.sort();
+        assert_eq!(starred, ["Night Owls", "sam"]);
+        app.switcher = None;
+
+        // Making one takes the server (not connected here, so it says so),
+        // and only rooms and DMs can be one.
+        app.switch_to(book);
+        assert_eq!(app.cmd_favourite(""), Err("t isn't connected".into()));
+        assert_eq!(app.cmd_favourite("Night Owls"), Err("t isn't connected".into()));
+        app.switch_to(0);
+        assert_eq!(app.cmd_favourite(""), Err("only rooms and DMs can be favourites".into()));
+        assert!(app.cmd_favourite("nowhere").is_err());
     }
 
     #[test]

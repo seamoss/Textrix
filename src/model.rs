@@ -399,6 +399,8 @@ pub struct RoomMeta {
     pub highlights: u64,
     /// `m.room.pinned_events`, oldest pin first.
     pub pinned: Vec<OwnedEventId>,
+    /// Tagged `m.favourite` (Element's Favourites): first in the window list.
+    pub favourite: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

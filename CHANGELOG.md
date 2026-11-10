@@ -7,6 +7,16 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.18.0] - 2026-11-09
+
+### Added
+- Favourites: rooms and DMs you mark come first in the window list, under
+  ★ Favourites, read or not. `/favourite` (`/fav`) toggles the room you're
+  in, or `/favourite <room>` another; so does a right-click on it in the
+  window list, or Ctrl+F on it in the quick switcher (which shows ★ by
+  favourites). It's Element's Favourites (the `m.favourite` tag), so it's
+  the same in your other clients, and a change there shows here.
+
 ## [0.17.1] - 2026-11-09
 
 ### Fixed
