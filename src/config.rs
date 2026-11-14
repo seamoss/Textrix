@@ -108,7 +108,7 @@ pub struct Config {
     /// strftime format for the timestamp column.
     pub timestamp_format: String,
     /// Say so when you write to someone who's away or long gone ("sam is
-    /// away: lunch"), when it's news.
+    /// away: lunch"), when it's news. Off unless you turn it on.
     pub away_notes: bool,
     /// System messages (`-!-` lines: Textrix's own, joins and leaves,
     /// topic changes, day changes) in italic, in every theme.
@@ -257,7 +257,7 @@ impl Default for Config {
             statusbar2: Vec::new(),
             editor: String::new(),
             system_italic: true,
-            away_notes: true,
+            away_notes: false,
             show_joins: true,
             link_titles: LinkTitles::Unencrypted,
             hyperlinks: true,

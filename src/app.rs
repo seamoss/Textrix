@@ -2229,7 +2229,7 @@ impl App {
                     Some(since) if !first => {
                         let rooms = self.split_rooms(&account);
                         let text = format!("Netsplit over after {}, joins: {rooms}", short_duration(since.elapsed()));
-                        self.netsplit_note(&account, Line::info(text));
+                        self.status(Line::info(text));
                     }
                     Some(since) => {
                         let server = self.server_host(&account);
@@ -2257,8 +2257,9 @@ impl App {
                     self.splits.insert(account.to_string(), Instant::now());
                     let server = self.server_host(&account);
                     let rooms = self.split_rooms(&account);
+                    // In the status window only: in rooms they're noise.
                     let text = format!("Netsplit {server} ⇄ you, quits: {rooms} ({error}; rejoining when it's back)");
-                    self.netsplit_note(&account, Line::error(text));
+                    self.status(Line::error(text));
                 }
             }
             AppEvent::Rooms { account, mut rooms } => {
@@ -2985,14 +2986,6 @@ impl App {
     }
 
     /// In the status window, and the window you're in if it's that server's.
-    fn netsplit_note(&mut self, account: &str, line: Line) {
-        if self.active != 0 && self.win().account() == Some(account) {
-            let cap = self.cfg.scrollback;
-            self.windows[self.active].push(line.clone(), cap);
-        }
-        self.status(line);
-    }
-
     /// `/bell [on|off|away|sound|visual|both|test]` for this session.
     fn cmd_bell(&mut self, args: &str) -> Result<(), String> {
         match args.trim() {
@@ -10903,6 +10896,8 @@ mod tests {
         (dm.is_dm, dm.dm_user) = (true, Some(sam.clone()));
         app.windows.push(dm);
         app.switch_to(1);
+        assert!(!app.cfg.away_notes, "off unless you turn it on");
+        app.cfg.away_notes = true;
         let away = |status: &str| Presence { kind: PresenceKind::Away, status: Some(status.into()), last_active: None };
         let set = |app: &mut App, p: Presence| {
             app.on_event(AppEvent::Presence { account: "t".into(), updates: vec![(sam.clone(), p)] })
@@ -11071,6 +11066,7 @@ mod tests {
         for (room, name) in [("!a:x.org", "Night Owls"), ("!b:x.org", "Book Club")] {
             room_window(&mut app, room, name);
         }
+        app.switch_to(1);
         let error = || AppEvent::SyncError { account: "t".into(), error: "connection refused".into() };
         app.on_event(error());
         app.on_event(error());
@@ -11081,6 +11077,7 @@ mod tests {
         app.on_event(AppEvent::Synced { account: "t".into(), first: false });
         let over = &app.windows[0].lines.back().unwrap().body;
         assert!(over.starts_with("Netsplit over after 0s, joins: Night Owls, Book Club"), "{over}");
+        assert!(!app.windows[1].lines.iter().any(|l| l.body.contains("Netsplit")), "not in the room you're in");
         assert_eq!(short_duration(Duration::from_secs(133)), "2m 13s");
         assert_eq!(short_duration(Duration::from_secs(3900)), "1h 5m");
     }

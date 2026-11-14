@@ -267,8 +267,8 @@ Textrix's own lines `-!-`.
 System messages, the `-!-` lines (Textrix's own, joins and leaves, topic
 and room changes, day changes), are in italic in every theme, so they
 don't read as the conversation; `system_italic = false` keeps them
-upright. Textrix's own lines (replies to your commands, errors,
-netsplits) are also set apart in a room: a blank row before and after
+upright. Textrix's own lines (replies to your commands, errors) are
+also set apart in a room: a blank row before and after
 each run of them, in the theme's quiet colour.
 
 ### Joins and leaves
@@ -318,7 +318,9 @@ Sliding sync has no presence, so presence dots there only update via
 `/whois`. Force a method with `sync = "classic"` or `"sliding"`.
 
 When the connection drops, it's a netsplit: `Netsplit example.org ⇄ you,
-quits: …`, then `Netsplit over after 2m 13s, joins: …` once it's back.
+quits: …`, then `Netsplit over after 2m 13s, joins: …` once it's back,
+both in the status window (the status bar says `lag` meanwhile), so the
+rooms stay quiet.
 
 ### History at startup
 
@@ -484,8 +486,9 @@ line for you to send. Esc closes it.
   people and servers don't share it), so a bare "offline", a few idle
   minutes, or someone who's said something in the last quarter of an
   hour, never get a note; and the same note comes at most once an hour,
-  unless their status changes. `away_notes = false` turns them off. It
-  uses the presence your server shares, so not on sliding sync.
+  unless their status changes. They're off unless you set
+  `away_notes = true`. It uses the presence your server shares, so not on
+  sliding sync.
 - Messages that mention you or a highlight word are collected, from every
   room and in time order, in a **mentions** window (listed under status;
   `/mentions` opens it). Click one, or select it and press Enter, to go to
@@ -794,7 +797,7 @@ editor = ""                # Ctrl+X opens this ("" uses $VISUAL, then $EDITOR, t
 statusbar = ["time", "nick", "window", "activity", "typing", "scripts", "upgrade", "playing", "servers", "more"]
 statusbar2 = []            # a second bar above, e.g. ["date", "users", "theme"]
 system_italic = true       # -!- lines in italic
-away_notes = true          # "sam is away: lunch" when you write to them, if it's news
+away_notes = false         # true: "sam is away: lunch" when you write to them, if it's news
 show_joins = true
 link_titles = "unencrypted" # page titles under links: "all", "off"
 link_images = true         # and the page's picture under its title

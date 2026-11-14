@@ -17,6 +17,13 @@ release notes.
   favourites). It's Element's Favourites (the `m.favourite` tag), so it's
   the same in your other clients, and a change there shows here.
 
+### Changed
+- Netsplits (the connection dropping, and coming back) are only in the
+  status window, not in the room you're in: they were noise there. The
+  status bar still says `lag` while it's down.
+- The "sam is away: lunch" notes when you write to someone away or long
+  gone are off unless you set `away_notes = true`.
+
 ## [0.17.1] - 2026-11-09
 
 ### Fixed
