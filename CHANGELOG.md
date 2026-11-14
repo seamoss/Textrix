@@ -7,6 +7,17 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.19.0] - unreleased
+
+### Added
+- Your own messages are in a colour of their own, and your nick in it in
+  bold, so they stand apart from everyone else's. Every theme has one,
+  picked to fit it and to read on its background; `own_text` in `[colors]`
+  (or a theme file) changes it, as `own_nick` does the nick. Themes with no
+  colour to spare (mono, gameboy, hotdog-stand) slant them instead.
+- The terminal's title ends with the version you're running ("Night Owls —
+  Textrix v0.19.0"), and `{version}` puts it anywhere in your own `title`.
+
 ## [0.18.0] - 2026-11-14
 
 ### Added

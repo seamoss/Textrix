@@ -2072,6 +2072,7 @@ fn render_line_and_nick(
         LineKind::Error => t.error,
         LineKind::Utd => t.dim.add_modifier(Modifier::ITALIC),
         _ if line.highlight => t.highlight_text,
+        _ if line.own => t.own_text,
         _ => Style::new(),
     };
     if line.pending || line.redacted {
@@ -2713,6 +2714,34 @@ mod tests {
         assert!(!italic(&Line::info("theme: dracula"), &upright));
         let day = day_changed(&cfg, 80, said.ts, false);
         assert!(day.spans.last().unwrap().style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn your_own_messages_are_in_a_colour_of_their_own() {
+        let cfg =
+            Config { palette: crate::theme::Theme::builtin(crate::theme::ThemeName::Synthwave), ..Config::default() };
+        let style_of = |line: &Line, part: &str| {
+            let rows = render_line(line, 80, &cfg);
+            rows[0].spans.iter().find(|s| s.content.contains(part)).map(|s| s.style).unwrap()
+        };
+        let said = |nick: &str, own: bool| {
+            let mut line = Line::new(LineKind::Message, "the sky above the port");
+            (line.nick, line.own) = (nick.into(), own);
+            line
+        };
+        let t = &cfg.palette;
+        assert_ne!(t.own_text.fg, t.base.fg);
+        assert_eq!(style_of(&said("you", true), "sky").fg, t.own_text.fg, "your text");
+        assert_eq!(style_of(&said("you", true), "you"), t.own, "your nick");
+        assert_eq!(style_of(&said("sam", false), "sky").fg, None, "theirs: the theme's own text colour");
+        let mut sending = said("you", true);
+        sending.pending = true;
+        assert_eq!(style_of(&sending, "sky"), t.dim, "dim while it's sending");
+
+        // A theme with no colour to spare slants them instead.
+        let gameboy = crate::theme::Theme::builtin(crate::theme::ThemeName::Gameboy);
+        assert_eq!(gameboy.own_text.fg, gameboy.base.fg);
+        assert!(gameboy.own_text.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]

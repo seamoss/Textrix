@@ -540,6 +540,9 @@ pub struct Theme {
     pub frame: Style,
     /// Your own nick.
     pub own: Style,
+    /// The text of your own messages, so they stand apart from everyone
+    /// else's.
+    pub own_text: Style,
     /// The nick on a message that mentions you.
     pub highlight: Style,
     /// The text of a message that mentions you.
@@ -622,6 +625,9 @@ const GREY: Hue = Hue { shades: [252, 246, 241, 236], hot: 231, code: 255, nicks
 struct Palette {
     bg: u32,
     fg: u32,
+    /// Your own messages: the nick (in bold) and the text. The same as
+    /// `fg` slants the text instead, for a palette with no colour to spare.
+    own: u32,
     /// Timestamps, comments, quiet details.
     dim: u32,
     /// Window-list entries with nothing new.
@@ -666,6 +672,7 @@ fn rgb(c: u32) -> Color {
 const IBM_5151: Palette = Palette {
     bg: 0x000000,
     fg: 0x00ff66,
+    own: 0x00cc52,
     dim: 0x00994d,
     muted: 0x00cc52,
     bar: [0x000000, 0x00cc52],
@@ -693,6 +700,7 @@ const IBM_5151: Palette = Palette {
 const TURBO: Palette = Palette {
     bg: 0x0000aa,
     fg: 0xffff55,
+    own: 0x55ffff,
     dim: 0xaaaaaa,
     muted: 0x55ffff,
     bar: [0x000000, 0xaaaaaa],
@@ -721,6 +729,7 @@ const TURBO: Palette = Palette {
 const PROCOMM: Palette = Palette {
     bg: 0x000000,
     fg: 0xaaaaaa,
+    own: 0x55ffff,
     dim: 0x555555,
     muted: 0xaaaaaa,
     bar: [0x000000, 0x00aaaa],
@@ -748,6 +757,7 @@ const PROCOMM: Palette = Palette {
 const C64: Palette = Palette {
     bg: 0x40318d,
     fg: 0xa59bff,
+    own: 0x75cec8,
     dim: 0x7869c4,
     muted: 0x8f84e8,
     bar: [0xffffff, 0x7869c4],
@@ -775,6 +785,7 @@ const C64: Palette = Palette {
 const AMIGA: Palette = Palette {
     bg: 0x0055aa,
     fg: 0xffffff,
+    own: 0xaad4ff,
     dim: 0x88aacc,
     muted: 0xc8dcf0,
     bar: [0x0055aa, 0xffffff],
@@ -802,6 +813,7 @@ const AMIGA: Palette = Palette {
 const DELPHI: Palette = Palette {
     bg: 0xffffff,
     fg: 0x000000,
+    own: 0x008080,
     dim: 0x808080,
     muted: 0x404040,
     bar: [0x000000, 0xd4d0c8],
@@ -829,6 +841,7 @@ const DELPHI: Palette = Palette {
 const MIRC: Palette = Palette {
     bg: 0xffffff,
     fg: 0x000000,
+    own: 0x007f7f,
     dim: 0x7f7f7f,
     muted: 0x000000,
     bar: [0x000000, 0xd4d0c8],
@@ -857,6 +870,7 @@ const SOLARIZED_ACCENTS: [u32; 8] = [0xb58900, 0xcb4b16, 0xdc322f, 0xd33682, 0x6
 const SOLARIZED_DARK: Palette = Palette {
     bg: 0x002b36,
     fg: 0x839496,
+    own: 0x859900,
     dim: 0x586e75,
     muted: 0x657b83,
     bar: [0x93a1a1, 0x073642],
@@ -883,6 +897,7 @@ const SOLARIZED_DARK: Palette = Palette {
 const SOLARIZED_LIGHT: Palette = Palette {
     bg: 0xfdf6e3,
     fg: 0x657b83,
+    own: 0x2176b5,
     dim: 0x93a1a1,
     muted: 0x657b83,
     bar: [0x586e75, 0xeee8d5],
@@ -898,6 +913,7 @@ const SOLARIZED_LIGHT: Palette = Palette {
 const MONOKAI: Palette = Palette {
     bg: 0x272822,
     fg: 0xf8f8f2,
+    own: 0xa6e22e,
     dim: 0x75715e,
     muted: 0xcfcfc2,
     bar: [0xf8f8f2, 0x49483e],
@@ -924,6 +940,7 @@ const MONOKAI: Palette = Palette {
 const DRACULA: Palette = Palette {
     bg: 0x282a36,
     fg: 0xf8f8f2,
+    own: 0xbd93f9,
     dim: 0x6272a4,
     muted: 0xbfbfbf,
     bar: [0xf8f8f2, 0x44475a],
@@ -952,6 +969,7 @@ const DRACULA: Palette = Palette {
 const SYNTHWAVE: Palette = Palette {
     bg: 0x1b0f2e,
     fg: 0xf4e9ff,
+    own: 0x72f1b8,
     dim: 0x7a6aa8,
     muted: 0xa99cc9,
     bar: [0xfff1fb, 0x5a1f8c],
@@ -979,6 +997,7 @@ const SYNTHWAVE: Palette = Palette {
 const GAMEBOY: Palette = Palette {
     bg: 0x9bbc0f,
     fg: 0x0f380f,
+    own: 0x0f380f,
     dim: 0x306230,
     muted: 0x306230,
     bar: [0x9bbc0f, 0x0f380f],
@@ -1006,6 +1025,7 @@ const GAMEBOY: Palette = Palette {
 const TELETEXT: Palette = Palette {
     bg: 0x000000,
     fg: 0xffffff,
+    own: 0xffff00,
     dim: 0x00ffff,
     muted: 0xffffff,
     bar: [0xffff00, 0x0000ff],
@@ -1033,6 +1053,7 @@ const TELETEXT: Palette = Palette {
 const BSOD: Palette = Palette {
     bg: 0x0000aa,
     fg: 0xffffff,
+    own: 0x55ffff,
     dim: 0xaaaaaa,
     muted: 0xaaaaaa,
     bar: [0x0000aa, 0xaaaaaa],
@@ -1060,6 +1081,7 @@ const BSOD: Palette = Palette {
 const HOTDOG_STAND: Palette = Palette {
     bg: 0xffff00,
     fg: 0x000000,
+    own: 0x000000,
     dim: 0x7a6200,
     muted: 0x3d3100,
     bar: [0xffffff, 0xff0000],
@@ -1087,6 +1109,7 @@ const HOTDOG_STAND: Palette = Palette {
 const MIAMI_HEAT: Palette = Palette {
     bg: 0x0b2b36,
     fg: 0xfff2f7,
+    own: 0x2ee6d6,
     dim: 0x4f7d8a,
     muted: 0xa7c6cf,
     bar: [0x0b2b36, 0xff6fae],
@@ -1114,6 +1137,7 @@ const MIAMI_HEAT: Palette = Palette {
 const CEMETERY: Palette = Palette {
     bg: 0x101112,
     fg: 0xc9c5bb,
+    own: 0x9fb0bf,
     dim: 0x575b58,
     muted: 0x8a8d88,
     bar: [0xc9c5bb, 0x26282a],
@@ -1141,6 +1165,7 @@ const CEMETERY: Palette = Palette {
 const SUMMER_EVENING: Palette = Palette {
     bg: 0xfbeee0,
     fg: 0x3b2f40,
+    own: 0x6f4f9e,
     dim: 0x9a8478,
     muted: 0x6e5d66,
     bar: [0xfff7ef, 0x8a6bb5],
@@ -1168,6 +1193,7 @@ const SUMMER_EVENING: Palette = Palette {
 const ABYSS: Palette = Palette {
     bg: 0x02070d,
     fg: 0xa9d8e6,
+    own: 0x3ff2e0,
     dim: 0x2f5d73,
     muted: 0x6f9fb3,
     bar: [0x02070d, 0x1fd1c1],
@@ -1195,6 +1221,7 @@ const ABYSS: Palette = Palette {
 const NOIR: Palette = Palette {
     bg: 0x0b0b0b,
     fg: 0xd6d6d6,
+    own: 0xa8a8a8,
     dim: 0x6e6e6e,
     muted: 0x9a9a9a,
     bar: [0x0b0b0b, 0xd6d6d6],
@@ -1222,6 +1249,7 @@ const NOIR: Palette = Palette {
 const ESPRESSO: Palette = Palette {
     bg: 0x1e1410,
     fg: 0xecdcc6,
+    own: 0x9cc5a1,
     dim: 0x7a6050,
     muted: 0xb39a84,
     bar: [0x1e1410, 0xd4a373],
@@ -1249,6 +1277,7 @@ const ESPRESSO: Palette = Palette {
 const VAPORWAVE: Palette = Palette {
     bg: 0xffd6f2,
     fg: 0x3d1a5b,
+    own: 0x007474,
     dim: 0x9a6fae,
     muted: 0x6b4a80,
     bar: [0xffffff, 0x008b8b],
@@ -1276,6 +1305,7 @@ const VAPORWAVE: Palette = Palette {
 const RADIOACTIVE: Palette = Palette {
     bg: 0x0a0f05,
     fg: 0xd4ff4a,
+    own: 0x39ff14,
     dim: 0x5d7a1f,
     muted: 0x9fbf3a,
     bar: [0x000000, 0xf2c200],
@@ -1303,6 +1333,7 @@ const RADIOACTIVE: Palette = Palette {
 const DISCO: Palette = Palette {
     bg: 0x0a0a0a,
     fg: 0xfff6e0,
+    own: 0xffcc00,
     dim: 0x8a7a9a,
     muted: 0xc9b8d9,
     bar: [0x0a0a0a, 0xffcc00],
@@ -1330,6 +1361,7 @@ const DISCO: Palette = Palette {
 const COLORBLIND: Palette = Palette {
     bg: 0x121417,
     fg: 0xe6e6e6,
+    own: 0x56b4e9,
     dim: 0x8a8f98,
     muted: 0xb0b4ba,
     bar: [0x121417, 0x56b4e9],
@@ -1357,6 +1389,7 @@ const COLORBLIND: Palette = Palette {
 const COLORBLIND_LIGHT: Palette = Palette {
     bg: 0xfbfbf8,
     fg: 0x1d1f23,
+    own: 0x0072b2,
     dim: 0x6b7078,
     muted: 0x4d525a,
     bar: [0xffffff, 0x0072b2],
@@ -1384,6 +1417,7 @@ const COLORBLIND_LIGHT: Palette = Palette {
 const TRITAN: Palette = Palette {
     bg: 0x141414,
     fg: 0xececec,
+    own: 0x4fd1d9,
     dim: 0x8c8c8c,
     muted: 0xb5b5b5,
     bar: [0x141414, 0x4fd1d9],
@@ -1411,6 +1445,7 @@ const TRITAN: Palette = Palette {
 const HIGH_CONTRAST: Palette = Palette {
     bg: 0x000000,
     fg: 0xffffff,
+    own: 0x00ffff,
     dim: 0xc0c0c0,
     muted: 0xe0e0e0,
     bar: [0x000000, 0xffff00],
@@ -1439,6 +1474,7 @@ const HIGH_CONTRAST: Palette = Palette {
 const SHOCKWAVE: Palette = Palette {
     bg: 0x0a0014,
     fg: 0xf2f2ff,
+    own: 0x00f0ff,
     dim: 0x7b5cff,
     muted: 0xc8b8ff,
     bar: [0x0a0014, 0xff00e6],
@@ -1465,6 +1501,7 @@ const SHOCKWAVE: Palette = Palette {
 const NORD: Palette = Palette {
     bg: 0x2e3440,
     fg: 0xd8dee9,
+    own: 0xa3be8c,
     dim: 0x616e88,
     muted: 0xa3abb9,
     bar: [0xeceff4, 0x434c5e],
@@ -1491,6 +1528,7 @@ const NORD: Palette = Palette {
 const GRUVBOX: Palette = Palette {
     bg: 0x282828,
     fg: 0xebdbb2,
+    own: 0x83a598,
     dim: 0x928374,
     muted: 0xa89984,
     bar: [0xebdbb2, 0x504945],
@@ -1518,6 +1556,7 @@ const GRUVBOX: Palette = Palette {
 const CATPPUCCIN: Palette = Palette {
     bg: 0x1e1e2e,
     fg: 0xcdd6f4,
+    own: 0x94e2d5,
     dim: 0x7f849c,
     muted: 0xa6adc8,
     bar: [0xcdd6f4, 0x313244],
@@ -1565,7 +1604,9 @@ impl Default for Theme {
             dim: Style::new().fg(Color::DarkGray),
             accent: Style::new().fg(Color::Cyan).add_modifier(bold),
             frame: Style::new().fg(Color::Cyan),
-            own: Style::new().add_modifier(bold),
+            // A pale teal (#afd7d7), whatever the terminal calls cyan.
+            own: Style::new().fg(Color::Indexed(152)).add_modifier(bold),
+            own_text: Style::new().fg(Color::Indexed(152)),
             highlight: Style::new().fg(Color::Magenta).add_modifier(bold),
             highlight_text: Style::new().fg(Color::Yellow),
             error: Style::new().fg(Color::Red),
@@ -1734,6 +1775,7 @@ impl Theme {
             &mut self.accent,
             &mut self.frame,
             &mut self.own,
+            &mut self.own_text,
             &mut self.highlight,
             &mut self.highlight_text,
             &mut self.error,
@@ -1779,7 +1821,8 @@ impl Theme {
             dim: fg(p.dim),
             accent: fg(p.accent).add_modifier(bold),
             frame: fg(p.accent),
-            own: fg(p.fg).add_modifier(bold),
+            own: fg(p.own).add_modifier(bold),
+            own_text: if p.own == p.fg { fg(p.fg).add_modifier(Modifier::ITALIC) } else { fg(p.own) },
             highlight: fg(p.highlight).add_modifier(bold),
             highlight_text: fg(p.highlight_text),
             error: fg(p.error),
@@ -1822,6 +1865,8 @@ impl Theme {
         let bold = Modifier::BOLD;
         Self {
             dim: Style::new().fg(Color::Indexed(244)),
+            own: Style::new().fg(Color::Indexed(24)).add_modifier(bold),
+            own_text: Style::new().fg(Color::Indexed(24)),
             highlight_text: Style::new().fg(Color::Indexed(130)),
             mention: Style::new().fg(Color::Blue).add_modifier(bold),
             code: Style::new().fg(Color::Indexed(125)),
@@ -1869,6 +1914,7 @@ impl Theme {
             accent: bold,
             frame: plain,
             own: bold,
+            own_text: plain.add_modifier(Modifier::ITALIC),
             highlight: bold.add_modifier(Modifier::UNDERLINED),
             highlight_text: bold,
             error: bold,
@@ -1927,6 +1973,8 @@ impl Theme {
             accent: g.add_modifier(bold),
             frame: g,
             own: g.add_modifier(bold),
+            // A shade down: the one colour has no other to give.
+            own_text: Style::new().fg(mid),
             highlight: Style::new().fg(hot).add_modifier(bold | Modifier::UNDERLINED),
             highlight_text: Style::new().fg(hot),
             error: g.add_modifier(bold | Modifier::REVERSED),
@@ -1999,6 +2047,7 @@ impl Theme {
             "accent" => self.accent = self.accent.fg(c),
             "frame" => self.frame = self.frame.fg(c),
             "own_nick" => self.own = self.own.fg(c),
+            "own_text" => self.own_text = self.own_text.fg(c),
             "highlight" => self.highlight = self.highlight.fg(c),
             "highlight_text" => self.highlight_text = self.highlight_text.fg(c),
             "error" => self.error = self.error.fg(c),
@@ -2053,6 +2102,7 @@ pub const KEYS: &[&str] = &[
     "accent",
     "frame",
     "own_nick",
+    "own_text",
     "highlight",
     "highlight_text",
     "error",
@@ -2240,6 +2290,7 @@ mod tests {
             let t = Theme::builtin(id);
             let bg = t.base.bg;
             assert!(contrast(t.base.fg, bg) >= 4.0, "{name}: text");
+            assert!(contrast(t.own_text.fg, bg) >= 4.0, "{name}: own_text");
             for (part, style) in [("bar", t.bar), ("current window", t.current), ("pane title", t.pane)] {
                 assert!(contrast(style.fg, style.bg) >= 3.0, "{name}: {part}");
             }
@@ -2247,6 +2298,7 @@ mod tests {
             for (part, style) in [
                 ("highlight", t.highlight),
                 ("highlight_text", t.highlight_text),
+                ("own_nick", t.own),
                 ("link", t.link),
                 ("mention", t.mention),
                 ("code", t.code),

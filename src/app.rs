@@ -2893,7 +2893,8 @@ impl App {
                 .replace("{window}", w.title())
                 .replace("{number}", &(self.active + 1).to_string())
                 .replace("{server}", w.account().unwrap_or_default())
-                .replace("{activity}", &activity),
+                .replace("{activity}", &activity)
+                .replace("{version}", env!("CARGO_PKG_VERSION")),
         )
     }
 
@@ -11383,7 +11384,9 @@ mod tests {
         assert_eq!(app.windows[a].title(), "Ops");
         assert_eq!(app.find_window("ops"), Ok(a));
         assert_eq!(app.find_window("night"), Ok(a), "the room's own name still finds it");
-        assert_eq!(app.terminal_title().unwrap(), "Ops — Textrix");
+        assert_eq!(app.terminal_title().unwrap(), format!("Ops — Textrix v{}", env!("CARGO_PKG_VERSION")));
+        app.cfg.title = "{number}:{window} ({version})".into();
+        assert_eq!(app.terminal_title().unwrap(), format!("{}:Ops ({})", a + 1, env!("CARGO_PKG_VERSION")));
 
         // Kept in the layout, so it comes back with the window.
         let key = app.windows[a].room.clone().unwrap();

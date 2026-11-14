@@ -179,10 +179,11 @@ While the mouse is on, hold Shift (Option in iTerm2 and Terminal.app) and
 drag to select text, or use `c` in selection mode to copy a message.
 
 The terminal's tab or window title follows the window you're in (the
-focused pane when split), as set by `title`: `{window}`, `{number}`,
-`{server}`, and `{activity}`, which adds ` [3]` while three other windows
-have new messages. Inside tmux it's the pane title. The title you had is
-put back when Textrix exits.
+focused pane when split), and ends with the version you're running:
+"Night Owls — Textrix v0.19.0". It's set by `title`: `{window}`,
+`{number}`, `{server}`, `{activity}`, which adds ` [3]` while three other
+windows have new messages, and `{version}`. Inside tmux it's the pane
+title. The title you had is put back when Textrix exits.
 
 The window list (F2) puts your **★ Favourites** first, rooms and DMs
 together by name, read or not. Make one with `/favourite` (`/fav`) in it
@@ -466,6 +467,10 @@ line for you to send. Esc closes it.
 - A red **new messages** divider marks where you stopped reading. It starts at
   your shared read marker (the same one Element uses) and moves when you leave
   a window or send a message.
+- Your own messages are in a colour of their own (and your nick in it, in
+  bold), so they stand apart from everyone else's; every theme has one, and
+  `own_text` in `[colors]` changes it. Themes with no colour to spare slant
+  them instead.
 - Your messages say how far they've got: dim while sending; a dim `✓` once
   the server has them (Matrix has no "delivered to their phone"); `✓✓ sam`
   once sam has read that far (from sam's read receipt, so not for people
@@ -655,7 +660,8 @@ nicks = "red, 214, #00aa88, blue"   # the colours nicks are picked from
 The keys: `background`, `foreground` (under everything), `bar_fg`,
 `bar_bg`, `bar_accent`, `bar_alert` (the topic and status bars),
 `pane_fg`, `pane_bg` (unfocused split panes), `dim`, `accent`, `frame`,
-`own_nick`, `highlight`, `highlight_text`, `error`, `divider`, `link`,
+`own_nick`, `own_text` (your own messages), `highlight`,
+`highlight_text`, `error`, `divider`, `link`,
 `mention`, `code`, `code_comment`, `code_keyword`, `code_string`,
 `code_number`, `code_function`, `code_type` (syntax colours in code
 blocks), `badge` (reply counts), `pinned`, `receipts`, `matched`,
@@ -829,7 +835,7 @@ paste_confirm_lines = 5    # ask before sending longer pastes (0: never)
 theme = "default"          # or one of the others /theme list lists, or your own; [colors] overrides
 theme_dark = "default"     # what theme = "auto" picks on a dark background
 theme_light = "light"      # and on a light one
-title = "{window}{activity} — Textrix"   # the terminal's title; "" leaves it alone
+title = "{window}{activity} — Textrix v{version}"   # the terminal's title; "" leaves it alone
 history_cache = true       # show recent messages instantly at startup
 encrypt_store = true       # encrypt the local store, key in the system keychain
 check_updates = false      # hourly, ask GitHub whether a newer release is out

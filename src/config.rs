@@ -214,9 +214,9 @@ pub struct Config {
     /// startup. They're stored decrypted, next to the keys and session
     /// that can decrypt them anyway; off clears what's stored.
     pub history_cache: bool,
-    /// The terminal's title: {window}, {number}, {server}, and {activity}
-    /// (" [3]" when other windows have new messages). Empty leaves the
-    /// title alone.
+    /// The terminal's title: {window}, {number}, {server}, {activity}
+    /// (" [3]" when other windows have new messages), and {version}.
+    /// Empty leaves the title alone.
     pub title: String,
     /// Colours: a built-in theme ("default", "light", "green-tron",
     /// "turbo", "dracula"… /theme list lists them) or a theme file's name, from
@@ -291,7 +291,7 @@ impl Default for Config {
             check_updates: false,
             scripts: true,
             search_index: true,
-            title: "{window}{activity} — Textrix".into(),
+            title: "{window}{activity} — Textrix v{version}".into(),
             encrypt_store: true,
             theme: ThemeId::default(),
             theme_dark: ThemeId::Builtin(ThemeName::Default),
