@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.18.0] - 2026-11-09
+## [0.18.0] - 2026-11-14
 
 ### Added
 - Favourites: rooms and DMs you mark come first in the window list, under
