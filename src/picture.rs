@@ -3,8 +3,18 @@
 //! drawn in text, each character cell split into a grid of blocks in two
 //! colours: sextants (2×3, 🬿), quadrants (2×2, ▚) or half-blocks (1×2, ▀).
 //! Images are always shrunk with a proper filter, never by skipping pixels.
+//! Moving pictures (GIFs, animated WebP and PNG) are a picture a frame,
+//! each drawn in turn: the terminal keeps each frame (kitty graphics), so
+//! the next one costs a few cells, not the image again.
 
-use image::{DynamicImage, imageops::FilterType};
+use std::{
+    io::Cursor,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+use anyhow::bail;
+use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat, Limits, imageops::FilterType};
 use ratatui::{
     buffer::Buffer,
     layout::{Rect, Size},
@@ -19,6 +29,34 @@ use ratatui_image::{
 use serde::{Deserialize, Serialize};
 
 const FILTER: FilterType = FilterType::CatmullRom;
+
+/// The most frames a moving picture keeps: longer ones keep every second
+/// frame (each shown twice as long), then every fourth, and so on.
+const MAX_FRAMES: usize = 200;
+/// What its frames may take in the terminal, as RGBA: kitty and Ghostty
+/// keep ~320 MB of pictures in all, and drop the oldest past that.
+const FRAMES_BUDGET: u64 = 48 * 1024 * 1024;
+/// Frames read at most, however short they are.
+const MAX_SOURCE_FRAMES: usize = 1000;
+/// The shortest a frame shows. GIFs that ask for less (0 or 10 ms) mean
+/// "as fast as you can", which browsers play at 100 ms.
+const MIN_DELAY: Duration = Duration::from_millis(20);
+const FAST_DELAY: Duration = Duration::from_millis(100);
+
+/// When the soonest moving picture drawn since the last ask next changes.
+static NEXT_FRAME: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// When to draw again for the moving pictures just drawn (`None`: there
+/// were none, or they've stopped), and forget it: each drawing asks anew.
+pub fn next_frame() -> Option<Instant> {
+    NEXT_FRAME.lock().map(|mut next| next.take()).unwrap_or(None)
+}
+
+fn frame_due(at: Instant) {
+    if let Ok(mut next) = NEXT_FRAME.lock() {
+        *next = Some(next.map_or(at, |n| n.min(at)));
+    }
+}
 
 /// How to draw pictures in a terminal without graphics (`image_text`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +151,49 @@ impl Painter {
             ProtocolType::Sixel => "sixel".into(),
             ProtocolType::Halfblocks => format!("drawn in text ({})", self.text.name()),
         }
+    }
+
+    /// Whether moving pictures move here: with kitty graphics (each frame
+    /// sent once) or in text. iTerm2 and sixel would send the whole image
+    /// again for every frame, so they show the first.
+    pub fn moves(&self) -> bool {
+        matches!(self.picker.protocol_type(), ProtocolType::Kitty | ProtocolType::Halfblocks)
+    }
+
+    /// A moving picture (a GIF, or an animated WebP or PNG) at most `area`,
+    /// every frame fitted alike; one that doesn't move, its only frame.
+    /// Off the UI thread: it decodes every frame.
+    pub fn moving(&self, bytes: &[u8], area: Size) -> anyhow::Result<Picture> {
+        let (frames, loops) = frames_of(bytes)?;
+        let font = self.picker.font_size();
+        let mut kept: Vec<(Picture, Duration)> = Vec::new();
+        // Every `step`th frame is kept; those between add to its time.
+        let (mut step, mut seen, mut frame_bytes) = (1, 0, 0);
+        for frame in frames.take(MAX_SOURCE_FRAMES) {
+            let frame = frame?;
+            let (numer, denom) = frame.delay().numer_denom_ms();
+            let delay = Duration::from_micros(u64::from(numer) * 1000 / u64::from(denom.max(1)));
+            let delay = if delay < MIN_DELAY { FAST_DELAY } else { delay };
+            if seen % step == 0 {
+                let picture = self.fit(DynamicImage::ImageRgba8(frame.into_buffer()), area)?;
+                let size = picture.size();
+                frame_bytes =
+                    u64::from(size.width) * u64::from(font.width) * u64::from(size.height) * u64::from(font.height) * 4;
+                kept.push((picture, delay));
+            } else if let Some(last) = kept.last_mut() {
+                last.1 += delay;
+            }
+            seen += 1;
+            if kept.len() > MAX_FRAMES || kept.len() as u64 * frame_bytes > FRAMES_BUDGET {
+                kept = halve(kept);
+                step *= 2;
+            }
+        }
+        if kept.len() < 2 {
+            return kept.pop().map(|(still, _)| still).ok_or_else(|| anyhow::anyhow!("no frames"));
+        }
+        let total = kept.iter().map(|(_, d)| *d).sum();
+        Ok(Picture::Moving(Moving { frames: kept, total, loops, start: Instant::now() }))
     }
 
     /// The image at most `area` (in cells), and no bigger than it is.
@@ -227,6 +308,59 @@ impl Painter {
     }
 }
 
+/// Every second frame, each with the time of the one it drops.
+fn halve(frames: Vec<(Picture, Duration)>) -> Vec<(Picture, Duration)> {
+    let mut out: Vec<(Picture, Duration)> = Vec::with_capacity(frames.len() / 2 + 1);
+    for (i, (picture, delay)) in frames.into_iter().enumerate() {
+        match out.last_mut() {
+            Some(last) if i % 2 == 1 => last.1 += delay,
+            _ => out.push((picture, delay)),
+        }
+    }
+    out
+}
+
+/// A moving picture's frames, and how many times it plays (`None`: for
+/// ever). Refused unless it moves, so a still one takes the usual way.
+fn frames_of(bytes: &[u8]) -> anyhow::Result<(image::Frames<'_>, Option<u32>)> {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    let reader = Cursor::new(bytes);
+    let loops = |count: image::metadata::LoopCount| match count {
+        image::metadata::LoopCount::Infinite => None,
+        image::metadata::LoopCount::Finite(n) => Some(n.get()),
+    };
+    match image::guess_format(bytes)? {
+        ImageFormat::Gif => {
+            let mut decoder = image::codecs::gif::GifDecoder::new(reader)?;
+            decoder.set_limits(limits)?;
+            let count = loops(decoder.loop_count());
+            Ok((decoder.into_frames(), count))
+        }
+        ImageFormat::WebP => {
+            let mut decoder = image::codecs::webp::WebPDecoder::new(reader)?;
+            if !decoder.has_animation() {
+                bail!("a still WebP");
+            }
+            decoder.set_limits(limits)?;
+            let count = loops(decoder.loop_count());
+            Ok((decoder.into_frames(), count))
+        }
+        ImageFormat::Png => {
+            let decoder = image::codecs::png::PngDecoder::with_limits(reader, limits)?;
+            if !decoder.is_apng()? {
+                bail!("a still PNG");
+            }
+            let decoder = decoder.apng()?;
+            let count = loops(decoder.loop_count());
+            Ok((decoder.into_frames(), count))
+        }
+        format => bail!("{format:?} doesn't move"),
+    }
+}
+
 fn distance(p: &[u8; 4], c: [u8; 3]) -> u32 {
     (0..3).map(|i| (i32::from(p[i]) - i32::from(c[i])).pow(2) as u32).sum()
 }
@@ -245,10 +379,43 @@ pub(crate) fn xterm256(r: u8, g: u8, b: u8) -> u8 {
     if off([grey; 3]) < off(cube) { 232 + grey_index } else { 16 + 36 * ri as u8 + 6 * gi as u8 + bi as u8 }
 }
 
-/// A picture ready to draw: graphics, or text cells.
+/// A picture ready to draw: graphics, text cells, or frames of either.
 pub enum Picture {
     Graphics(Protocol),
     Text(TextPicture),
+    Moving(Moving),
+}
+
+/// A moving picture: its frames in turn, from when it was made.
+pub struct Moving {
+    /// Each frame (graphics or text), and how long it shows.
+    frames: Vec<(Picture, Duration)>,
+    /// The frames' times added up.
+    total: Duration,
+    /// Plays this many times, then stays on its last frame (`None`: loops).
+    loops: Option<u32>,
+    start: Instant,
+}
+
+impl Moving {
+    /// The frame to show `elapsed` in, and when the next one is due
+    /// (`None`: it has finished playing).
+    fn frame_at(&self, elapsed: Duration) -> (&Picture, Option<Duration>) {
+        let last = &self.frames[self.frames.len() - 1].0;
+        let total = self.total.as_micros().max(1);
+        if self.loops.is_some_and(|n| elapsed.as_micros() >= total * u128::from(n)) {
+            return (last, None);
+        }
+        let mut into = elapsed.as_micros() % total;
+        for (picture, delay) in &self.frames {
+            let shows = delay.as_micros();
+            if into < shows {
+                return (picture, Some(Duration::from_micros((shows - into) as u64)));
+            }
+            into -= shows;
+        }
+        (last, Some(self.frames[0].1))
+    }
 }
 
 pub struct TextPicture {
@@ -266,7 +433,13 @@ impl Picture {
                 Size::new(area.width, area.height)
             }
             Picture::Text(text) => text.size,
+            Picture::Moving(moving) => moving.frames[0].0.size(),
         }
+    }
+
+    /// Whether it moves.
+    pub fn moves(&self) -> bool {
+        matches!(self, Picture::Moving(_))
     }
 }
 
@@ -274,6 +447,14 @@ impl Widget for &Picture {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self {
             Picture::Graphics(protocol) => Image::new(protocol).render(area, buf),
+            Picture::Moving(moving) => {
+                let now = Instant::now();
+                let (frame, next) = moving.frame_at(now.saturating_duration_since(moving.start));
+                if let Some(next) = next {
+                    frame_due(now + next);
+                }
+                frame.render(area, buf);
+            }
             Picture::Text(text) => {
                 let width = usize::from(text.size.width.max(1));
                 for (i, &(c, fg, bg)) in text.cells.iter().enumerate() {
@@ -340,6 +521,95 @@ mod tests {
             "shrunk to fit, in shape"
         );
         assert_eq!(p.scale(image, Size::new(80, 40)).unwrap().size(), Size::new(80, 20), "the viewer fills the room");
+    }
+
+    /// A GIF of solid frames, each (colour, delay in ms).
+    fn gif(frames: &[([u8; 4], u32)], repeat: image::codecs::gif::Repeat) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut out);
+            encoder.set_repeat(repeat).unwrap();
+            encoder
+                .encode_frames(frames.iter().map(|&(colour, ms)| {
+                    image::Frame::from_parts(
+                        RgbaImage::from_pixel(8, 8, Rgba(colour)),
+                        0,
+                        0,
+                        image::Delay::from_numer_denom_ms(ms, 1),
+                    )
+                }))
+                .unwrap();
+        }
+        out
+    }
+
+    fn moving(picture: Picture) -> Moving {
+        match picture {
+            Picture::Moving(moving) => moving,
+            _ => panic!("still"),
+        }
+    }
+
+    /// The frame's background colour, for telling solid frames apart.
+    fn colour(picture: &Picture) -> Option<Color> {
+        match picture {
+            Picture::Text(text) => text.cells[0].2,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn gifs_move_frame_by_frame_and_loop() {
+        use image::codecs::gif::Repeat;
+        let p = painter(TextMode::Sextants);
+        let (red, green, blue) = ([200, 0, 0, 255], [0, 200, 0, 255], [0, 0, 200, 255]);
+        // 0 ms means "fast": 100 ms, as browsers play it.
+        let m =
+            moving(p.moving(&gif(&[(red, 50), (green, 0), (blue, 200)], Repeat::Infinite), Size::new(4, 2)).unwrap());
+        let ms = Duration::from_millis;
+        assert_eq!(m.frames.iter().map(|(_, d)| *d).collect::<Vec<_>>(), [ms(50), ms(100), ms(200)]);
+        assert_eq!(m.total, ms(350));
+        let at = |t| {
+            let (frame, next) = m.frame_at(ms(t));
+            (colour(frame), next)
+        };
+        assert_eq!(at(0), (Some(Color::Rgb(200, 0, 0)), Some(ms(50))));
+        assert_eq!(at(60), (Some(Color::Rgb(0, 200, 0)), Some(ms(90))));
+        assert_eq!(at(349), (Some(Color::Rgb(0, 0, 200)), Some(ms(1))));
+        assert_eq!(at(350 * 3 + 10), (Some(Color::Rgb(200, 0, 0)), Some(ms(40))), "round again");
+        assert!(Picture::Moving(m).moves());
+
+        // Twice through, then the last frame for good.
+        let twice = moving(p.moving(&gif(&[(red, 100), (blue, 100)], Repeat::Finite(2)), Size::new(4, 2)).unwrap());
+        assert_eq!(twice.loops, Some(2));
+        assert_eq!(colour(twice.frame_at(ms(250)).0), Some(Color::Rgb(200, 0, 0)));
+        let (last, next) = twice.frame_at(ms(400));
+        assert_eq!((colour(last), next), (Some(Color::Rgb(0, 0, 200)), None));
+    }
+
+    #[test]
+    fn long_gifs_keep_fewer_frames_for_as_long() {
+        let p = painter(TextMode::Sextants);
+        let frames: Vec<([u8; 4], u32)> = (0..450).map(|i| ([(i % 250) as u8, 0, 0, 255], 40)).collect();
+        let m = moving(p.moving(&gif(&frames, image::codecs::gif::Repeat::Infinite), Size::new(4, 2)).unwrap());
+        assert!(m.frames.len() <= MAX_FRAMES, "{}", m.frames.len());
+        assert!(m.frames.len() > MAX_FRAMES / 2, "{}", m.frames.len());
+        assert_eq!(m.total, Duration::from_millis(450 * 40), "the same length");
+        // Every fourth frame, each standing for four.
+        assert_eq!(m.frames[1].1, Duration::from_millis(160));
+    }
+
+    #[test]
+    fn still_pictures_take_the_usual_way() {
+        let p = painter(TextMode::Sextants);
+        let one = gif(&[([9, 9, 9, 255], 100)], image::codecs::gif::Repeat::Infinite);
+        assert!(!p.moving(&one, Size::new(4, 2)).unwrap().moves(), "one frame: still");
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, Rgba([1, 2, 3, 255])))
+            .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        assert!(p.moving(&png, Size::new(4, 2)).is_err(), "a still PNG is a thumbnail's job");
+        assert!(p.moves(), "text pictures move");
     }
 
     #[test]

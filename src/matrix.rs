@@ -276,6 +276,12 @@ pub enum AppEvent {
         image: Result<Option<PathBuf>, String>,
         picture: Option<crate::picture::Picture>,
     },
+    /// What `/np` found playing, for the window it was typed in (the
+    /// status window when `into` is `None`).
+    NowPlaying {
+        into: Option<crate::app::WinKey>,
+        track: Result<crate::np::Track, String>,
+    },
     /// `/changelog`'s releases from GitHub, for the window it was typed in
     /// (the status window when `into` is `None`).
     Changelog {
@@ -2038,10 +2044,18 @@ impl Account {
     }
 
     /// Fetch an image (preferably a thumbnail) and encode it for the
-    /// terminal to fit in `cells`.
-    pub fn fetch_preview(&self, event_id: OwnedEventId, media: Media, picker: Painter, cells: Size) {
+    /// terminal to fit in `cells`; with `moving`, a GIF whole, to move.
+    pub fn fetch_preview(&self, event_id: OwnedEventId, media: Media, picker: Painter, cells: Size, moving: bool) {
         let acct = self.clone();
         tokio::spawn(async move {
+            if moving
+                && media.may_move()
+                && picker.moves()
+                && let Some(picture) = acct.load_moving(&media, picker.clone(), cells).await
+            {
+                acct.notify.send(AppEvent::ImagePreview { event_id, protocol: Some(picture) });
+                return;
+            }
             let protocol = match acct.load_preview(&media, picker, cells).await {
                 Ok(protocol) => Some(protocol),
                 Err(e) => {
@@ -2060,6 +2074,31 @@ impl Account {
             let picture = acct.load_preview(&media, picker, cells).await.ok();
             acct.notify.send(AppEvent::Tile { event_id, picture });
         });
+    }
+
+    /// A moving picture's every frame, from the whole file (thumbnails
+    /// are still). `None` if it's too big, or doesn't move after all: the
+    /// usual preview then.
+    async fn load_moving(&self, media: &Media, picker: Painter, cells: Size) -> Option<Picture> {
+        const MAX_MOVING: u64 = 16 * 1024 * 1024;
+        if media.size.is_some_and(|s| s > MAX_MOVING) {
+            return None;
+        }
+        let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
+        let picture = async {
+            let bytes = self.client.media().get_media_content(&request, true).await?;
+            if bytes.len() as u64 > MAX_MOVING {
+                bail!("over 16 MB");
+            }
+            tokio::task::spawn_blocking(move || picker.moving(&bytes, cells)).await?
+        };
+        match picture.await {
+            Ok(picture) => Some(picture),
+            Err(e) => {
+                tracing::debug!("{} doesn't move: {e:#}", media.filename);
+                None
+            }
+        }
     }
 
     async fn load_preview(&self, media: &Media, picker: Painter, cells: Size) -> Result<Picture> {

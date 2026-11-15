@@ -110,6 +110,12 @@ pub struct Config {
     /// Say so when you write to someone who's away or long gone ("sam is
     /// away: lunch"), when it's news. Off unless you turn it on.
     pub away_notes: bool,
+    /// What `/np` says: {track} ("Artist – Title"), {title}, {artist},
+    /// {album}, {player}; starting with "/me " makes it an action.
+    pub np_format: String,
+    /// A command that prints what's playing, for `/np` (its first line),
+    /// instead of asking Music and Spotify (macOS) or playerctl (Linux).
+    pub np_command: String,
     /// System messages (`-!-` lines: Textrix's own, joins and leaves,
     /// topic changes, day changes) in italic, in every theme.
     pub system_italic: bool,
@@ -171,6 +177,10 @@ pub struct Config {
     pub image_previews: bool,
     /// Maximum height of an inline image, in rows.
     pub image_rows: u16,
+    /// GIFs (and animated WebP and PNG) move, with kitty graphics (kitty,
+    /// Ghostty) or drawn in text; false keeps them still. They pause while
+    /// the terminal is in the background.
+    pub image_animation: bool,
     /// How pictures are drawn in a terminal without graphics: "auto",
     /// "sextants", "quadrants" or "halfblocks".
     pub image_text: crate::picture::TextMode,
@@ -258,6 +268,8 @@ impl Default for Config {
             editor: String::new(),
             system_italic: true,
             away_notes: false,
+            np_format: "/me is listening to ♫ {track}".into(),
+            np_command: String::new(),
             show_joins: true,
             link_titles: LinkTitles::Unencrypted,
             hyperlinks: true,
@@ -279,6 +291,7 @@ impl Default for Config {
             sync: SyncMode::Auto,
             image_previews: true,
             image_rows: 10,
+            image_animation: true,
             image_text: crate::picture::TextMode::Auto,
             audio_player: String::new(),
             video_player: String::new(),

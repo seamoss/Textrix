@@ -1118,6 +1118,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "query", args: "<@user:server>", help: "Open a direct-message window" },
     Cmd { name: "msg", args: "<@user|#alias|!room> <text>", help: "Send without switching windows" },
     Cmd { name: "me", args: "<action>", help: "Send an emote" },
+    Cmd {
+        name: "np",
+        args: "",
+        help: "Say what you're listening to (Music or Spotify on macOS, playerctl on Linux; np_format, np_command)",
+    },
     Cmd { name: "notice", args: "<text>", help: "Send a notice" },
     Cmd { name: "say", args: "<text>", help: "Send text as-is, even if it starts with / (or type //)" },
     Cmd { name: "reply", args: "[nick] <text>", help: "Reply to the last message (from nick, if given)" },
@@ -2108,6 +2113,7 @@ impl App {
             AppEvent::Quit => self.quit = true,
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
+            AppEvent::NowPlaying { into, track } => self.np_done(into, track),
             AppEvent::Voice { key, voice } => self.voice_done(key, voice),
             AppEvent::Pasted { image, picture } => self.pasted_image(image, picture),
             AppEvent::Plugin { name, run, message } => self.on_plugin(name, run, message),
@@ -3387,7 +3393,9 @@ impl App {
             let cells = Size::new(self.view_width.saturating_sub(8).clamp(8, 64), self.cfg.image_rows.max(2));
             for (account, event_id, media) in std::mem::take(&mut self.preview_requests) {
                 match self.connected(&account) {
-                    Some(acct) => acct.fetch_preview(event_id, media, picker.clone(), cells),
+                    Some(acct) => {
+                        acct.fetch_preview(event_id, media, picker.clone(), cells, self.cfg.image_animation);
+                    }
                     // Asked again once the server is back.
                     None => drop(self.previews.remove(&event_id)),
                 }
@@ -4886,6 +4894,60 @@ impl App {
         Ok(())
     }
 
+    /// `/np`: ask the player what's playing (off the UI thread: osascript
+    /// takes a moment), then say it in this room; in the status window,
+    /// just show it.
+    fn cmd_np(&mut self, args: &str) -> Result<(), String> {
+        if !args.trim().is_empty() {
+            return Err("usage: /np (np_format says how it reads)".into());
+        }
+        if self.in_script > 0 {
+            return Err("scripts can't run programs, so not /np".into());
+        }
+        let into = self.win().room.clone();
+        let (tx, command) = (self.tx.clone(), self.cfg.np_command.clone());
+        tokio::spawn(async move {
+            let track = crate::np::now_playing(&command).await;
+            let _ = tx.send(AppEvent::NowPlaying { into, track });
+        });
+        Ok(())
+    }
+
+    fn np_done(&mut self, into: Option<WinKey>, track: Result<crate::np::Track, String>) {
+        let idx = into.as_ref().and_then(|k| self.windows.iter().position(|w| w.room.as_ref() == Some(k)));
+        let cap = self.cfg.scrollback;
+        let track = match track {
+            Ok(track) => track,
+            Err(e) => {
+                self.windows[idx.unwrap_or(0)].push(Line::error(format!("/np: {e}")), cap);
+                return;
+            }
+        };
+        let (text, action) = track.say(&self.cfg.np_format);
+        let (Some(idx), Some(key)) = (idx, into) else {
+            let from = if track.player.is_empty() { String::new() } else { format!(" ({})", track.player) };
+            return self.status(Line::info(format!("now playing: {}{from}", track.line())));
+        };
+        if text.is_empty() {
+            self.windows[idx].push(Line::error("/np: np_format came out empty"), cap);
+            return;
+        }
+        let kind = if action { Say::Emote } else { Say::Text };
+        if self.active == idx {
+            // As typed here: into its thread, when it's a thread window.
+            return self.say_as_is(&text, kind);
+        }
+        match self.connected(&key.account) {
+            Some(acct) => {
+                let content = compose(&text, kind, &[], false);
+                self.send_content(acct, key.room_id, content, &text, kind.line_kind(), None);
+            }
+            None => {
+                self.windows[idx].push(Line::error(format!("{} isn't connected", key.account)), cap);
+            }
+        }
+    }
+
     /// `/exec`'s output: shown in the window it ran in, or sent there.
     fn exec_done(
         &mut self,
@@ -5709,6 +5771,7 @@ impl App {
                 self.say(args, Say::Notice);
                 Ok(())
             }
+            "np" => self.cmd_np(args),
             "msg" => self.cmd_msg(args),
             "reply" => self.cmd_reply(args),
             "edit" if args.trim().is_empty() => {
@@ -8305,6 +8368,9 @@ impl App {
         if cfg.mouse != self.cfg.mouse {
             set_mouse_capture(cfg.mouse);
         }
+        if cfg.image_animation != self.cfg.image_animation {
+            self.previews.clear();
+        }
         if cfg.image_text != self.cfg.image_text
             && let Some(painter) = self.picker.as_mut()
         {
@@ -9018,6 +9084,8 @@ where
 {
     let mut clock = tokio::time::interval(Duration::from_secs(1));
     let mut keys = new_keys();
+    // When a moving picture on screen shows its next frame.
+    let mut next_frame: Option<Instant> = None;
     app.start();
     loop {
         // In the background with no terminal attached, nothing is drawn.
@@ -9034,6 +9102,8 @@ where
                 app.last_links.clear();
             }
             let frame = terminal.draw(|f| ui::draw(f, &mut app))?;
+            // Moving pictures rest while the terminal is in the background.
+            next_frame = crate::picture::next_frame().filter(|_| app.focused);
             // Unchanged links keep their hyperlinks: the frame left them be.
             let links = if app.cfg.hyperlinks {
                 crate::hyperlinks::overlay(frame.buffer, &app.screen_links())
@@ -9108,6 +9178,8 @@ where
             _ = until(app.flash_until) => app.flash_until = None,
             // An Escape held for the rest of a mouse report that didn't come.
             _ = until(app.esc_hold.as_ref().map(|h| h.at + ESC_WAIT)) => app.esc_timeout(),
+            // A moving picture's next frame.
+            _ = until(next_frame.filter(|_| shown)) => {}
         }
     }
     let restart = app.restart;
@@ -9223,6 +9295,7 @@ mod tests {
             mimetype: None,
             thumbnail: None,
             size: None,
+            animated: None,
         });
         assert!(!w.push(server, 100));
         assert_eq!(w.lines.len(), 1);
@@ -9791,6 +9864,7 @@ mod tests {
             mimetype: None,
             thumbnail: None,
             size: Some(1_258_291),
+            animated: None,
         });
         line
     }
@@ -11272,6 +11346,7 @@ mod tests {
             mimetype: Some("audio/ogg".into()),
             thumbnail: None,
             size: None,
+            animated: None,
         });
         app.windows[a].push(voice, 100);
         assert_eq!(app.cmd_play("jo_bloggs"), Err("no audio or video from jo_bloggs here".into()));

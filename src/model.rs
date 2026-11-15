@@ -163,6 +163,14 @@ impl Media {
         self.kind == MediaKind::Image || (self.kind == MediaKind::Video && self.thumbnail.is_some())
     }
 
+    /// Whether it may be a moving picture, worth fetching whole rather than
+    /// a (still) thumbnail: a GIF, unless its sender says it's still, or
+    /// whatever its sender says moves.
+    pub fn may_move(&self) -> bool {
+        let gif = self.mimetype.as_deref() == Some("image/gif") || self.filename.to_lowercase().ends_with(".gif");
+        self.kind == MediaKind::Image && self.animated.unwrap_or(gif)
+    }
+
     pub fn playable(&self) -> bool {
         matches!(self.kind, MediaKind::Audio | MediaKind::Video)
     }
@@ -189,6 +197,9 @@ pub struct Media {
     /// A sender-provided thumbnail (the only kind encrypted images have).
     pub thumbnail: Option<MediaSource>,
     pub size: Option<u64>,
+    /// Whether the sender says the image moves (`is_animated`): GIFs are
+    /// taken to unless it says not.
+    pub animated: Option<bool>,
 }
 
 /// A poll (Element's `org.matrix.msc3381` events, or the stable
@@ -434,6 +445,26 @@ pub struct Member {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gifs_and_what_their_senders_say_moves_may_move() {
+        let image = |filename: &str, mimetype: Option<&str>, animated| Media {
+            source: MediaSource::Plain("mxc://example.org/a".into()),
+            filename: filename.into(),
+            kind: MediaKind::Image,
+            mimetype: mimetype.map(Into::into),
+            thumbnail: None,
+            size: None,
+            animated,
+        };
+        assert!(image("party.gif", Some("image/gif"), None).may_move());
+        assert!(image("PARTY.GIF", None, None).may_move(), "by its name");
+        assert!(!image("party.gif", Some("image/gif"), Some(false)).may_move(), "its sender says it's still");
+        assert!(image("sticker.webp", Some("image/webp"), Some(true)).may_move());
+        assert!(!image("photo.jpg", Some("image/jpeg"), None).may_move());
+        let video = Media { kind: MediaKind::Video, ..image("clip.gif", Some("image/gif"), None) };
+        assert!(!video.may_move(), "videos have players");
+    }
 
     #[test]
     fn polls_count_each_voters_latest_vote() {

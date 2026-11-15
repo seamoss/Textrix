@@ -206,6 +206,7 @@ fn night_owls(theme: ThemeName, picture: bool) -> Scene {
             mimetype: Some("image/png".into()),
             thumbnail: None,
             size: Some(48_213),
+            animated: None,
         });
         s.picture(&image, 44, 11);
         lines.push(image);
@@ -806,6 +807,7 @@ fn screenshots() {
                 mimetype: None,
                 thumbnail: None,
                 size: Some(size),
+                animated: None,
             });
             line
         })

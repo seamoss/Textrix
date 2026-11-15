@@ -245,6 +245,7 @@ mod tests {
             mimetype: None,
             thumbnail: None,
             size: None,
+            animated: None,
         });
         line
     }

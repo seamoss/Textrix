@@ -268,6 +268,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
                 mimetype: content.info.mimetype.clone(),
                 thumbnail: content.info.thumbnail_source.clone(),
                 size: content.info.size.map(u64::from),
+                animated: content.info.is_animated,
             });
             Some(Item::Line(line))
         }
@@ -417,6 +418,10 @@ fn media_of(msgtype: &MessageType) -> Option<Media> {
         _ => return None,
     };
     let size = |s: Option<matrix_sdk::ruma::UInt>| s.map(u64::from);
+    let animated = match msgtype {
+        MessageType::Image(c) => c.info.as_deref().and_then(|i| i.is_animated),
+        _ => None,
+    };
     let (kind, thumbnail, size, mimetype) = match msgtype {
         MessageType::Image(c) => {
             let info = c.info.as_deref();
@@ -445,6 +450,7 @@ fn media_of(msgtype: &MessageType) -> Option<Media> {
         mimetype,
         thumbnail,
         size,
+        animated,
     })
 }
 

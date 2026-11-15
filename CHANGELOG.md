@@ -7,6 +7,23 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.20.0] - unreleased
+
+### Added
+- GIFs move. The whole file is fetched (up to 16 MB) and every frame drawn
+  in turn, with kitty graphics (kitty, Ghostty), where the terminal keeps
+  each frame so the next one costs a few cells, and in pictures drawn in
+  text. Animated WebP and PNG move too when their sender says they're
+  animated. Long ones keep every second frame (or fourth…) for as long;
+  they play as many times as the GIF says, and pause while the terminal is
+  in the background. iTerm2 and sixel show the first frame, as before.
+  `image_animation = false` keeps them all still.
+- `/np` says what you're listening to: "* sam is listening to ♫ Kavinsky –
+  Nightcall". It asks Music and Spotify on macOS (only if they're open),
+  or playerctl on Linux; `np_command` asks anything else (`mpc current`),
+  and `np_format` says how it reads. In the status window it only shows
+  it to you.
+
 ## [0.19.0] - 2026-11-14
 
 ### Added

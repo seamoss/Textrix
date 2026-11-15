@@ -232,7 +232,7 @@ bindings.
 | Pins | `p` in selection mode pins a message for everyone in the room, or unpins it (needs the power level to change pins). Pinned messages show `[pinned]`, and the topic bar counts them. `/pins` lists them, newest pin first; `/jump N` goes to one |
 | Threads | `/threads` (the room's threads), `/thread [N]`, or `t` on a message in selection mode (starts a thread if it has none) opens a thread window: root first, then replies; typing there replies in the thread. Esc (with nothing typed), `/wc` or `/part` closes it and goes back to the room. Thread roots show `[N replies]`; replies also appear in the room with their context |
 | Search | `/search <text>` across every room, newest first, `/jump N` to land on a result in selection mode. Narrow it with `from:sam` (a name, your nickname for them, or their Matrix ID), `in:"Book Club"` (part of a room's name), `after:2026-01` and `before:2026-06-30` (a year, month or day, or `today`, `yesterday`; `before` doesn't include the day itself; `since:` and `until:` work too); `/search from:sam in:"Book Club"` alone lists all they said there. It searches a local index of decrypted messages (servers can't search encrypted rooms): new messages go in as they arrive, and older history is read back gently in the background, up to 20,000 messages a room. The index is encrypted with the same keychain key as the store, follows edits and deletions, and is removed by `/logout` or `search_index = false`. Without an encrypted store there's no index, and `/search` covers loaded history; `/search -deep …` also reads the last 500 messages of each room that has a window open |
-| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is, `/poll <question> \| <answer> \| <answer>…` and `/poll end` (see [Polls](#polls)), `/later <when> <text>` (see [Sending later](#sending-later)), `\|\|spoiler\|\|` hides that part until it's revealed (not inside code), `/exec <command>` runs a shell command and shows what it printed here, `/exec -o <command>` sends that to the room (30 seconds at most, 500 lines; scripts can't use it) |
+| Messages | plain text (Markdown), `/me`, `/notice`, `/msg`, `/query`, `/reply [nick] <text>`, `/react [nick] <emoji>`, `/edit [text]`, `/redact`, `/lastlog [-n N] [-nick nick] <text>`, `/say <text>` (or `//text`) sends text that starts with `/` as it is, `/poll <question> \| <answer> \| <answer>…` and `/poll end` (see [Polls](#polls)), `/later <when> <text>` (see [Sending later](#sending-later)), `/np` says what you're listening to (see [Now playing](#now-playing)), `\|\|spoiler\|\|` hides that part until it's revealed (not inside code), `/exec <command>` runs a shell command and shows what it printed here, `/exec -o <command>` sends that to the room (30 seconds at most, 500 lines; scripts can't use it) |
 | Files | Images you send carry a thumbnail and a blurhash (the blurred placeholder) the way Element sends them, so they show quickly everywhere; videos carry a poster frame (from Quick Look on macOS, ffmpeg elsewhere), their length and size. Drop files on the terminal (any kind, one or several) and Textrix asks "upload notes.pdf (1.2 MB) to Night Owls? Enter/y uploads, n keeps it as text"; `n` leaves the paths in the input line as text. Ctrl+V (or `/paste`) pastes an image from the clipboard, a screenshot or a picture copied from a browser, since terminals only paste text: it waits just above the input line, a small picture of it and "pasted image, 1280×720 PNG, 340 KB", and the input line becomes its caption. Enter sends it with what you've typed as its caption, and Esc drops it (commands still run meanwhile). Textrix reads the clipboard itself: `osascript` on macOS, `wl-paste` (wl-clipboard) or `xclip` on Linux; over SSH that's the clipboard where Textrix runs. `/upload <path>` (Tab completes paths; dropped/escaped paths work), `/download [nick]` (saves to Downloads, never overwrites), `/play [nick\|stop]` (voice, audio and video; see below), `/voice` (record a voice message; Ctrl+R too), `/media` (the room's pictures, videos and files as tiles; see [The media gallery](#the-media-gallery)) |
 | Windows | `/window <n\|list\|close\|move n\|goto name>`, `/wc`, `/wl`, `/clear`, `/sidebar`, `/nicklist`, `/mentions`, `/home` (F4), `/theme [name \| list \| here <name\|off> \| space <space> <name\|off> \| save <name> \| import <file>]` (on its own, or `/themes`: pick one with a preview; see [Themes](#themes)) |
 | Reading | `/markread` marks this room read, `/markread all` every room: clears activity and unread counts, moves the new-messages divider to the end, and updates your read marker (and receipt, per `read_receipts`) so other clients agree |
@@ -364,7 +364,15 @@ them itself, quadrants (2×2, in every font) otherwise; `image_text` picks
 `"sextants"`, `"quadrants"` or `"halfblocks"` instead. Images are always
 scaled down smoothly. Encrypted images use the sender's thumbnail when there
 is one; otherwise the image itself is fetched (up to 20 MB) and decoded with
-size and memory limits. Inside tmux, graphics need
+size and memory limits. GIFs move (and animated WebP and PNG, when the
+sender says they're animated): the whole file is fetched (up to 16 MB) and
+every frame drawn in turn, with kitty graphics (kitty, Ghostty), where the
+terminal keeps each frame so the next costs a few cells, and in pictures
+drawn in text. iTerm2 and sixel would need the whole image again for each
+frame, so they show the first. Long ones keep every second frame (or
+fourth…) for as long, they play as many times as the GIF says (most loop),
+and they pause while the terminal is in the background.
+`image_animation = false` keeps them still. Inside tmux, graphics need
 `set -g allow-passthrough on`. `s` in selection mode or `/download` saves the
 original.
 
@@ -397,6 +405,20 @@ you're offline goes when you're back. They're kept on disk sealed with
 your store's keychain secret, or only until Textrix closes without a
 keychain. (Servers that schedule messages themselves can't do it for
 encrypted rooms, where the message has to be encrypted when it's sent.)
+
+### Now playing
+
+`/np` says what you're listening to, the way mIRC scripts did: "* sam is
+listening to ♫ Kavinsky – Nightcall". On macOS it asks Music and Spotify,
+only if they're already open (asking never starts them), and the first
+time, macOS asks whether your terminal may; that's under System Settings →
+Privacy & Security → Automation. On Linux it asks any player playerctl
+knows (Spotify, VLC, mpv with mpv-mpris, browsers). In the status window
+it only shows it to you. `np_format` says how it reads, with `{track}`
+("Artist – Title"), `{title}`, `{artist}`, `{album}` and `{player}`; it
+starts with `/me ` to be an action, or `np_format = "np: {track}"` says
+it plainly. For another player, `np_command` is a command whose first
+line is the track, e.g. `np_command = "mpc current"` for mpd.
 
 ### Voice messages and video
 
@@ -804,6 +826,8 @@ statusbar = ["time", "nick", "window", "activity", "typing", "scripts", "upgrade
 statusbar2 = []            # a second bar above, e.g. ["date", "users", "theme"]
 system_italic = true       # -!- lines in italic
 away_notes = false         # true: "sam is away: lunch" when you write to them, if it's news
+np_format = "/me is listening to ♫ {track}"   # what /np says ({title}, {artist}, {album}, {player})
+np_command = ""            # a command that prints what's playing ("" asks Music/Spotify or playerctl)
 show_joins = true
 link_titles = "unencrypted" # page titles under links: "all", "off"
 link_images = true         # and the page's picture under its title
@@ -824,6 +848,7 @@ log_dir = "~/.textrix/logs"
 sync = "auto"              # or "sliding", "classic"
 image_previews = true      # inline images
 image_rows = 10            # their maximum height
+image_animation = true     # GIFs move (kitty graphics, or drawn in text)
 image_text = "auto"        # without graphics: "sextants", "quadrants" or "halfblocks"
 audio_player = ""          # e.g. "mpv --no-video"; "" uses the system's player
 video_player = ""          # e.g. "mpv" or "open -a IINA"; "" uses mpv, else the system's app

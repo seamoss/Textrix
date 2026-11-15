@@ -23,6 +23,7 @@ mod links;
 mod matrix;
 mod model;
 mod notify;
+mod np;
 mod picture;
 mod plugin;
 mod remote;
