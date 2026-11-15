@@ -1156,6 +1156,11 @@ const COMMANDS: &[Cmd] = &[
         help: "Bots: Textrix in the background as another Matrix account, doing what its plugins do",
     },
     Cmd {
+        name: "codebot",
+        args: "[start [repo] | stop | log]",
+        help: "codebot in a bot of its own: /codebot start <repo> in a room sets it up there and starts it",
+    },
+    Cmd {
         name: "plugin",
         args: "[list | new <name> [hello|codebot] | start <name> | stop <name> | restart <name> | log <name>]",
         help: "Plugins from config.toml: programs that hear and post in the rooms you grant them",
@@ -5836,6 +5841,7 @@ impl App {
             "paste" => self.paste_image(),
             "plugin" | "plugins" => self.cmd_plugin(args),
             "bot" | "bots" => self.cmd_bot(args),
+            "codebot" => self.cmd_codebot(args),
             "changelog" => self.cmd_changelog(args),
             "themes" if args.trim().is_empty() => {
                 self.open_theme_picker();
@@ -9188,6 +9194,7 @@ where
     Ok(restart)
 }
 
+mod codebot;
 mod plugins;
 #[cfg(test)]
 mod shots;

@@ -7,6 +7,17 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.21.0] - unreleased
+
+### Added
+- `/codebot start ~/code/project` in a room sets codebot up there from your
+  own Textrix: it makes the bot (the first time; its Matrix account is
+  still yours to make), writes codebot into it with the repository, the
+  branch pull requests go to, the tests it guesses from the project and
+  you as the one who gives it work, grants it the room, starts the bot (or
+  restarts it to read new settings) and invites it in. `/codebot` says how
+  it's set up, `/codebot stop` stops it, `/codebot log` shows its log.
+
 ## [0.20.0] - 2026-11-15
 
 ### Added

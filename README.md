@@ -243,7 +243,7 @@ bindings.
 | Account | `/servers`, `/connect`, `/disconnect`, `/logout`, `/nick`, `/away [-all] [message]`, `/ignore`, `/unignore`, `/whois`, `/verify`, `/recover`, `/avatar <image>\|-remove`, `/roomavatar <image>\|-remove`, `/version [check]`, `/changelog [N]` (what changed in the latest N releases, 10 unless you say, from GitHub's release notes), `/restart` (into a newly installed version, back where you were), `/devices [rename <id> <name> \| delete <id> [confirm]]`, `/keys export [file] \| import <file>`, `/quit` |
 | Session | `/set [name [value]]`, `/save`, `/reload` (see [Optional preferences](#optional-preferences)), `/log [on\|off]`, `/detach`, `/help [command]` |
 | Scripts | `/script` (or `/script list`) lists them, `/script load\|unload <name>`, `/script reload [name]` (no name: every file), `/script exec <code>`; see [Scripts](#scripts) |
-| Bots | `/bot` (or `/bot list`), `/bot new\|start\|stop <name>`: Textrix in the background as a bot's own account (see [Bots](#bots)); `textrix bot attach <name>` shows it |
+| Bots | `/bot` (or `/bot list`), `/bot new\|start\|stop <name>`: Textrix in the background as a bot's own account (see [Bots](#bots)); `textrix bot attach <name>` shows it; `/codebot start <repo>` sets codebot up in the room you're in and starts it, `/codebot` says how it's set up, `/codebot stop\|log` |
 | Plugins | `/plugin` (or `/plugin list`), `/plugin new <name>` (a starter, granted the room you're in), `/plugin start\|stop\|restart\|log <name>`; see [Plugins](#plugins) |
 | Notifications | `/notify [all\|mentions\|mute\|default]`, `/hilight [word]`, `/dehilight <word>`, `/bell [on\|off\|away\|sound\|visual\|both\|test]` (see below) |
 
@@ -804,7 +804,10 @@ make the login form remember the user name") from the people you allow,
 has a coding agent (Claude Code, Codex, aider, or your own) do it on a
 branch of its own, and opens a pull request, reporting in a thread as it
 goes. It only ever pushes its own `codebot/…` branches and never merges.
-`/plugin new codebot codebot` in the bot sets it up; [PLUGINS.md](PLUGINS.md#codebot)
+Once you've made it a Matrix account, `/codebot start ~/code/project` in
+the room it's for sets it all up from your own Textrix: the bot, codebot
+in it with the repository and its tests, the room granted, the bot started
+and invited. `/codebot` says how it's set up; [PLUGINS.md](PLUGINS.md#codebot)
 has the rest.
 
 ## Optional preferences

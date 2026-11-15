@@ -179,7 +179,28 @@ and `gh`, not yet in real use. Try it on a repository you don't mind.
 
 codebot takes coding requests in a room to a coding agent (Claude Code,
 Codex, aider, or your own) on a branch of its own, and opens a pull request.
-Run it in a bot, so it talks as itself:
+It runs in a bot, so it talks as itself.
+
+The quick way, from your own Textrix: make the bot a Matrix account on your
+server (Textrix can't make accounts), then in the room it's for:
+
+```
+/codebot start ~/code/project
+```
+
+The first time, that makes the bot (`~/.textrix/bots/codebot`) and asks
+for its account in the `.env` there; run it again once that's in. Then it
+writes codebot into the bot with its settings: the repository, the branch
+pull requests go to (origin's default), the tests it guesses from the
+project (`cargo test`, `npm test`, `go test ./...`, pytest or unittest,
+`make test`), and you as the one who gives it work. It grants it the room,
+starts the bot (or restarts it to read new settings), and invites it in.
+The bot gets your Textrix's environment, so its PATH finds the agent, `git`
+and `gh`. `/codebot` says how it's set up, `/codebot stop` stops it, and
+`/codebot log` shows the end of its log. In another room, `/codebot start`
+adds that room too; with a repository, it moves to that one.
+
+By hand:
 
 ```sh
 textrix bot new codebot          # then put its account in ~/.textrix/bots/codebot/.env

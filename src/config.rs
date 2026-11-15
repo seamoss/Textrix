@@ -501,6 +501,61 @@ pub fn add_plugin(path: &Path, name: &str, plugin: &crate::plugin::PluginConfig)
     Ok(())
 }
 
+/// Bring `[plugins.<name>]` in config.toml up to date, keeping the rest of
+/// the file as it is: made from `made` if it isn't there, `room` added to
+/// its rooms, and `set` put in its settings. Whether anything changed.
+pub fn update_plugin(
+    path: &Path,
+    name: &str,
+    made: &crate::plugin::PluginConfig,
+    room: Option<&str>,
+    set: &toml::Table,
+) -> Result<bool> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut = text.parse().with_context(|| format!("parsing {}", path.display()))?;
+    let all = doc.entry("plugins").or_insert_with(|| implicit_table().into());
+    let all = all.as_table_mut().context("plugins in config.toml isn't a table")?;
+    if !all.contains_key(name) {
+        let mut table = toml_edit::Table::new();
+        table["command"] = toml_edit::value(made.command.as_str());
+        table["rooms"] = toml_edit::value(made.rooms.iter().map(String::as_str).collect::<toml_edit::Array>());
+        let settings: toml_edit::Table =
+            toml::to_string(&made.settings)?.parse::<toml_edit::DocumentMut>()?.as_table().clone();
+        table["settings"] = toml_edit::Item::Table(settings);
+        all.insert(name, toml_edit::Item::Table(table));
+    }
+    let plugin = all[name].as_table_mut().with_context(|| format!("plugins.{name} isn't a table"))?;
+    if let Some(room) = room {
+        let rooms = plugin.entry("rooms").or_insert(toml_edit::value(toml_edit::Array::new()));
+        let rooms = rooms.as_array_mut().with_context(|| format!("plugins.{name}.rooms isn't a list"))?;
+        if !rooms.iter().any(|r| r.as_str() == Some(room) || r.as_str() == Some("*")) {
+            rooms.push(room);
+        }
+    }
+    let settings = plugin.entry("settings").or_insert(toml_edit::table());
+    let settings = settings.as_table_mut().with_context(|| format!("plugins.{name}.settings isn't a table"))?;
+    for (key, value) in set {
+        let value: toml_edit::Value = value.to_string().parse().with_context(|| format!("settings.{key}"))?;
+        if settings.get(key).and_then(|v| v.as_value()).map(ToString::to_string).map(|v| v.trim().to_owned())
+            != Some(value.to_string().trim().to_owned())
+        {
+            settings[key.as_str()] = toml_edit::value(value);
+        }
+    }
+    let new = doc.to_string();
+    if new == text {
+        return Ok(false);
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, &new).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
 /// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping
 /// the rest of the file (comments and layout) as it is.
 pub fn save_alias(path: &Path, name: &str, expansion: Option<&str>) -> Result<()> {
