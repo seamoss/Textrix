@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.19.0] - unreleased
+## [0.19.0] - 2026-11-14
 
 ### Added
 - Your own messages are in a colour of their own, and your nick in it in
