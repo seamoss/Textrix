@@ -36,6 +36,11 @@ const MAX_FRAMES: usize = 200;
 /// What its frames may take in the terminal, as RGBA: kitty and Ghostty
 /// keep ~320 MB of pictures in all, and drop the oldest past that.
 const FRAMES_BUDGET: u64 = 48 * 1024 * 1024;
+/// What the viewer's frames may take, as they are, in memory.
+const ORIGINAL_BUDGET: u64 = 128 * 1024 * 1024;
+/// What the viewer's frames may take in the terminal: one picture at a
+/// time, so more than a preview's.
+pub const VIEWER_BUDGET: u64 = 96 * 1024 * 1024;
 /// Frames read at most, however short they are.
 const MAX_SOURCE_FRAMES: usize = 1000;
 /// The shortest a frame shows. GIFs that ask for less (0 or 10 ms) mean
@@ -164,36 +169,53 @@ impl Painter {
     /// every frame fitted alike; one that doesn't move, its only frame.
     /// Off the UI thread: it decodes every frame.
     pub fn moving(&self, bytes: &[u8], area: Size) -> anyhow::Result<Picture> {
-        let (frames, loops) = frames_of(bytes)?;
         let font = self.picker.font_size();
-        let mut kept: Vec<(Picture, Duration)> = Vec::new();
-        // Every `step`th frame is kept; those between add to its time.
-        let (mut step, mut seen, mut frame_bytes) = (1, 0, 0);
-        for frame in frames.take(MAX_SOURCE_FRAMES) {
-            let frame = frame?;
-            let (numer, denom) = frame.delay().numer_denom_ms();
-            let delay = Duration::from_micros(u64::from(numer) * 1000 / u64::from(denom.max(1)));
-            let delay = if delay < MIN_DELAY { FAST_DELAY } else { delay };
-            if seen % step == 0 {
-                let picture = self.fit(DynamicImage::ImageRgba8(frame.into_buffer()), area)?;
-                let size = picture.size();
-                frame_bytes =
-                    u64::from(size.width) * u64::from(font.width) * u64::from(size.height) * u64::from(font.height) * 4;
-                kept.push((picture, delay));
-            } else if let Some(last) = kept.last_mut() {
-                last.1 += delay;
-            }
-            seen += 1;
-            if kept.len() > MAX_FRAMES || kept.len() as u64 * frame_bytes > FRAMES_BUDGET {
-                kept = halve(kept);
-                step *= 2;
-            }
+        let (frames, loops) = read_frames(bytes, FRAMES_BUDGET, |frame| {
+            let picture = self.fit(frame, area)?;
+            let size = picture.size();
+            let cost = u64::from(size.width) * u64::from(font.width) * u64::from(size.height) * u64::from(font.height);
+            Ok((picture, cost * 4))
+        })?;
+        Ok(Picture::play(frames, loops, Instant::now()))
+    }
+
+    /// For a moving picture's frames in the viewer: with kitty graphics,
+    /// the image as it is (shrunk only to the screen) and the terminal
+    /// stretches it over the cells it fits, so a small GIF's frames stay
+    /// small; otherwise as `scale` draws it.
+    pub fn stretch(&self, image: DynamicImage, area: Size) -> anyhow::Result<Picture> {
+        if self.picker.protocol_type() != ProtocolType::Kitty {
+            return self.scale(image, area);
         }
-        if kept.len() < 2 {
-            return kept.pop().map(|(still, _)| still).ok_or_else(|| anyhow::anyhow!("no frames"));
-        }
-        let total = kept.iter().map(|(_, d)| *d).sum();
-        Ok(Picture::Moving(Moving { frames: kept, total, loops, start: Instant::now() }))
+        let font = self.picker.font_size();
+        let (fw, fh) = (f64::from(font.width.max(1)), f64::from(font.height.max(1)));
+        let (iw, ih) = (f64::from(image.width().max(1)), f64::from(image.height().max(1)));
+        let fits = (f64::from(area.width) * fw / iw).min(f64::from(area.height) * fh / ih);
+        let cols = ((iw * fits / fw).round() as u16).clamp(1, area.width.max(1));
+        let rows = ((ih * fits / fh).round() as u16).clamp(1, area.height.max(1));
+        let (most_w, most_h) = (u32::from(cols) * u32::from(font.width), u32::from(rows) * u32::from(font.height));
+        let image = if image.width() > most_w || image.height() > most_h {
+            image.resize(most_w, most_h, FILTER)
+        } else {
+            image
+        };
+        let caps = self.picker.capabilities();
+        let kitty = ratatui_image::protocol::kitty::Kitty::new(
+            image,
+            Size::new(cols, rows),
+            kitty_id(),
+            self.picker.tmux_detected(),
+            caps.contains(&ratatui_image::picker::Capability::KittyCompression),
+            caps.contains(&ratatui_image::picker::Capability::KittySharedMemory),
+        )?;
+        Ok(Picture::Graphics(Protocol::Kitty(kitty)))
+    }
+
+    /// What `stretch` sends of a `width`×`height` image for `area`, in bytes.
+    pub fn stretched_bytes(&self, width: u32, height: u32, area: Size) -> u64 {
+        let font = self.picker.font_size();
+        let screen = u64::from(area.width) * u64::from(font.width) * u64::from(area.height) * u64::from(font.height);
+        (u64::from(width) * u64::from(height)).min(screen) * 4
     }
 
     /// The image at most `area` (in cells), and no bigger than it is.
@@ -308,16 +330,75 @@ impl Painter {
     }
 }
 
+/// Frames, each with how long it shows, and how many times they play
+/// (`None`: for ever).
+pub type Played<T> = (Vec<(T, Duration)>, Option<u32>);
+
 /// Every second frame, each with the time of the one it drops.
-fn halve(frames: Vec<(Picture, Duration)>) -> Vec<(Picture, Duration)> {
-    let mut out: Vec<(Picture, Duration)> = Vec::with_capacity(frames.len() / 2 + 1);
-    for (i, (picture, delay)) in frames.into_iter().enumerate() {
+fn halve<T>(frames: Vec<(T, Duration)>) -> Vec<(T, Duration)> {
+    let mut out: Vec<(T, Duration)> = Vec::with_capacity(frames.len() / 2 + 1);
+    for (i, (frame, delay)) in frames.into_iter().enumerate() {
         match out.last_mut() {
             Some(last) if i % 2 == 1 => last.1 += delay,
-            _ => out.push((picture, delay)),
+            _ => out.push((frame, delay)),
         }
     }
     out
+}
+
+/// A moving picture's frames, each made into what `keep` makes of it (and
+/// what that costs, in bytes), with how long it shows; and how many times
+/// it plays. Past `MAX_FRAMES` or `budget`, every second frame is kept
+/// (each shown twice as long), then every fourth, and so on.
+fn read_frames<T>(
+    bytes: &[u8],
+    budget: u64,
+    mut keep: impl FnMut(DynamicImage) -> anyhow::Result<(T, u64)>,
+) -> anyhow::Result<Played<T>> {
+    let (frames, loops) = frames_of(bytes)?;
+    let mut kept: Vec<(T, Duration)> = Vec::new();
+    // Every `step`th frame is kept; those between add to its time.
+    let (mut step, mut seen, mut cost) = (1, 0, 0);
+    for frame in frames.take(MAX_SOURCE_FRAMES) {
+        let frame = frame?;
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        let delay = Duration::from_micros(u64::from(numer) * 1000 / u64::from(denom.max(1)));
+        let delay = if delay < MIN_DELAY { FAST_DELAY } else { delay };
+        if seen % step == 0 {
+            let (made, bytes) = keep(DynamicImage::ImageRgba8(frame.into_buffer()))?;
+            cost = bytes;
+            kept.push((made, delay));
+        } else if let Some(last) = kept.last_mut() {
+            last.1 += delay;
+        }
+        seen += 1;
+        if kept.len() > MAX_FRAMES || kept.len() as u64 * cost > budget {
+            kept = halve(kept);
+            step *= 2;
+        }
+    }
+    if kept.is_empty() {
+        bail!("no frames");
+    }
+    Ok((kept, loops))
+}
+
+/// A moving picture's frames as they are, for the viewer, and how many
+/// times it plays: what it keeps in memory is capped like a preview's.
+pub fn original_frames(bytes: &[u8]) -> anyhow::Result<Played<DynamicImage>> {
+    read_frames(bytes, ORIGINAL_BUDGET, |frame| {
+        let cost = u64::from(frame.width()) * u64::from(frame.height()) * 4;
+        Ok((frame, cost))
+    })
+}
+
+/// A kitty image ID of our own (ratatui-image picks them at random too).
+fn kitty_id() -> u32 {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    (hasher.finish() as u32).max(1)
 }
 
 /// A moving picture's frames, and how many times it plays (`None`: for
@@ -425,6 +506,18 @@ pub struct TextPicture {
 }
 
 impl Picture {
+    /// Frames shown in turn from `start`, playing `loops` times (`None`:
+    /// for ever); a single one is just that picture.
+    pub fn play(mut frames: Vec<(Picture, Duration)>, loops: Option<u32>, start: Instant) -> Picture {
+        if frames.len() < 2 {
+            return frames
+                .pop()
+                .map_or(Picture::Text(TextPicture { size: Size::new(0, 0), cells: Vec::new() }), |f| f.0);
+        }
+        let total = frames.iter().map(|(_, d)| *d).sum();
+        Picture::Moving(Moving { frames, total, loops, start })
+    }
+
     /// Its size in cells.
     pub fn size(&self) -> Size {
         match self {

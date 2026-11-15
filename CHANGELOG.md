@@ -16,8 +16,10 @@ release notes.
   text. Animated WebP and PNG move too when their sender says they're
   animated. Long ones keep every second frame (or fourth…) for as long;
   they play as many times as the GIF says, and pause while the terminal is
-  in the background. iTerm2 and sixel show the first frame, as before.
-  `image_animation = false` keeps them all still.
+  in the background. They keep moving full screen (`z`), zoomed or not:
+  with kitty graphics the frames go at their own size and the terminal
+  stretches them over the screen. iTerm2 and sixel show the first frame,
+  as before. `image_animation = false` keeps them all still.
 - `/np` says what you're listening to: "* sam is listening to ♫ Kavinsky –
   Nightcall". It asks Music and Spotify on macOS (only if they're open),
   or playerctl on Linux; `np_command` asks anything else (`mpc current`),

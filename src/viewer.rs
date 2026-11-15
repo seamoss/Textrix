@@ -1,7 +1,11 @@
 //! The full-screen image viewer (`z` in selection mode, or a click on an
 //! image): the original image, decoded in memory, zoomed and moved around.
+//! A moving one keeps moving, zoomed or not.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::picture::{Painter, Picture};
 use image::DynamicImage;
@@ -29,8 +33,24 @@ pub struct Viewer {
 
 pub enum Loading {
     Waiting,
-    Ready(Arc<DynamicImage>),
+    Ready(Arc<Original>),
     Failed(String),
+}
+
+/// The image as sent: one picture, or a moving one's frames.
+pub struct Original {
+    /// Each frame and how long it shows (one frame: a still picture).
+    pub frames: Vec<(DynamicImage, Duration)>,
+    /// Plays this many times (`None`: for ever).
+    pub loops: Option<u32>,
+    /// When it started playing, so zooming doesn't start it again.
+    pub start: Instant,
+}
+
+impl Original {
+    pub fn still(image: DynamicImage) -> Self {
+        Self { frames: vec![(image, Duration::ZERO)], loops: None, start: Instant::now() }
+    }
 }
 
 /// What a frame shows: enough to tell whether it needs drawing again.
@@ -87,7 +107,7 @@ impl Viewer {
     /// The next view to prepare: when the image is here, what's drawn is
     /// out of date, and no other is being prepared (one at a time, so
     /// quick key presses don't pile up).
-    pub fn wanted(&self) -> Option<(Arc<DynamicImage>, View)> {
+    pub fn wanted(&self) -> Option<(Arc<Original>, View)> {
         let Loading::Ready(image) = &self.image else { return None };
         let view = self.view();
         let drawn = self.frame.as_ref().map(|(v, _)| *v);
@@ -106,10 +126,22 @@ pub fn crop(width: u32, height: u32, view: &View) -> (u32, u32, u32, u32) {
 }
 
 /// Draw a view for the terminal (slow for big images: run it off the UI
-/// thread).
-pub fn render(image: &DynamicImage, view: &View, painter: &Painter) -> anyhow::Result<Picture> {
-    let (x, y, w, h) = crop(image.width(), image.height(), view);
-    painter.scale(image.crop_imm(x, y, w, h), view.area)
+/// thread). Every frame of a moving one, where pictures move; as many as
+/// fit in what the terminal keeps (every second one, or third…, if not).
+pub fn render(original: &Original, view: &View, painter: &Painter) -> anyhow::Result<Picture> {
+    let first = &original.frames[0].0;
+    let (x, y, w, h) = crop(first.width(), first.height(), view);
+    if original.frames.len() < 2 || !painter.moves() {
+        return painter.scale(first.crop_imm(x, y, w, h), view.area);
+    }
+    let all = painter.stretched_bytes(w, h, view.area) * original.frames.len() as u64;
+    let every = all.div_ceil(crate::picture::VIEWER_BUDGET).max(1) as usize;
+    let mut frames = Vec::new();
+    for run in original.frames.chunks(every) {
+        let shows = run.iter().map(|(_, d)| *d).sum();
+        frames.push((painter.stretch(run[0].0.crop_imm(x, y, w, h), view.area)?, shows));
+    }
+    Ok(Picture::play(frames, original.loops, original.start))
 }
 
 #[cfg(test)]
@@ -148,10 +180,45 @@ mod tests {
     }
 
     #[test]
+    fn moving_pictures_keep_moving_in_the_viewer() {
+        use image::{Rgba, RgbaImage};
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let frame =
+            |c: [u8; 4]| (DynamicImage::ImageRgba8(RgbaImage::from_pixel(32, 18, Rgba(c))), Duration::from_millis(100));
+        let original = Original {
+            frames: vec![frame([200, 0, 0, 255]), frame([0, 0, 200, 255])],
+            loops: None,
+            start: Instant::now(),
+        };
+        let mut v = viewer();
+        assert!(render(&original, &v.view(), &halfblocks()).unwrap().moves(), "drawn in text");
+        v.zoom_by(1);
+        assert!(render(&original, &v.view(), &halfblocks()).unwrap().moves(), "zoomed in too");
+
+        // With kitty graphics the frames go as they are, and the terminal
+        // stretches them over the screen.
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(ProtocolType::Kitty);
+        let kitty = Painter::new(picker.clone(), crate::picture::TextMode::Auto);
+        let shown = render(&original, &viewer().view(), &kitty).unwrap();
+        let size = shown.size();
+        assert!(shown.moves());
+        assert!(size.width <= 80 && size.height <= 24 && (size.width == 80 || size.height == 24), "{size:?}");
+        let font = picker.font_size();
+        assert!(u32::from(size.width) * u32::from(font.width) > 32, "far bigger than the GIF");
+        assert_eq!(kitty.stretched_bytes(32, 18, Size::new(80, 24)), 32 * 18 * 4, "sent at its own size");
+
+        // iTerm2 would send each frame whole: the first one, still.
+        picker.set_protocol_type(ProtocolType::Iterm2);
+        let iterm = Painter::new(picker, crate::picture::TextMode::Auto);
+        assert!(!render(&original, &viewer().view(), &iterm).unwrap().moves());
+    }
+
+    #[test]
     fn redraws_only_when_the_view_changes() {
         let mut v = viewer();
         assert!(v.wanted().is_none(), "nothing until the image arrives");
-        v.image = Loading::Ready(Arc::new(DynamicImage::new_rgb8(10, 10)));
+        v.image = Loading::Ready(Arc::new(Original::still(DynamicImage::new_rgb8(10, 10))));
         let (image, view) = v.wanted().unwrap();
         v.pending = Some(view);
         v.zoom_by(1);

@@ -381,7 +381,10 @@ the original is fetched (up to 50 MB) and decoded in memory only, never
 written to disk. `+`/`-` or the mouse wheel zoom (up to 16×), the arrow
 keys (or `hjkl`) move around, `0` fits it again, and Esc closes. With
 kitty, iTerm2 or sixel graphics it's sharp; with half-blocks, zooming in is
-how you see the detail.
+how you see the detail. A GIF keeps moving there, zoomed or not: with
+kitty graphics its frames go to the terminal at their own size and the
+terminal stretches them over the screen, so even a long one fits in what
+the terminal keeps.
 
 ### Polls
 

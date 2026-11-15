@@ -4899,7 +4899,7 @@ impl App {
     /// just show it.
     fn cmd_np(&mut self, args: &str) -> Result<(), String> {
         if !args.trim().is_empty() {
-            return Err("usage: /np (np_format says how it reads)".into());
+            return Err(format!("/np takes nothing after it (it had “{}”); np_format says how it reads", args.trim()));
         }
         if self.in_script > 0 {
             return Err("scripts can't run programs, so not /np".into());
@@ -7604,7 +7604,8 @@ impl App {
         }
         let key = self.win().room.clone().or_else(|| self.mention_origins.get(&event).cloned());
         let acct = key.and_then(|k| self.connected(&k.account)).ok_or("that image's server isn't connected")?;
-        acct.fetch_full_image(event.clone(), media.clone());
+        let moving = self.cfg.image_animation && self.picker.as_ref().is_some_and(Painter::moves);
+        acct.fetch_full_image(event.clone(), media.clone(), moving);
         self.viewer = Some(Viewer::new(event, format!("{} · {}", line.nick, media.filename)));
         Ok(())
     }

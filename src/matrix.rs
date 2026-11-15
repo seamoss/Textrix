@@ -327,7 +327,7 @@ pub enum AppEvent {
     /// An image decoded for the viewer.
     FullImage {
         event_id: OwnedEventId,
-        image: Result<Arc<image::DynamicImage>, String>,
+        image: Result<Arc<crate::viewer::Original>, String>,
     },
     /// A view of it, drawn for the terminal.
     ViewerFrame {
@@ -2175,8 +2175,9 @@ impl Account {
         });
     }
 
-    /// The original image for the viewer, decoded in memory only.
-    pub fn fetch_full_image(&self, event_id: OwnedEventId, media: Media) {
+    /// The original image for the viewer, decoded in memory only; with
+    /// `moving`, every frame of a moving one.
+    pub fn fetch_full_image(&self, event_id: OwnedEventId, media: Media, moving: bool) {
         const MAX_DOWNLOAD: u64 = 50 * 1024 * 1024;
         let acct = self.clone();
         tokio::spawn(async move {
@@ -2186,8 +2187,20 @@ impl Account {
                 }
                 let request = MediaRequestParameters { source: media.source.clone(), format: MediaFormat::File };
                 let bytes = acct.client.media().get_media_content(&request, true).await?;
-                let image = tokio::task::spawn_blocking(move || decode_image(&bytes)).await??;
-                anyhow::Ok(Arc::new(image))
+                let moving = moving && media.may_move();
+                let original = tokio::task::spawn_blocking(move || {
+                    let frames = moving.then(|| crate::picture::original_frames(&bytes)).and_then(|f| {
+                        f.inspect_err(|e| tracing::debug!("the viewer's picture doesn't move: {e:#}")).ok()
+                    });
+                    match frames {
+                        Some((frames, loops)) => {
+                            anyhow::Ok(crate::viewer::Original { frames, loops, start: std::time::Instant::now() })
+                        }
+                        None => Ok(crate::viewer::Original::still(decode_image(&bytes)?)),
+                    }
+                })
+                .await??;
+                anyhow::Ok(Arc::new(original))
             }
             .await
             .map_err(|e| format!("{e:#}"));
