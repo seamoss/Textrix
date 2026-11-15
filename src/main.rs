@@ -336,8 +336,11 @@ fn stop_daemon(base: &std::path::Path) -> Result<()> {
     let pid = std::fs::read_to_string(base.join("daemon.pid"))?.trim().parse::<u32>()?;
     let status = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).status()?;
     anyhow::ensure!(status.success(), "couldn't stop process {pid}");
-    for _ in 0..100 {
-        if !remote::alive(&socket) {
+    // Gone once it's let go of its lock too: it stops answering first,
+    // then saves and closes its store, and a Textrix started meanwhile
+    // would find the lock still held.
+    for _ in 0..150 {
+        if !remote::alive(&socket) && lock_instance(base).is_ok() {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));

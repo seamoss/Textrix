@@ -500,6 +500,13 @@ impl App {
     /// `/plugin new <name>`: a starter plugin in the plugins folder, granted
     /// the room you're in, added to config.toml and started.
     fn new_plugin(&mut self, name: &str, kind: &str) -> Result<(), String> {
+        // codebot in your own Textrix would post as you: it goes in a bot.
+        let in_bot = self.paths.base.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "bots");
+        if kind == "codebot" && !in_bot {
+            return Err("codebot goes in a bot of its own, so it doesn't talk as you: /codebot start <repo> in the \
+                        room it's for sets it up"
+                .into());
+        }
         let allow = self.cfg.accept_invites_from.clone();
         let (program, settings) = plugin::template(kind, name, &allow)
             .ok_or_else(|| format!("there's no plugin template {kind}; there's {}", plugin::TEMPLATES.join(" and ")))?;

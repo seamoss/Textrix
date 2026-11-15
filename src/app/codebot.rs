@@ -339,6 +339,16 @@ mod tests {
     }
 
     #[test]
+    fn codebot_never_goes_in_your_own_textrix() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let paths = crate::config::Paths { base: std::env::temp_dir(), env_file: std::env::temp_dir().join("none") };
+        let env = crate::servers::EnvFile::new(paths.env_file.clone());
+        let mut app = App::new(crate::config::Config::default(), paths, env, crate::servers::Servers::default(), tx);
+        let refused = app.cmd_plugin("new helper codebot").unwrap_err();
+        assert!(refused.contains("/codebot start"), "{refused}");
+    }
+
+    #[test]
     fn tests_are_guessed_from_the_project() {
         let dir = std::env::temp_dir().join(format!("textrix-guess-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
