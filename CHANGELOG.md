@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.21.0] - unreleased
+## [0.21.0] - 2026-11-15
 
 ### Added
 - `/codebot start ~/code/project` in a room sets codebot up there from your
