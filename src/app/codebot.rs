@@ -174,8 +174,9 @@ impl App {
     }
 }
 
-/// What `set_up` did: the bot's Matrix ID, whether its config.toml changed,
-/// and whether it was given a repository.
+/// What `set_up` did: the bot's Matrix ID, whether its config.toml or
+/// codebot itself changed (so it restarts), and whether it was given a
+/// repository.
 #[derive(Debug)]
 struct Setup {
     user: OwnedUserId,
@@ -184,7 +185,7 @@ struct Setup {
 }
 
 /// codebot written into the bot at `home` for `room`: its program and the
-/// helper (if they aren't there), `[plugins.codebot]` made if it isn't, the
+/// helper (this version's), `[plugins.codebot]` made if it isn't, the
 /// room added, and with `repo`, that checkout, its base branch and tests.
 fn set_up(home: &Path, room: &str, repo: &str) -> Result<Setup, String> {
     let user = bot_user(home)
@@ -217,14 +218,17 @@ fn set_up(home: &Path, room: &str, repo: &str) -> Result<Setup, String> {
         plugin::template("codebot", BOT, &current.accept_invites_from).ok_or("no codebot template")?;
     let plugins = home.join("plugins");
     plugin::install_helper(&plugins).map_err(|e| format!("{e:#}"))?;
+    // Textrix's own: kept to this version's (change what it does in its
+    // settings, or copy it under another name).
     let file = plugins.join(format!("{BOT}.py"));
-    if !file.exists() {
+    let updated = std::fs::read_to_string(&file).ok().as_deref() != Some(program.as_str());
+    if updated {
         std::fs::write(&file, program).map_err(|e| format!("{}: {e}", file.display()))?;
     }
     let made = PluginConfig { command: format!("python3 {BOT}.py"), rooms: Vec::new(), enabled: true, settings };
     let changed =
         crate::config::update_plugin(&config_path, BOT, &made, Some(room), &set).map_err(|e| format!("{e:#}"))?;
-    Ok(Setup { user, changed, set_repo: !repo.is_empty() })
+    Ok(Setup { user, changed: changed || updated, set_repo: !repo.is_empty() })
 }
 
 /// The bot's Matrix ID, from its own dotfile (only the user line is read).
@@ -326,6 +330,8 @@ mod tests {
         );
 
         assert!(!set_up(&home, "!r:example.org", &repo).unwrap().changed, "nothing new");
+        std::fs::write(home.join("plugins/codebot.py"), "# last version's").unwrap();
+        assert!(set_up(&home, "!r:example.org", &repo).unwrap().changed, "codebot brought up to date: a restart");
         let again = set_up(&home, "!s:example.org", "").unwrap();
         assert!(again.changed && !again.set_repo, "another room, the same repository");
         let cfg = crate::config::Config::load(&home.join("config.toml")).unwrap();

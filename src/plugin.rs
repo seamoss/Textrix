@@ -405,7 +405,8 @@ mod tests {
                 "message",
                 json!({
                     "room": {"id": "!r:x.org", "name": "Team Tests"}, "event_id": event, "sender": sender,
-                    "nick": sender, "body": body, "highlight": body.starts_with("codebot"), "thread_root": thread,
+                    // Typed out, as people do: not a mention to the server.
+                    "nick": sender, "body": body, "highlight": false, "thread_root": thread,
                 }),
             ));
         }

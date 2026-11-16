@@ -17,6 +17,20 @@ release notes.
   you as the one who gives it work, grants it the room, starts the bot (or
   restarts it to read new settings) and invites it in. `/codebot` says how
   it's set up, `/codebot stop` stops it, `/codebot log` shows its log.
+  It keeps the bot's codebot up to date, restarting it when there's a new
+  one.
+
+### Fixed
+- codebot answers "codebot: …" typed out, not only a completed mention: a
+  name typed out isn't a mention to the server once the message says whom
+  it mentions, as Textrix's messages do.
+- codebot's pull requests have the agent's answer, not its warnings (they
+  go to codebot's log), and titles and branch names cut at a word.
+- `textrix bot stop` (and `--stop`) waits until Textrix has let go of its
+  home, so starting it again straight after works; `/codebot start`'s
+  restart lost that race.
+- `/plugin new … codebot` in your own Textrix is refused: it goes in a bot,
+  so it doesn't post as you.
 
 ## [0.20.0] - 2026-11-15
 

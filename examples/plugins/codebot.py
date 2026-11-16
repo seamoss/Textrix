@@ -126,7 +126,9 @@ class Task:
         self.nick = msg["nick"]
         self.request = request
         words = re.sub(r"[^a-z0-9]+", "-", request.lower()).strip("-")
-        self.branch = f"{PREFIX}{words[:30].strip('-') or 'task'}-{int(time.time()) % 100000}"
+        if len(words) > 30:
+            words = words[:31].rsplit("-", 1)[0] if "-" in words[:31] else words[:30]
+        self.branch = f"{PREFIX}{words.strip('-') or 'task'}-{int(time.time()) % 100000}"
         self.status_event = None
         self.state = "waiting" if cfg.approve else "queued"
         self.started = None
@@ -171,22 +173,24 @@ def started():
 
 
 def addressed(msg):
-    """The request, if the message is for codebot: it mentions it, or
-    starts with !code."""
+    """The request, if the message is for codebot: it starts with its name
+    ("codebot: …", "@codebot:server …") or !code, or mentions it."""
     body = msg["body"].strip()
     if body.lower().startswith("!code"):
         return body[5:].strip()
-    if not msg.get("highlight"):
-        return None
-    # Its name at the front ("codebot: …", "@codebot:server …") goes.
+    # Its name at the front goes. A name typed out rather than completed
+    # isn't a mention to the server (whose old "contains my name" rules
+    # don't apply once a message says whom it mentions), so the name
+    # counts on its own.
     names = set()
     for me in bot.me:
         user = me.get("user") or ""
         names.update({user, user.lstrip("@").split(":")[0], me.get("nick") or ""})
     for name in sorted(filter(None, names), key=len, reverse=True):
-        if body.lower().startswith(name.lower()):
-            return body[len(name):].lstrip(" :,").strip()
-    return body
+        rest = body[len(name):]
+        if body.lower().startswith(name.lower()) and (not rest or rest[0] in " :,"):
+            return rest.lstrip(" :,").strip()
+    return body if msg.get("highlight") else None
 
 
 @bot.on_message
@@ -327,6 +331,16 @@ def tick():
 # ---- the work (in a thread of its own: no bot.* here) ---------------------
 
 
+def headline(request, most=70):
+    """The request's first line, cut at a word if it's long."""
+    line = request.strip().splitlines()[0].strip() if request.strip() else "codebot"
+    if len(line) <= most:
+        return line
+    cut = line[: most - 1]
+    cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def end(proc):
     """The agent and everything it started."""
     if proc.poll() is None:
@@ -368,12 +382,15 @@ def do_work(task, path):
     prompt = PROMPT.format(repo=os.path.basename(cfg.repo), nick=task.nick, room=task.room_name, request=task.request)
     command = [prompt if a == "{prompt}" else a for a in cfg.agent]
     # In a process group of its own, so stopping it stops what it started.
+    # What it says (stdout) goes in the thread and the pull request; its
+    # warnings and the like (stderr) only to the log, unless it fails.
+    errors = tempfile.TemporaryFile(mode="w+")
     task.proc = subprocess.Popen(
         command,
         cwd=path,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=errors,
         text=True,
         start_new_session=True,
     )
@@ -384,6 +401,11 @@ def do_work(task, path):
         task.tail.append(line.rstrip())
     code = task.proc.wait()
     timer.cancel()
+    errors.seek(0)
+    warned = errors.read().strip()
+    errors.close()
+    if warned:
+        bot.log(f"{cfg.agent[0]} (task {task.id}) said on stderr:\n{warned[-2000:]}")
     if task.cancelled:
         updates.put((task, "react", "🛑"))
         return "🛑 Stopped. Nothing was pushed."
@@ -393,12 +415,13 @@ def do_work(task, path):
     said = "\n".join(line for line in list(task.tail)[-12:] if line.strip())
     if code != 0:
         updates.put((task, "react", "❌"))
-        return f"❌ {cfg.agent[0]} stopped with exit code {code}. Nothing was pushed.\n\n```\n{said[-1500:]}\n```"
+        why = "\n".join(filter(None, [said, warned[-800:]]))
+        return f"❌ {cfg.agent[0]} stopped with exit code {code}. Nothing was pushed.\n\n```\n{why[-1500:]}\n```"
 
     # Its changes, committed by codebot.
     if git("status", "--porcelain", cwd=path):
         git("add", "-A", cwd=path)
-        title = task.request.splitlines()[0][:70]
+        title = headline(task.request)
         message = f"{title}\n\nAsked for by {task.nick} ({task.sender}) in {task.room_name}; made by {cfg.agent[0]} via codebot."
         git("-c", f"user.name={cfg.git_name}", "-c", f"user.email={cfg.git_email}", "commit", "-q", "-m", message, cwd=path)
     if not git("log", "--oneline", f"origin/{cfg.base}..HEAD", cwd=path):
@@ -436,7 +459,7 @@ def do_work(task, path):
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
         f.write(body)
     try:
-        title = task.request.splitlines()[0][:70]
+        title = headline(task.request)
         pr = subprocess.run(
             ["gh", "pr", "create", "--base", cfg.base, "--head", task.branch, "--title", title, "--body-file", f.name],
             cwd=path, capture_output=True, text=True, timeout=120,
