@@ -39,6 +39,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -331,6 +332,14 @@ def tick():
 # ---- the work (in a thread of its own: no bot.* here) ---------------------
 
 
+def fenced(text):
+    """`text` as a code block whose fence no run of backticks in it closes
+    (an agent's answer often has code blocks of its own)."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{text}\n{fence}"
+
+
 def headline(request, most=70):
     """The request's first line, cut at a word if it's long."""
     line = request.strip().splitlines()[0].strip() if request.strip() else "codebot"
@@ -405,7 +414,8 @@ def do_work(task, path):
     warned = errors.read().strip()
     errors.close()
     if warned:
-        bot.log(f"{cfg.agent[0]} (task {task.id}) said on stderr:\n{warned[-2000:]}")
+        # Its log (`/codebot log`), not the room.
+        print(f"{cfg.agent[0]} (task {task.id}) said on stderr:\n{warned[-2000:]}", file=sys.stderr, flush=True)
     if task.cancelled:
         updates.put((task, "react", "🛑"))
         return "🛑 Stopped. Nothing was pushed."
@@ -416,7 +426,7 @@ def do_work(task, path):
     if code != 0:
         updates.put((task, "react", "❌"))
         why = "\n".join(filter(None, [said, warned[-800:]]))
-        return f"❌ {cfg.agent[0]} stopped with exit code {code}. Nothing was pushed.\n\n```\n{why[-1500:]}\n```"
+        return f"❌ {cfg.agent[0]} stopped with exit code {code}. Nothing was pushed.\n\n" + fenced(why[-1500:])
 
     # Its changes, committed by codebot.
     if git("status", "--porcelain", cwd=path):
@@ -426,7 +436,7 @@ def do_work(task, path):
         git("-c", f"user.name={cfg.git_name}", "-c", f"user.email={cfg.git_email}", "commit", "-q", "-m", message, cwd=path)
     if not git("log", "--oneline", f"origin/{cfg.base}..HEAD", cwd=path):
         updates.put((task, "react", "🤷"))
-        return f"🤷 {cfg.agent[0]} didn't change anything.\n\n```\n{said[-1500:]}\n```"
+        return f"🤷 {cfg.agent[0]} didn't change anything.\n\n" + fenced(said[-1500:])
     stat = git("diff", "--shortstat", f"origin/{cfg.base}...HEAD", cwd=path)
 
     tests = ""
@@ -452,10 +462,10 @@ def do_work(task, path):
         f"Asked for by **{task.nick}** (`{task.sender}`) in {task.room_name}:\n\n"
         + "\n".join("> " + line for line in task.request.splitlines())
         + f"\n\nMade by `{cfg.agent[0]}` via codebot (Textrix). Review before merging.\n\n"
-        + f"<details><summary>What {cfg.agent[0]} said</summary>\n\n```\n{said[-3000:]}\n```\n</details>\n"
+        + f"<details><summary>What {cfg.agent[0]} said</summary>\n\n{fenced(said[-3000:])}\n</details>\n"
     )
     if cfg.test:
-        body += f"\nTests (`{' '.join(cfg.test)}`): {tests}\n\n```\n{tests_detail[-2000:]}\n```\n"
+        body += f"\nTests (`{' '.join(cfg.test)}`): {tests}\n\n{fenced(tests_detail[-2000:])}\n"
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
         f.write(body)
     try:
