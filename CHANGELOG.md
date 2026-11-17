@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.22.0] - unreleased
+## [0.22.0] - 2026-11-17
 
 ### Added
 - Bridged rooms say so. A room bridged to another network (Discord,
