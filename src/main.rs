@@ -218,7 +218,10 @@ async fn bot_command(paths: &Paths, command: BotCommand) -> Result<()> {
             Ok(())
         }
         BotCommand::Stop { name } => {
-            stop_daemon(&home(&name)?)?;
+            let home = home(&name)?;
+            // Said about the bot, not "Textrix isn't running in the background".
+            anyhow::ensure!(bots::running(&home), "{name} isn't running; textrix bot start {name} starts it");
+            stop_daemon(&home)?;
             println!("stopped {name}");
             Ok(())
         }

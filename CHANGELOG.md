@@ -7,6 +7,13 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.21.2] - unreleased
+
+### Fixed
+- `textrix bot stop <name>` (and `/bot stop`, `/codebot stop`) for a bot
+  that isn't running said "Textrix isn't running in the background"; it
+  says "<name> isn't running" now, and how to start it.
+
 ## [0.21.1] - 2026-11-17
 
 ### Fixed
