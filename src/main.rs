@@ -35,6 +35,7 @@ mod servers;
 mod switcher;
 mod term;
 mod theme;
+mod theme_editor;
 mod ui;
 mod update;
 mod upload;

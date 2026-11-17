@@ -73,6 +73,7 @@ impl Scene {
                 unread: 0,
                 highlights: 0,
                 pinned: Vec::new(),
+                bridges: Vec::new(),
             })
             .collect();
         self.app.on_event(AppEvent::Rooms { account: ACCOUNT.into(), rooms });
@@ -168,6 +169,15 @@ fn night_owls(theme: ThemeName, picture: bool) -> Scene {
         ("Hobbies", &["Night Owls", "Book Club", "Synth Nerds", "Garden Club"]),
         ("Work", &["Team Tests", "Rustaceans"]),
     ]);
+    // One room bridged elsewhere: its ⇄ in the window list.
+    if let Some(w) = s.app.windows.iter_mut().find(|w| w.name == "Synth Nerds") {
+        w.bridges = vec![crate::model::Bridge {
+            protocol: "Discord".into(),
+            network: Some("Synth Nerds".into()),
+            channel: Some("#patches".into()),
+            bot: None,
+        }];
+    }
     let owls = s.window("Night Owls");
     s.app.switch_to(owls);
 

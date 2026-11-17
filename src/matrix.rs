@@ -23,7 +23,7 @@ use matrix_sdk::{
     },
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    deserialized_responses::RawSyncOrStrippedState,
+    deserialized_responses::{RawAnySyncOrStrippedState, RawSyncOrStrippedState},
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
         verification::{SasState, SasVerification, VerificationRequest, VerificationRequestState},
@@ -102,8 +102,8 @@ use crate::{
     home::Invitation,
     index::{Crawl, Entry, ROOM_CAP, SearchIndex},
     model::{
-        AccountName, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence, PresenceKind, RoomMeta,
-        SpaceInfo,
+        AccountName, Bridge, Item, Line, LineKind, Media, MediaKind, Member, Permissions, Presence, PresenceKind,
+        RoomMeta, SpaceInfo,
     },
     servers::{EnvFile, Secret, ServerDef, write_private},
     vault,
@@ -875,7 +875,34 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         highlights: counts.highlight_count,
         pinned: room.pinned_event_ids().unwrap_or_default(),
         favourite: room.is_favourite(),
+        bridges: bridges_of(room).await,
     }
+}
+
+/// The state event types bridges announce themselves with (MSC2346, and
+/// the older name mautrix's bridges also send).
+const BRIDGE_EVENTS: [&str; 2] = ["m.bridge", "uk.half-shot.bridge"];
+
+/// The room's bridges to other networks, each once (a bridge that sends
+/// both kinds of event says the same in each).
+async fn bridges_of(room: &Room) -> Vec<Bridge> {
+    let mut bridges: Vec<Bridge> = Vec::new();
+    for kind in BRIDGE_EVENTS {
+        let Ok(events) = room.get_state_events(StateEventType::from(kind)).await else { continue };
+        for raw in events {
+            let json = match &raw {
+                RawAnySyncOrStrippedState::Sync(raw) => raw.json().get(),
+                RawAnySyncOrStrippedState::Stripped(raw) => raw.json().get(),
+            };
+            let bridge = serde_json::from_str::<serde_json::Value>(json).ok().and_then(|e| Bridge::from_event(&e));
+            if let Some(bridge) = bridge
+                && !bridges.contains(&bridge)
+            {
+                bridges.push(bridge);
+            }
+        }
+    }
+    bridges
 }
 
 /// What alerts you in a room with this notification mode.
@@ -1339,6 +1366,9 @@ impl Account {
                 state(StateEventType::RoomMember, "$LAZY"),
                 state(StateEventType::RoomMember, "$ME"),
                 state(StateEventType::SpaceChild, "*"),
+                // Bridges, for their badge.
+                state(StateEventType::from(BRIDGE_EVENTS[0]), "*"),
+                state(StateEventType::from(BRIDGE_EVENTS[1]), "*"),
             ]);
         let sync = self
             .client
@@ -1732,6 +1762,9 @@ impl Account {
             highlights: counts.highlight_count,
             pinned: room.pinned_event_ids().unwrap_or_default(),
             favourite: room.is_favourite(),
+            // Read from the store with an await; the room's next update
+            // brings them.
+            bridges: Vec::new(),
         })
     }
 
@@ -3524,6 +3557,21 @@ impl Account {
                 format!(" topic    : {}", meta.topic.as_deref().unwrap_or("none")),
                 format!(" members  : {} joined, {} invited", room.joined_members_count(), room.invited_members_count()),
                 format!(" encrypted: {}", if meta.encrypted { "yes" } else { "no" }),
+                format!(
+                    " bridged  : {}",
+                    if meta.bridges.is_empty() {
+                        "no".to_owned()
+                    } else {
+                        meta.bridges
+                            .iter()
+                            .map(|b| match &b.bot {
+                                Some(bot) => format!("{} (by {bot})", b.describe()),
+                                None => b.describe(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    }
+                ),
                 format!(
                     " joining  : {}",
                     room.join_rule().map(|r| r.as_str().to_owned()).unwrap_or_else(|| "unknown".into())

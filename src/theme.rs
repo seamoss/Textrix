@@ -1672,8 +1672,9 @@ impl Theme {
         Ok(theme)
     }
 
-    /// The same in full colour.
-    fn resolve(id: &ThemeId, overrides: &BTreeMap<String, String>, dir: &Path) -> Result<Self> {
+    /// The same in full colour (the theme editor works from this, so a
+    /// 256-colour terminal's rounding doesn't creep into what it saves).
+    pub(crate) fn resolve(id: &ThemeId, overrides: &BTreeMap<String, String>, dir: &Path) -> Result<Self> {
         let mut theme = match id {
             ThemeId::Auto => return Self::resolve(&auto_choice(), overrides, dir),
             ThemeId::Builtin(name) => Self::builtin(*name),
@@ -2081,6 +2082,55 @@ impl Theme {
         Ok(())
     }
 
+    /// What a `[colors]` key is now: `Some(None)` for the terminal's own
+    /// colour, `None` for a key there isn't (or `nicks`, a list: see
+    /// `nicks`). The other way round from `set`.
+    pub fn color_of(&self, key: &str) -> Option<Option<Color>> {
+        Some(match key {
+            "background" => self.base.bg,
+            "foreground" => self.base.fg,
+            "bar_fg" => self.bar.fg,
+            "bar_bg" => self.bar.bg,
+            "bar_accent" => self.bar_accent.fg,
+            "bar_alert" => self.bar_alert.fg,
+            "pane_fg" => self.pane.fg,
+            "pane_bg" => self.pane.bg,
+            "dim" => self.dim.fg,
+            "accent" => self.accent.fg,
+            "frame" => self.frame.fg,
+            "own_nick" => self.own.fg,
+            "own_text" => self.own_text.fg,
+            "highlight" => self.highlight.fg,
+            "highlight_text" => self.highlight_text.fg,
+            "error" => self.error.fg,
+            "divider" => self.divider.fg,
+            "link" => self.link.fg,
+            "mention" => self.mention.fg,
+            "code" => self.code.fg,
+            _ if let Some(kind) = Syntax::ALL.into_iter().find(|k| key.strip_prefix("code_") == Some(k.name())) => {
+                self.syntax[kind as usize].fg
+            }
+            "badge" => self.badge.fg,
+            "pinned" => self.pinned.fg,
+            "receipts" => self.receipts.fg,
+            "matched" => self.matched.fg,
+            "current_fg" => self.current.fg,
+            "current_bg" => self.current.bg,
+            "shown" => self.shown.fg,
+            "inactive" => self.inactive.fg,
+            "activity_event" => self.activity_event.fg,
+            "activity" => self.activity.fg,
+            "op" => self.op.fg,
+            "voice" => self.voice.fg,
+            "online" => Some(self.online),
+            "away" => Some(self.away),
+            "offline" => Some(self.offline),
+            "border" => self.border.fg,
+            "border_focus" => self.border_focus.fg,
+            _ => return None,
+        })
+    }
+
     /// The colour for a user (or room), the same every time.
     pub fn nick_color(&self, key: &str) -> Color {
         let hash = key.bytes().fold(0x811c9dc5u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x01000193));
@@ -2139,6 +2189,20 @@ pub const KEYS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_colour_key_reads_back_what_was_set() {
+        // Each key (but nicks, a list) set to its own colour reads back as it.
+        for (n, key) in KEYS.iter().filter(|k| **k != "nicks").enumerate() {
+            let colour = format!("#{:02x}{:02x}{:02x}", n * 5, 255 - n * 5, 100 + n);
+            let theme =
+                Theme::build(ThemeName::Default, &BTreeMap::from([((*key).to_owned(), colour.clone())])).unwrap();
+            let want = Color::from_str(&colour).unwrap();
+            assert_eq!(theme.color_of(key), Some(Some(want)), "{key}");
+        }
+        assert_eq!(Theme::default().color_of("nicks"), None, "a list: Theme::nicks");
+        assert_eq!(Theme::default().color_of("nope"), None);
+    }
 
     #[test]
     fn overrides_parse_names_hex_and_numbers() {

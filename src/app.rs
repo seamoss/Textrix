@@ -122,6 +122,9 @@ pub struct Window {
     pub avatar: Option<OwnedMxcUri>,
     /// First in the window list (`m.favourite`).
     pub favourite: bool,
+    /// Bridges to other networks: a ⇄ in the window list, named in the
+    /// topic bar.
+    pub bridges: Vec<crate::model::Bridge>,
     pub lines: VecDeque<Line>,
     pub activity: Activity,
     /// Rows scrolled up from the bottom.
@@ -201,6 +204,7 @@ impl Window {
             dm_user: None,
             avatar: None,
             favourite: false,
+            bridges: Vec::new(),
             lines: VecDeque::new(),
             activity: Activity::None,
             scroll: 0,
@@ -239,6 +243,7 @@ impl Window {
         self.avatar = meta.avatar.clone();
         self.pinned = meta.pinned.clone();
         self.favourite = meta.favourite;
+        self.bridges = meta.bridges.clone();
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -671,7 +676,7 @@ pub struct VotePicker {
 
 /// What `/theme` does other than pick a theme, so no theme file can be
 /// called these.
-const THEME_WORDS: [&str; 5] = ["list", "save", "import", "here", "space"];
+const THEME_WORDS: [&str; 6] = ["list", "save", "import", "here", "space", "edit"];
 
 /// `/themes` (or `/theme` on its own): every theme in a list, each tried
 /// on the whole screen as you move to it.
@@ -963,6 +968,8 @@ pub struct App {
     konami: usize,
     pub switcher: Option<Switcher>,
     pub theme_picker: Option<ThemePicker>,
+    /// `/theme edit`: the theme on screen, a colour at a time.
+    pub theme_editor: Option<crate::theme_editor::ThemeEditor>,
     /// Reacting with `+`: the emoji to pick from.
     pub emoji_picker: Option<EmojiPicker>,
     pub vote: Option<VotePicker>,
@@ -1257,9 +1264,10 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "theme",
-        args: "[name | list | here [name|off] | space <space> <name|off> | save <name> | import <file>]",
-        help: "Colours: no name opens the list, each shown as you move to it; list prints them; here and space give a \
-               room or a space's rooms their own; save writes this look to a theme file, import adds one",
+        args: "[name | list | edit | here [name|off] | space <space> <name|off> | save <name> | import <file>]",
+        help: "Colours: no name opens the list, each shown as you move to it; list prints them; edit changes the one on \
+               screen a colour at a time; here and space give a room or a space's rooms their own; save writes this \
+               look to a theme file, import adds one",
     },
     Cmd {
         name: "themes",
@@ -1590,6 +1598,7 @@ impl App {
             konami: 0,
             switcher: None,
             theme_picker: None,
+            theme_editor: None,
             emoji_picker: None,
             vote: None,
             verify_panel: None,
@@ -3685,6 +3694,22 @@ impl App {
             }
             self.home = None;
         }
+        if self.theme_editor.is_some() {
+            // A role picks it; elsewhere does nothing (Esc and s finish).
+            let row = self
+                .hits
+                .theme_editor
+                .as_ref()
+                .and_then(|(_, rows)| rows.iter().find(|(r, _)| r.contains(at)))
+                .map(|&(_, n)| n);
+            if let (Some(n), Some(e)) = (row, self.theme_editor.as_mut())
+                && e.typing.is_none()
+                && e.naming.is_none()
+            {
+                e.selected = n;
+            }
+            return;
+        }
         if self.theme_picker.is_some() {
             // A theme shows it, again keeps it; a click outside puts back
             // the one you had.
@@ -3980,6 +4005,9 @@ impl App {
         }
         if self.theme_picker.is_some() {
             return self.on_theme_picker_key(key);
+        }
+        if self.theme_editor.is_some() {
+            return self.on_theme_editor_key(key);
         }
         if self.emoji_picker.is_some() {
             return self.on_emoji_key(key);
@@ -7375,7 +7403,7 @@ impl App {
 
     /// The colours for the window in focus: its room's own theme, or yours.
     pub fn follow_room_theme(&mut self) {
-        if self.theme_picker.is_some() {
+        if self.theme_picker.is_some() || self.theme_editor.is_some() {
             return;
         }
         let want = self.own_theme(self.active).unwrap_or_else(|| self.cfg.theme.clone());
@@ -7431,6 +7459,7 @@ impl App {
             "here" => return self.cmd_theme_here(rest),
             "space" => return self.cmd_theme_space(rest),
             "save" => return self.save_theme(rest),
+            "edit" => return self.open_theme_editor(),
             "import" => return self.import_theme(rest),
             _ => {}
         }
@@ -7542,6 +7571,20 @@ impl App {
     /// `/theme save <name>`: the theme in use, with your `[colors]`, as a
     /// theme file.
     fn save_theme(&mut self, name: &str) -> Result<(), String> {
+        let (theme, colors) = (self.cfg.theme.clone(), self.cfg.colors.clone());
+        let path = self.write_theme_file(name, &theme, &colors)?;
+        self.info(format!("saved this look as {}: /theme {name} uses it, and the file shares it", path.display()));
+        Ok(())
+    }
+
+    /// `theme` with `colors` over it, as a theme file called `name`: a new
+    /// one, or the one being changed.
+    fn write_theme_file(
+        &self,
+        name: &str,
+        theme: &ThemeId,
+        colors: &BTreeMap<String, String>,
+    ) -> Result<PathBuf, String> {
         if name.is_empty() {
             return Err("usage: /theme save <name>".into());
         }
@@ -7553,10 +7596,10 @@ impl App {
         }
         let dir = self.paths.themes_dir();
         let path = ThemeFile::path(&dir, name);
-        if path.exists() && self.cfg.theme != ThemeId::File(name.to_owned()) {
+        if path.exists() && *theme != ThemeId::File(name.to_owned()) {
             return Err(format!("there's already a theme {name} ({}); pick another name", path.display()));
         }
-        let mut file = ThemeFile::of(&self.cfg.theme, &self.cfg.colors, &dir).map_err(|e| format!("{e:#}"))?;
+        let mut file = ThemeFile::of(theme, colors, &dir).map_err(|e| format!("{e:#}"))?;
         file.name = Some(name.to_owned());
         let text = file.to_toml(name).map_err(|e| format!("{e:#}"))?;
         let tmp = path.with_extension("toml.tmp");
@@ -7564,10 +7607,189 @@ impl App {
             .and_then(|()| std::fs::write(&tmp, text))
             .and_then(|()| std::fs::rename(&tmp, &path))
             .map_err(|e| format!("writing {}: {e}", path.display()))?;
-        self.info(format!("saved this look as {}: /theme {name} uses it, and the file shares it", path.display()));
+        Ok(path)
+    }
+
+    /// `/theme edit`: the theme on screen (this room's own, if it has one),
+    /// from your `[colors]`.
+    fn open_theme_editor(&mut self) -> Result<(), String> {
+        let base = self.palette_for.clone();
+        let full = Theme::resolve(&base, &self.cfg.colors, &self.paths.themes_dir()).map_err(|e| format!("{e:#}"))?;
+        let room = self.own_theme(self.active).is_some().then(|| self.win().title().to_owned());
+        self.theme_picker = None;
+        self.theme_editor = Some(crate::theme_editor::ThemeEditor {
+            base,
+            colors: self.cfg.colors.clone(),
+            full,
+            before: (self.cfg.colors.clone(), self.cfg.palette.clone()),
+            room,
+            selected: 0,
+            typing: None,
+            naming: None,
+            error: None,
+        });
         Ok(())
     }
 
+    /// One colour changed (`None`: back to the theme's own), shown at once,
+    /// or why it can't be.
+    fn edit_theme(&mut self, key: &str, value: Option<String>) {
+        let dir = self.paths.themes_dir();
+        let Some(e) = self.theme_editor.as_mut() else { return };
+        match e.with(key, value, &dir) {
+            Ok((colors, full)) => {
+                (e.colors, e.full, e.error) = (colors, full, None);
+                // On screen as this terminal draws it (256 colours, perhaps).
+                if let Ok(palette) = Theme::load(&e.base, &e.colors, &dir) {
+                    (self.cfg.palette, self.redraw_all) = (palette, true);
+                }
+            }
+            Err(error) => e.error = Some(error),
+        }
+    }
+
+    fn on_theme_editor_key(&mut self, key: KeyEvent) {
+        use crate::theme_editor::{FINE_HUE_STEP, HUE_STEP, LIGHT_STEP, ROLES, VIVID_STEP};
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(e) = self.theme_editor.as_mut() else { return };
+        // The name to save it as.
+        if let Some(name) = e.naming.as_mut() {
+            match key.code {
+                Esc => (e.naming, e.error) = (None, None),
+                Enter => {
+                    let name = name.trim().to_owned();
+                    self.save_theme_editor(&name);
+                }
+                Backspace => drop(name.pop()),
+                Char(c) if !ctrl => name.push(c),
+                _ => {}
+            }
+            return;
+        }
+        // A colour typed in.
+        if let Some(text) = e.typing.as_mut() {
+            match key.code {
+                Esc => (e.typing, e.error) = (None, None),
+                Enter => {
+                    let value = text.trim().to_owned();
+                    let role = e.key();
+                    e.typing = None;
+                    // Nothing typed: the theme's own.
+                    self.edit_theme(role, (!value.is_empty()).then_some(value));
+                }
+                Backspace => drop(text.pop()),
+                Char(c) if !ctrl => text.push(c),
+                _ => {}
+            }
+            return;
+        }
+        let last = ROLES.len() - 1;
+        let hue = if key.modifiers.contains(KeyModifiers::SHIFT) { FINE_HUE_STEP } else { HUE_STEP };
+        let moved = |e: &crate::theme_editor::ThemeEditor, h, s, l| (e.key(), Some(e.moved(h, s, l)));
+        let change = match key.code {
+            Esc => return self.close_theme_editor(),
+            Char('c') if ctrl => return self.close_theme_editor(),
+            Up | Char('k') => {
+                e.selected = e.selected.saturating_sub(1);
+                None
+            }
+            Down | Char('j') => {
+                e.selected = (e.selected + 1).min(last);
+                None
+            }
+            PageUp => {
+                e.selected = e.selected.saturating_sub(10);
+                None
+            }
+            PageDown => {
+                e.selected = (e.selected + 10).min(last);
+                None
+            }
+            Home | Char('g') => {
+                e.selected = 0;
+                None
+            }
+            End | Char('G') => {
+                e.selected = last;
+                None
+            }
+            Left | Char('h') => Some(moved(e, -hue, 0.0, 0.0)),
+            Right | Char('l') => Some(moved(e, hue, 0.0, 0.0)),
+            Char('-' | '_') => Some(moved(e, 0.0, 0.0, -LIGHT_STEP)),
+            Char('+' | '=') => Some(moved(e, 0.0, 0.0, LIGHT_STEP)),
+            Char(',' | '<') => Some(moved(e, 0.0, -VIVID_STEP, 0.0)),
+            Char('.' | '>') => Some(moved(e, 0.0, VIVID_STEP, 0.0)),
+            Char('r') => Some((e.key(), None)),
+            Enter => {
+                e.typing = Some(e.value());
+                None
+            }
+            Char('s') => {
+                e.naming = Some(e.suggested_name());
+                None
+            }
+            _ => None,
+        };
+        if let Some((role, value)) = change {
+            self.edit_theme(role, value);
+        }
+    }
+
+    /// Esc: everything as it was.
+    fn close_theme_editor(&mut self) {
+        if let Some(e) = self.theme_editor.take() {
+            (self.cfg.palette, self.redraw_all) = (e.before.1, true);
+        }
+    }
+
+    /// `s` in the editor: the look as a theme file called `name`, and that
+    /// theme in use: yours (for this session; /save keeps it), or this
+    /// room's when it was the room's own.
+    fn save_theme_editor(&mut self, name: &str) {
+        let Some(e) = self.theme_editor.as_ref() else { return };
+        let (base, colors, room) = (e.base.clone(), e.colors.clone(), e.room.clone());
+        let path = match self.write_theme_file(name, &base, &colors) {
+            Ok(path) => path,
+            Err(error) => {
+                if let Some(e) = self.theme_editor.as_mut() {
+                    e.error = Some(error);
+                }
+                return;
+            }
+        };
+        self.theme_editor = None;
+        let id = ThemeId::File(name.to_owned());
+        match (&room, self.win().room.clone()) {
+            (Some(_), Some(key)) => self.set_theme_for(WinKey { thread: None, ..key }, Some(id.clone())),
+            _ => self.cfg.theme = id.clone(),
+        }
+        match Theme::load(&id, &self.cfg.colors, &self.paths.themes_dir()) {
+            Ok(palette) => (self.cfg.palette, self.palette_for) = (palette, id),
+            Err(e) => self.error(format!("{e:#}")),
+        }
+        self.redraw_all = true;
+        let whose = match &room {
+            Some(room) => format!("{room}'s theme now"),
+            None => "your theme now, for this session (/save keeps it)".into(),
+        };
+        self.info(format!("saved as {}: {whose}", path.display()));
+        // [colors] in config.toml go over every theme, this one too.
+        let over: Vec<&str> = self
+            .cfg
+            .colors
+            .iter()
+            .filter(|(key, value)| colors.get(*key) != Some(*value))
+            .map(|(key, _)| key.as_str())
+            .collect();
+        if !over.is_empty() {
+            self.info(format!(
+                "[colors] in config.toml still sets {} over it: take {} out to see the theme's",
+                over.join(", "),
+                if over.len() == 1 { "that" } else { "those" }
+            ));
+        }
+    }
     /// `/theme import <file>`: a theme file someone sent you, checked and
     /// copied into the themes folder.
     fn import_theme(&mut self, arg: &str) -> Result<(), String> {
@@ -9461,6 +9683,127 @@ mod tests {
         let key = WinKey { account: "t".into(), room_id: room.try_into().unwrap(), thread: None };
         app.windows.push(Window::new(Some(key), name.into()));
         app.windows.len() - 1
+    }
+
+    #[test]
+    fn bridged_rooms_say_where_their_messages_go() {
+        let mut app = test_app();
+        let a = room_window(&mut app, "!a:x.org", "Night Owls");
+        let b = room_window(&mut app, "!b:x.org", "Book Club");
+        app.windows[a].topic = Some("late-night chat".into());
+        app.windows[a].bridges = vec![crate::model::Bridge {
+            protocol: "Discord".into(),
+            network: Some("Owls Guild".into()),
+            channel: Some("#general".into()),
+            bot: None,
+        }];
+        app.switch_to(a);
+        let rows = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 12)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..12).map(|y| (0..90).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>()
+        };
+        let shown = rows(&mut app);
+        assert!(shown[0].starts_with(" ⇄ Discord · Owls Guild · #general │ late-night chat"), "{}", shown[0]);
+        let row = |name: &str| shown.iter().find(|r| r.contains(name)).cloned().unwrap();
+        assert!(row("Night Owls").contains("Night Owls ⇄"), "{}", row("Night Owls"));
+        assert!(!row("Book Club").contains('⇄'), "not bridged");
+        // The window list's edge stays put whether or not a room's bridged.
+        let edge = |r: &str| r.chars().position(|c| c == '│');
+        assert!(edge(&row("Night Owls")).is_some());
+        assert_eq!(edge(&row("Night Owls")), edge(&row("Book Club")), "{shown:#?}");
+        app.switch_to(b);
+        assert!(!rows(&mut app)[0].contains('⇄'), "the topic bar's own room only");
+    }
+
+    #[test]
+    fn the_theme_editor_changes_colours_as_you_watch_and_saves_a_theme() {
+        use crate::theme_editor::ROLES;
+        let base = std::env::temp_dir().join(format!("textrix-theme-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let paths = Paths { base: base.clone(), env_file: base.join("none") };
+        let mut app = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx);
+        let key = |app: &mut App, code: KeyCode| app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        let typed = |app: &mut App, text: &str| {
+            for c in text.chars() {
+                app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            }
+        };
+        let full = |app: &App, role: &str| app.theme_editor.as_ref().unwrap().full.color_of(role).flatten();
+        let before = app.cfg.palette.clone();
+
+        app.command("theme edit");
+        let own_text = ROLES.iter().position(|(_, key, _)| *key == "own_text").unwrap();
+        app.theme_editor.as_mut().unwrap().selected = own_text;
+        let was = full(&app, "own_text");
+        key(&mut app, KeyCode::Right);
+        assert_ne!(full(&app, "own_text"), was, "round the wheel");
+        assert!(app.theme_editor.as_ref().unwrap().colors.contains_key("own_text"), "as a [colors] key");
+        key(&mut app, KeyCode::Char('r'));
+        assert_eq!(full(&app, "own_text"), was, "the theme's own again");
+
+        // Typed: a colour, then one that isn't.
+        key(&mut app, KeyCode::Enter);
+        for _ in 0..20 {
+            key(&mut app, KeyCode::Backspace);
+        }
+        typed(&mut app, "#ff0000");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(full(&app, "own_text"), Some(ratatui::style::Color::Rgb(255, 0, 0)));
+        key(&mut app, KeyCode::Enter);
+        for _ in 0..20 {
+            key(&mut app, KeyCode::Backspace);
+        }
+        typed(&mut app, "nope");
+        key(&mut app, KeyCode::Enter);
+        let e = app.theme_editor.as_ref().unwrap();
+        assert!(e.error.as_deref().is_some_and(|e| e.contains("isn't a colour")), "{:?}", e.error);
+        assert_eq!(full(&app, "own_text"), Some(ratatui::style::Color::Rgb(255, 0, 0)), "unchanged");
+
+        // Drawn: the panel, with the change marked.
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 60)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..60).map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect()).collect();
+        assert!(rows.iter().any(|r| r.contains("Editing default")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("•own_text") && r.contains("#ff0000")), "{rows:#?}");
+
+        // Esc: all as it was.
+        key(&mut app, KeyCode::Esc);
+        assert!(app.theme_editor.is_none());
+        assert_eq!(app.cfg.palette.own_text, before.own_text);
+        assert!(app.cfg.colors.is_empty(), "config.toml's [colors] never changed");
+
+        // Again, and saved as a theme: in use from then on.
+        app.command("theme edit");
+        let link = ROLES.iter().position(|(_, key, _)| *key == "link").unwrap();
+        app.theme_editor.as_mut().unwrap().selected = link;
+        key(&mut app, KeyCode::Char('+'));
+        let lighter = full(&app, "link");
+        key(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.theme_editor.as_ref().unwrap().naming.as_deref(), Some("default-mine"));
+        for _ in 0..20 {
+            key(&mut app, KeyCode::Backspace);
+        }
+        typed(&mut app, "list");
+        key(&mut app, KeyCode::Enter);
+        let e = app.theme_editor.as_ref().expect("still open");
+        assert!(e.error.as_deref().is_some_and(|e| e.contains("means something else")), "{:?}", e.error);
+        for _ in 0..4 {
+            key(&mut app, KeyCode::Backspace);
+        }
+        typed(&mut app, "midnight-mine");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.theme_editor.is_none(), "saved and closed");
+        assert_eq!(app.cfg.theme, ThemeId::File("midnight-mine".into()));
+        let saved = std::fs::read_to_string(base.join("themes/midnight-mine.toml")).unwrap();
+        assert!(saved.contains("link"), "{saved}");
+        let reloaded = Theme::resolve(&app.cfg.theme, &BTreeMap::new(), &base.join("themes")).unwrap();
+        assert_eq!(reloaded.color_of("link").flatten(), lighter, "the file has the change");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

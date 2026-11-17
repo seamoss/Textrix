@@ -51,6 +51,8 @@ pub struct Hits {
     pub switcher: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The theme picker's box, and its rows: (row, theme index).
     pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// The theme editor's box, and its rows: (row, role index).
+    pub theme_editor: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The emoji picker's box, and its emoji: (where, entry index).
     pub emoji_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The profile pane.
@@ -156,6 +158,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.hits.switcher = Some(draw_switcher(f, app));
     }
     app.hits.theme_picker = app.theme_picker.is_some().then(|| draw_theme_picker(f, app));
+    app.hits.theme_editor = app.theme_editor.is_some().then(|| draw_theme_editor(f, app));
     app.hits.emoji_picker = app.emoji_picker.is_some().then(|| draw_emoji_picker(f, app));
     if app.vote.is_some() {
         draw_vote(f, app);
@@ -316,6 +319,121 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
         let style = if n == p.selected { Style::new().add_modifier(Modifier::REVERSED) } else { t.inactive };
         let pad = (list.width as usize).saturating_sub(display_len(&text));
         f.render_widget(Paragraph::new(Span::styled(format!("{text}{}", " ".repeat(pad)), style)), rect);
+        hits.push((rect, n));
+    }
+    (area, hits)
+}
+
+/// `/theme edit`: every colour role under where it shows, each with a
+/// swatch (as this terminal draws it) and its value; at the foot, what the
+/// chosen one colours (or what's being typed, or what went wrong) and the
+/// keys.
+fn draw_theme_editor(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    use crate::theme_editor::ROLES;
+    let t = app.cfg.palette.clone();
+    let screen = f.area();
+    let Some(e) = app.theme_editor.as_ref() else { return (Rect::default(), Vec::new()) };
+    let mut rows: Vec<(Option<usize>, &str)> = Vec::new();
+    for (n, (group, key, _)) in ROLES.iter().enumerate() {
+        if n == 0 || ROLES[n - 1].0 != *group {
+            rows.push((None, group));
+        }
+        rows.push((Some(n), key));
+    }
+    let width = screen.width.saturating_sub(2).min(46);
+    let area = Rect {
+        x: screen.right().saturating_sub(width),
+        y: screen.y + 1,
+        width,
+        height: screen.height.saturating_sub(2),
+    };
+    let title = match &e.room {
+        Some(room) => format!(" Editing {} · {room} ", e.base),
+        None => format!(" Editing {} ", e.base),
+    };
+    let block = Block::bordered().style(t.base).border_style(t.frame).title(Span::styled(title, t.accent));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let foot_h = 3.min(inner.height);
+    let list = Rect { height: inner.height.saturating_sub(foot_h), ..inner };
+    let foot = Rect { y: list.bottom(), height: foot_h, ..inner };
+    let (line, keys) = match (&e.naming, &e.typing, &e.error) {
+        (Some(name), _, error) => {
+            let shown = TLine::from(vec![Span::styled("save as › ", t.accent), Span::raw(name.clone())]);
+            let cursor_x = foot.x + 10 + display_len(name) as u16;
+            f.set_cursor_position(Position::new(cursor_x.min(foot.right().saturating_sub(1)), foot.y));
+            let why = error.as_ref().map(|e| Span::styled(e.clone(), t.error));
+            (
+                shown,
+                why.map_or_else(
+                    || vec![TLine::from(Span::styled("Enter save · Esc back", t.dim))],
+                    |w| vec![TLine::from(w)],
+                ),
+            )
+        }
+        (None, Some(text), _) => {
+            let shown = TLine::from(vec![Span::styled(format!("{} › ", e.key()), t.accent), Span::raw(text.clone())]);
+            let cursor_x = foot.x + display_len(e.key()) as u16 + 3 + display_len(text) as u16;
+            f.set_cursor_position(Position::new(cursor_x.min(foot.right().saturating_sub(1)), foot.y));
+            let hint = "#rrggbb, a name, or 0–255; empty: the theme's · Enter · Esc";
+            (shown, vec![TLine::from(Span::styled(hint, t.dim))])
+        }
+        (None, None, error) => {
+            let first = match error {
+                Some(error) => TLine::from(Span::styled(error.clone(), t.error)),
+                None => TLine::from(Span::styled(e.about(), t.dim)),
+            };
+            let keys = vec![
+                TLine::from(Span::styled("↑↓ pick · ←→ hue · -+ light · <> vivid", t.dim)),
+                TLine::from(Span::styled("Enter type · r theme's · s save · Esc undo", t.dim)),
+            ];
+            (first, keys)
+        }
+    };
+    let mut foot_lines = vec![line];
+    foot_lines.extend(keys);
+    f.render_widget(Paragraph::new(foot_lines), foot);
+
+    let at = rows.iter().position(|(n, _)| *n == Some(e.selected)).unwrap_or(0);
+    let start = (at + 1).saturating_sub(list.height as usize);
+    let mut hits = Vec::new();
+    for (row, &(n, name)) in rows.iter().skip(start).take(list.height as usize).enumerate() {
+        let rect = Rect { y: list.y + row as u16, height: 1, ..list };
+        let Some(n) = n else {
+            f.render_widget(Paragraph::new(Span::styled(name.to_owned(), t.dim.add_modifier(Modifier::BOLD))), rect);
+            continue;
+        };
+        // The swatch in the colour as drawn here; the terminal's own shows dotted.
+        let colours: Vec<Option<Color>> = match t.color_of(name) {
+            Some(colour) => vec![colour],
+            None => t.nicks.iter().map(|c| Some(*c)).collect(),
+        };
+        let mut spans: Vec<Span> = vec![Span::raw(" ")];
+        for colour in colours.iter().take(8) {
+            spans.push(match colour {
+                Some(colour) => Span::styled("██", Style::new().fg(*colour)),
+                None => Span::styled("··", t.dim),
+            });
+        }
+        let swatch_w = 1 + 2 * colours.len().min(8);
+        let changed = e.colors.contains_key(name);
+        let mark = if changed { "•" } else { " " };
+        let label = format!(" {mark}{name}");
+        let style = if n == e.selected { Style::new().add_modifier(Modifier::REVERSED) } else { t.inactive };
+        let value = if name == "nicks" {
+            String::new()
+        } else {
+            e.full.color_of(name).flatten().map_or_else(
+                || "default".to_owned(),
+                |c| crate::theme_editor::hex(crate::theme_editor::rgb_of(Some(c), (0, 0, 0))),
+            )
+        };
+        let room = (rect.width as usize).saturating_sub(swatch_w + display_len(&label) + value.len() + 1);
+        spans.push(Span::styled(format!("{label}{}", " ".repeat(room)), style));
+        spans.push(Span::styled(format!("{value} "), if changed { style } else { t.dim }));
+        f.render_widget(Paragraph::new(TLine::from(spans)), rect);
         hits.push((rect, n));
     }
     (area, hits)
@@ -799,9 +917,12 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let dot = w.dm_presence(app).map(|p| presence_dot(t, p.kind));
     // Columns before the name: avatar slot and presence dot.
     let lead_w = if avatar.is_empty() { 0 } else { 3 } + if dot.is_some() { 2 } else { 0 };
-    let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + 1);
+    // Bridged to another network: a ⇄ after the name.
+    let bridged = if w.bridges.is_empty() { "" } else { " ⇄" };
+    let room_w = inner.saturating_sub(number.len() + lead_w + display_len(&unread) + display_len(bridged) + 1);
     let name: String = w.title().chars().filter(|c| !c.is_control()).take(room_w).collect();
-    let pad = inner.saturating_sub(number.len() + lead_w + display_len(&name) + display_len(&unread));
+    let used = number.len() + lead_w + display_len(&name) + display_len(bridged) + display_len(&unread);
+    let pad = inner.saturating_sub(used);
     let muted = app.room_mode(i) == Some(RoomNotificationMode::Mute);
     let style = if active {
         t.current
@@ -820,8 +941,11 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     if let Some((symbol, color)) = dot {
         parts.push(Span::styled(format!("{symbol} "), if active { style } else { Style::new().fg(color) }));
     }
+    parts.push(Span::styled(name, style));
+    if !bridged.is_empty() {
+        parts.push(Span::styled(bridged, if active { style } else { t.dim }));
+    }
     parts.extend([
-        Span::styled(name, style),
         Span::styled(" ".repeat(pad), style),
         Span::styled(unread, if active { style } else { activity_style(t, w.activity) }),
     ]);
@@ -1013,6 +1137,11 @@ fn draw_topic(f: &mut Frame, area: Rect, app: &App) {
         (Some(_), Some(topic)) => format!(" {topic}"),
         (Some(_), None) => format!(" {}", win.title()),
     };
+    // Where messages also go, before what the room says about itself.
+    if !win.bridges.is_empty() {
+        let bridges: Vec<String> = win.bridges.iter().map(crate::model::Bridge::describe).collect();
+        text = format!(" ⇄ {} │{text}", bridges.join(", "));
+    }
     if let Some(presence) = win.dm_presence(app) {
         text.push_str(&format!(" · {} is {}", win.title(), presence.describe()));
     }

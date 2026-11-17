@@ -196,6 +196,13 @@ under **Unreads**, mentions first; once you've read them they go back to
 by name. A window's number stays the same wherever it's listed, so
 Alt+1..0 and `/window N` always find it.
 
+A room bridged to another network (Discord, Telegram, Slack, Signal, IRC…)
+has a ⇄ after its name in the window list, and its topic bar starts with
+where its messages also go: `⇄ Discord · Night Owls Guild · #general`.
+`/info` says which bridge, by its bot. That comes from the `m.bridge` state
+event bridges set (and mautrix's older `uk.half-shot.bridge`), so a bridge
+that doesn't say so isn't marked.
+
 ![Home over the messages: the latest mention, the rooms with unread messages and what was said last in each, and an invitation](site/screenshots/home.svg)
 
 Home (F4, or `/home`) shows what's waiting in one place, over the
@@ -715,6 +722,18 @@ foreground = "#c0d0ff"
 bar_bg = "#102040"
 nicks = "#7aa2f7, #bb9af7, #9ece6a"
 ```
+
+`/theme edit` changes the theme on screen a colour at a time, as you watch:
+every colour it has, under where it shows (Screen, Bars, Messages, Nicks,
+Window list, Presence, Code), each with a swatch and its value. ↑/↓ picks
+one; ←/→ moves it round the colour wheel (Shift for small steps), `-`/`+`
+makes it darker or lighter, `<`/`>` (or `,`/`.`) duller or more vivid, and
+Enter types a value (`#rrggbb`, a name, or 0–255; nothing for the theme's
+own). `r` puts the theme's own back, and changing "nicks" moves everyone's
+nick colours together. `s` saves the lot as a theme file of your own and
+uses it (a room's, when you were editing its own theme), and Esc puts
+everything back. It works out colours in full, so a 256-colour terminal's
+rounding doesn't creep into what it saves.
 
 `/theme save <name>` writes the look you have now (the theme with your
 `[colors]` changes) to a file like that, ready to send to someone;

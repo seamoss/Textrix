@@ -7,6 +7,22 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.22.0] - unreleased
+
+### Added
+- Bridged rooms say so. A room bridged to another network (Discord,
+  Telegram, Slack, Signal, IRC…) has a ⇄ after its name in the window
+  list, its topic bar starts with where its messages also go (`⇄ Discord ·
+  Night Owls Guild · #general`), and `/info` names the bridge and its bot.
+  It reads the `m.bridge` state event bridges set (and mautrix's older
+  `uk.half-shot.bridge`), on classic and sliding sync alike.
+- `/theme edit`: change the theme on screen a colour at a time, as you
+  watch. Every colour it has, under where it shows, each with a swatch and
+  its value: ←/→ round the colour wheel, `-`/`+` darker or lighter, `<`/`>`
+  duller or more vivid, Enter to type one, `r` for the theme's own. "nicks"
+  moves everyone's nick colours together. `s` saves it as a theme file of
+  your own and uses it; Esc puts everything back.
+
 ## [0.21.2] - 2026-11-17
 
 ### Fixed

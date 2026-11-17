@@ -412,6 +412,52 @@ pub struct RoomMeta {
     pub pinned: Vec<OwnedEventId>,
     /// Tagged `m.favourite` (Element's Favourites): first in the window list.
     pub favourite: bool,
+    /// Bridges to other chat networks: where its messages also go.
+    pub bridges: Vec<Bridge>,
+}
+
+/// A bridge to another chat network, from the room's `m.bridge` state
+/// (MSC2346; mautrix's bridges send `uk.half-shot.bridge` too).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Bridge {
+    /// "Discord", "Telegram", "IRC"…
+    pub protocol: String,
+    /// The server, guild or workspace there.
+    pub network: Option<String>,
+    /// The channel or chat there.
+    pub channel: Option<String>,
+    /// The bridge's bot account.
+    pub bot: Option<String>,
+}
+
+impl Bridge {
+    /// From a bridge state event (as JSON). `None` for one with no
+    /// protocol, which is how a bridge is taken away.
+    pub fn from_event(event: &serde_json::Value) -> Option<Self> {
+        let content = event.get("content")?;
+        let name = |key: &str| {
+            let part = content.get(key)?;
+            let text = part.get("displayname").and_then(serde_json::Value::as_str).map(str::trim);
+            let text = text.filter(|t| !t.is_empty()).map(ToOwned::to_owned);
+            text.or_else(|| {
+                // Only an id ("telegram"): as a name.
+                let id = part.get("id").and_then(serde_json::Value::as_str)?.trim();
+                let mut chars = id.chars();
+                let first = chars.next()?;
+                Some(first.to_uppercase().chain(chars).collect())
+            })
+        };
+        let bot = content.get("bridgebot").and_then(serde_json::Value::as_str).map(ToOwned::to_owned);
+        Some(Self { protocol: name("protocol")?, network: name("network"), channel: name("channel"), bot })
+    }
+
+    /// "Discord · Night Owls Guild · #general".
+    pub fn describe(&self) -> String {
+        let mut parts = vec![self.protocol.as_str()];
+        parts.extend(self.network.as_deref());
+        parts.extend(self.channel.as_deref().filter(|c| Some(*c) != self.network.as_deref()));
+        parts.join(" · ")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -445,6 +491,32 @@ pub struct Member {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridges_say_where_messages_also_go() {
+        let event = serde_json::json!({
+            "type": "m.bridge",
+            "state_key": "fi.mau.discord://example/123",
+            "content": {
+                "bridgebot": "@discordbot:example.org",
+                "protocol": {"id": "discordgo", "displayname": "Discord"},
+                "network": {"id": "123", "displayname": "Night Owls Guild"},
+                "channel": {"id": "456", "displayname": "#general"},
+            },
+        });
+        let bridge = Bridge::from_event(&event).unwrap();
+        assert_eq!(bridge.describe(), "Discord · Night Owls Guild · #general");
+        assert_eq!(bridge.bot.as_deref(), Some("@discordbot:example.org"));
+        // Only ids: named after them.
+        let ids = serde_json::json!({"content": {"protocol": {"id": "telegram"}, "channel": {"id": "Book Club"}}});
+        assert_eq!(Bridge::from_event(&ids).unwrap().describe(), "Telegram · Book Club");
+        // A DM bridged one to one has the same name for both.
+        let same = serde_json::json!({"content": {"protocol": {"displayname": "Signal"}, "network": {"displayname": "sam"}, "channel": {"displayname": "sam"}}});
+        assert_eq!(Bridge::from_event(&same).unwrap().describe(), "Signal · sam");
+        // Taken away (empty content), or not a bridge at all.
+        assert_eq!(Bridge::from_event(&serde_json::json!({"content": {}})), None);
+        assert_eq!(Bridge::from_event(&serde_json::json!({"content": {"protocol": {"displayname": "  "}}})), None);
+    }
 
     #[test]
     fn gifs_and_what_their_senders_say_moves_may_move() {
