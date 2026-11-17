@@ -1157,7 +1157,7 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd {
         name: "codebot",
-        args: "[start [repo] | stop | log]",
+        args: "[start [repo] | stop | log | help]",
         help: "codebot in a bot of its own: /codebot start <repo> in a room sets it up there and starts it",
     },
     Cmd {

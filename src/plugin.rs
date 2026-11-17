@@ -342,10 +342,17 @@ mod tests {
         process: Process,
         rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
         said: Vec<(String, Value)>,
+        /// What it changed its messages to.
+        edits: Vec<String>,
     }
 
     impl Codebot {
         fn start(test: &str, agent_body: &str, settings: Value) -> Option<Self> {
+            Self::start_with(test, agent_body, settings, &[])
+        }
+
+        /// With more repositories beside `repo` (each with its origin).
+        fn start_with(test: &str, agent_body: &str, settings: Value, more: &[&str]) -> Option<Self> {
             use std::os::unix::fs::PermissionsExt;
             let have =
                 |p: &str| std::process::Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success());
@@ -362,15 +369,35 @@ mod tests {
                 && cd repo && git checkout -q -b main && echo hi > README.md && git add . \
                 && git -c user.name=t -c user.email=t@x commit -q -m start && git push -q origin main",
             );
+            for name in more {
+                Self::another_repo(&dir, name);
+            }
             let script = |name: &str, body: &str| {
                 let path = bin.join(name);
                 std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             };
             script("agent", agent_body);
+            // Every call kept, and each body it was given (the last argument).
             script(
                 "gh",
-                &format!("echo \"$@\" > {}/gh-args; echo https://github.com/example/repo/pull/7", dir.display()),
+                &format!(
+                    "echo \"$@\" >> {d}/gh-args; for a; do last=$a; done; cat \"$last\" >> {d}/gh-bodies 2>/dev/null; \
+                     echo https://github.com/example/repo/pull/7",
+                    d = dir.display()
+                ),
+            );
+            // Claude Code as codebot runs it: its arguments kept, and a
+            // stream of what it does: an edit, then its answer and cost.
+            script(
+                "claude",
+                &format!(
+                    "echo \"$@\" >> {d}/claude-args; \
+                     printf '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{{\"file_path\":\"%s/README.md\"}}}}]}}}}\\n' \"$PWD\"; \
+                     echo more >> README.md; \
+                     echo '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"Added a line to the README.\",\"total_cost_usd\":0.12}}'",
+                    d = dir.display()
+                ),
             );
 
             let plugins = dir.join("plugins");
@@ -397,7 +424,19 @@ mod tests {
                     "settings": all,
                 }),
             ));
-            Some(Self { dir, process, rx, said: Vec::new() })
+            Some(Self { dir, process, rx, said: Vec::new(), edits: Vec::new() })
+        }
+
+        /// Another repository beside `repo`, with an origin of its own.
+        fn another_repo(dir: &Path, name: &str) {
+            sh(
+                dir,
+                &format!(
+                    "git init -q --bare -b main {name}.git && git clone -q {name}.git {name} 2>/dev/null \
+                    && cd {name} && git checkout -q -b main && echo hi > README.md && git add . \
+                    && git -c user.name=t -c user.email=t@x commit -q -m start && git push -q origin main"
+                ),
+            );
         }
 
         fn say(&self, sender: &str, event: &str, body: &str, thread: Option<&str>) {
@@ -423,6 +462,9 @@ mod tests {
                         let event_id = format!("$e{}", self.said.len());
                         self.said.push((params["text"].as_str().unwrap_or_default().to_owned(), params));
                         self.process.send(&result(&id, json!({ "event_id": event_id })));
+                    } else if method == "edit" {
+                        self.edits.push(params["text"].as_str().unwrap_or_default().to_owned());
+                        self.process.send(&result(&id, Value::Null));
                     } else {
                         self.process.send(&result(&id, Value::Null));
                     }
@@ -449,7 +491,8 @@ mod tests {
 
     #[tokio::test]
     async fn codebot_turns_a_request_into_a_pull_request() {
-        let agent = "echo working; printf '%s\\n' \"$1\" > ../../../asked.txt; echo greeting >> README.md; echo done";
+        let agent =
+            "echo working; printf '%s\\n' \"$1\" > ../../../../asked.txt; echo greeting >> README.md; echo done";
         let Some(mut bot) = Codebot::start("pr", agent, json!({"test": "true"})) else { return };
         bot.say("@stranger:x.org", "$s", "codebot: delete everything", None);
         bot.say("@me:x.org", "$req", "codebot: add a greeting to the README", None);
@@ -465,7 +508,72 @@ mod tests {
         assert_eq!(bot.sh("git --git-dir origin.git log --oneline main").lines().count(), 1, "main untouched");
         let gh = std::fs::read_to_string(bot.dir.join("gh-args")).unwrap();
         assert!(gh.contains("pr create --base main --head codebot/"), "{gh}");
-        assert!(!bot.dir.join("plugins/codebot-work/task-1").exists(), "its worktree is gone");
+        let jobs = std::fs::read_to_string(bot.dir.join("plugins/codebot-work/jobs.json")).unwrap();
+        assert!(jobs.contains("\"root\": \"$req\"") && jobs.contains("pull/7"), "its thread takes follow-ups: {jobs}");
+        assert!(bot.dir.join("plugins/codebot-work/repo").is_dir(), "its worktree stays, for them");
+    }
+
+    #[tokio::test]
+    async fn codebot_carries_on_in_the_thread_where_claude_left_off() {
+        let Some(mut bot) = Codebot::start("more", "", json!({"agent": "claude"})) else { return };
+        bot.say("@me:x.org", "$req", "codebot: add a line to the README", None);
+        bot.until_it_says("Pull request:").await;
+        let done = &bot.said.last().unwrap().0;
+        assert!(done.contains("$0.12"), "what it cost: {done}");
+        let bodies = std::fs::read_to_string(bot.dir.join("gh-bodies")).unwrap();
+        assert!(bodies.contains("Added a line to the README.") && !bodies.contains("\"type\""), "its answer: {bodies}");
+        assert!(bot.edits.iter().chain(bot.said.iter().map(|(s, _)| s)).count() > 0);
+
+        // A thank-you isn't more work; more is, without naming it.
+        bot.say("@me:x.org", "$thanks", "thanks!", Some("$req"));
+        bot.say("@me:x.org", "$more", "also add a farewell", Some("$req"));
+        bot.until_it_says("Updated the pull request").await;
+        // Each run's arguments, the prompt (several lines) among them.
+        let args = std::fs::read_to_string(bot.dir.join("claude-args")).unwrap();
+        let runs: Vec<&str> = args.split("-p ").filter(|r| !r.is_empty()).collect();
+        assert_eq!(runs.len(), 2, "one run each, not one for the thank-you: {args}");
+        let session = runs[0].split("--session-id ").nth(1).unwrap().split_whitespace().next().unwrap();
+        assert!(runs[1].contains(&format!("--resume {session}")), "the same session again: {args}");
+        assert!(runs[1].contains("also add a farewell") && runs[1].contains("add a line to the README"), "{args}");
+        let gh = std::fs::read_to_string(bot.dir.join("gh-args")).unwrap();
+        assert!(gh.contains("pr comment https://github.com/example/repo/pull/7"), "on the same pull request: {gh}");
+        let pushed = bot.sh("git --git-dir origin.git log --oneline main..codebot/add-a-line-to-the-readme-$(git --git-dir origin.git branch --list 'codebot/*' | sed 's/.*-//')");
+        assert_eq!(pushed.lines().count(), 2, "both on its branch: {pushed}");
+    }
+
+    #[tokio::test]
+    async fn codebot_hands_failing_tests_back_to_the_agent() {
+        // It only gets it right once it's shown the failure.
+        let agent = "echo try >> README.md; case \"$1\" in *'fail after'*) touch fixed;; esac";
+        let Some(mut bot) = Codebot::start("fix", agent, json!({"test": "test -f fixed"})) else { return };
+        bot.say("@me:x.org", "$req", "codebot: make the tests pass", None);
+        bot.until_it_says("Pull request:").await;
+        let done = &bot.said.last().unwrap().0;
+        assert!(done.contains("tests passed after 2 rounds"), "{done}");
+        assert!(
+            bot.said.iter().any(|(s, _)| s.contains("round 2 of 3"))
+                || bot.edits.iter().any(|s| s.contains("round 2 of 3"))
+        );
+        let bodies = std::fs::read_to_string(bot.dir.join("gh-bodies")).unwrap();
+        assert!(bodies.contains("passed after 2 rounds"), "{bodies}");
+    }
+
+    #[tokio::test]
+    async fn codebot_works_in_the_repository_asked_for() {
+        // Paths in settings are from its folder (plugins/).
+        let other = json!({"repos": {"other": {"path": "../other", "base": "main"}}});
+        let Some(mut bot) = Codebot::start_with("repos", "echo x >> README.md", other, &["other"]) else { return };
+        bot.say("@me:x.org", "$req", "codebot in other: add an x", None);
+        bot.until_it_says("Pull request:").await;
+        assert!(
+            bot.sh("git --git-dir other.git branch --list 'codebot/*'").contains("codebot/add-an-x"),
+            "pushed there"
+        );
+        assert_eq!(bot.sh("git --git-dir origin.git branch --list 'codebot/*'"), "", "not to the main one");
+        bot.say("@me:x.org", "$which", "codebot: repos", None);
+        bot.until_it_says("other:").await;
+        let listed = &bot.said.last().unwrap().0;
+        assert!(listed.contains("repo (the main one)") && listed.contains("other:"), "{listed}");
     }
 
     #[tokio::test]

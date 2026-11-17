@@ -538,14 +538,7 @@ pub fn update_plugin(
     }
     let settings = plugin.entry("settings").or_insert(toml_edit::table());
     let settings = settings.as_table_mut().with_context(|| format!("plugins.{name}.settings isn't a table"))?;
-    for (key, value) in set {
-        let value: toml_edit::Value = value.to_string().parse().with_context(|| format!("settings.{key}"))?;
-        if settings.get(key).and_then(|v| v.as_value()).map(ToString::to_string).map(|v| v.trim().to_owned())
-            != Some(value.to_string().trim().to_owned())
-        {
-            settings[key.as_str()] = toml_edit::value(value);
-        }
-    }
+    merge_settings(settings, set, &format!("plugins.{name}.settings"))?;
     let new = doc.to_string();
     if new == text {
         return Ok(false);
@@ -554,6 +547,38 @@ pub fn update_plugin(
     std::fs::write(&tmp, &new).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
     Ok(true)
+}
+
+/// `set` put into `table`: tables merged key by key, `rooms` lists added
+/// to (never shortened), anything else replaced if it differs.
+fn merge_settings(table: &mut toml_edit::Table, set: &toml::Table, at: &str) -> Result<()> {
+    for (key, value) in set {
+        match value {
+            toml::Value::Table(sub) => {
+                let entry = table.entry(key).or_insert_with(|| implicit_table().into());
+                let entry = entry.as_table_mut().with_context(|| format!("{at}.{key} isn't a table"))?;
+                merge_settings(entry, sub, &format!("{at}.{key}"))?;
+            }
+            toml::Value::Array(items) if key == "rooms" => {
+                let rooms = table.entry(key).or_insert(toml_edit::value(toml_edit::Array::new()));
+                let rooms = rooms.as_array_mut().with_context(|| format!("{at}.rooms isn't a list"))?;
+                for room in items.iter().filter_map(toml::Value::as_str) {
+                    if !rooms.iter().any(|r| r.as_str() == Some(room)) {
+                        rooms.push(room);
+                    }
+                }
+            }
+            value => {
+                let value: toml_edit::Value = value.to_string().parse().with_context(|| format!("{at}.{key}"))?;
+                let same = table.get(key).and_then(|v| v.as_value()).map(|v| v.to_string().trim().to_owned())
+                    == Some(value.to_string().trim().to_owned());
+                if !same {
+                    table[key.as_str()] = toml_edit::value(value);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Add, change (`Some`) or remove (`None`) an alias in config.toml, keeping
