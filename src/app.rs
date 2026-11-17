@@ -3777,7 +3777,9 @@ impl App {
             let member = self.win().members.iter().position(|m| m.user_id == user);
             return self.open_profile(user, name, member);
         }
-        if row.image
+        // The picture itself, not the rest of its rows: a click beside it
+        // is on its message like any other.
+        if row.image.is_some_and(|(from, to)| (from..to).contains(&at.x))
             && let Some(line) = row
                 .event
                 .as_ref()
@@ -10752,7 +10754,7 @@ mod tests {
         assert_eq!(app.link_in(&event, "(https://en.wikipedia"), Some(url.to_owned()));
         assert_eq!(app.link_in(&event, "alice"), None, "underlined text that isn't a link");
 
-        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new(), image: false, nick: None };
+        let row = ui::RowHit { event: Some(event.clone()), links: Vec::new(), image: None, nick: None };
         let area = ratatui::layout::Rect::new(0, 0, 40, 5);
         app.hits.panes.push(ui::PaneHits { area, window: a, rows: vec![ui::RowHit::default(), row] });
         app.on_click(Position::new(10, 1));
@@ -10771,8 +10773,8 @@ mod tests {
         let pieces =
             [(30, 40, "https://en.wikipedia".to_owned()), (2, 34, "wiki/Rust_(programming_language)".to_owned())];
         let rows = vec![
-            ui::RowHit { event: Some(event.clone()), links: vec![pieces[0].clone()], image: false, nick: None },
-            ui::RowHit { event: Some(event.clone()), links: vec![pieces[1].clone()], image: false, nick: None },
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[0].clone()], image: None, nick: None },
+            ui::RowHit { event: Some(event.clone()), links: vec![pieces[1].clone()], image: None, nick: None },
         ];
         app.hits.panes = vec![ui::PaneHits { area: ratatui::layout::Rect::new(0, 3, 40, 2), window: a, rows }];
         let links = app.screen_links();
@@ -10968,6 +10970,40 @@ mod tests {
         let (rows, _) = draw(&mut app);
         let title = rows.iter().position(|r| r.contains("↳ Docs — Matrix")).unwrap();
         assert!(rows[title + 1].contains("thanks"), "no room kept without pictures");
+    }
+
+    #[test]
+    fn only_a_click_on_the_picture_opens_it() {
+        let mut app = test_app();
+        let painter = Painter {
+            picker: ratatui_image::picker::Picker::halfblocks(),
+            text: crate::picture::TextMode::Sextants,
+            truecolor: true,
+        };
+        app.picker = Some(painter.clone());
+        let a = room_window(&mut app, "!a:x.org", "alpha");
+        app.windows[a].lines.push_back(attachment("$img", MediaKind::Image, "sunset.png"));
+        app.switch_to(a);
+        let red = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 0, 0, 255])));
+        let picture = painter.fit(red, ratatui::layout::Size::new(24, 6)).unwrap();
+        app.previews.insert("$img".try_into().unwrap(), Preview::Ready(picture));
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let (x, y) = (0..20u16)
+            .flat_map(|y| (0..100u16).map(move |x| (x, y)))
+            .find(|&(x, y)| buffer[(x, y)].bg == ratatui::style::Color::Rgb(200, 0, 0))
+            .expect("the picture");
+        // The viewer is asked for (it then needs the server, which a test hasn't).
+        let asked = |app: &App| {
+            app.windows.iter().flat_map(|w| &w.lines).filter(|l| l.body.contains("isn't connected")).count()
+        };
+        app.on_click(Position::new(x + 1, y));
+        assert_eq!(asked(&app), 1, "a click on the picture opens it");
+        // Beside it, on the same row: its message, like a click on its text.
+        app.on_click(Position::new(x + 40, y));
+        assert_eq!(asked(&app), 1, "not the picture");
+        assert_eq!(app.select.as_deref().map(|e| e.as_str()), Some("$img"), "the message is selected");
     }
 
     #[test]

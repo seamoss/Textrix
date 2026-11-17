@@ -7,6 +7,13 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.21.1] - 2026-11-17
+
+### Fixed
+- A click beside an inline picture, on one of the rows it takes up, opened
+  it full screen. Only a click on the picture itself does now; beside it is
+  a click on its message, which selects it.
+
 ## [0.21.0] - 2026-11-15
 
 ### Added

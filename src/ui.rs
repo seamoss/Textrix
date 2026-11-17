@@ -77,8 +77,10 @@ pub struct RowHit {
     pub event: Option<OwnedEventId>,
     /// Underlined (link) stretches: (from column, to column, their text).
     pub links: Vec<(u16, u16, String)>,
-    /// Part of an image preview.
-    pub image: bool,
+    /// Part of an image preview: the columns the picture covers on this
+    /// row, from and to. Only a click there opens it; beside it is the
+    /// message's row like any other.
+    pub image: Option<(u16, u16)>,
     /// The sender's nick on it, to click.
     pub nick: Option<NickHit>,
 }
@@ -1599,7 +1601,9 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
     let mut rows: Vec<TLine<'static>> = Vec::new();
     // The message on each row, and whether it's part of an image, for
     // mouse clicks.
-    let mut row_events: Vec<(Option<OwnedEventId>, bool, Option<NickHit>)> = Vec::new();
+    // The message on each row, how wide a picture on it is, and a nick to
+    // click on it.
+    let mut row_events: Vec<(Option<OwnedEventId>, Option<u16>, Option<NickHit>)> = Vec::new();
     let mut found_selected = selected.is_none();
     // Whether the last row added was a divider.
     let mut divided = false;
@@ -1614,7 +1618,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && rows.last().is_none_or(|row| row.width() > 0 && !divided)
         {
             rows.push(TLine::default());
-            row_events.push((None, false, None));
+            row_events.push((None, None, None));
         }
         divided = false;
         let read: Vec<&str> = line
@@ -1635,10 +1639,10 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         {
             match previews.get(id) {
                 Some(Preview::Ready(protocol)) => {
-                    let height = protocol.size().height;
+                    let Size { width, height } = protocol.size();
                     placements.push((id.clone(), rows.len(), height));
                     rows.extend((0..height).map(|_| TLine::from(under.1.clone())));
-                    row_events.extend((0..height).map(|_| (Some(id.clone()), true, None)));
+                    row_events.extend((0..height).map(|_| (Some(id.clone()), Some(width), None)));
                 }
                 Some(Preview::Loading | Preview::Failed) => {}
                 None => {
@@ -1662,10 +1666,10 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                         let height = picture.size().height;
                         link_placements.push((url.to_owned(), rows.len(), height));
                         rows.extend((0..height).map(|_| TLine::from(under.1.clone())));
-                        row_events.extend((0..height).map(|_| (line.event_id.clone(), false, None)));
+                        row_events.extend((0..height).map(|_| (line.event_id.clone(), None, None)));
                     }
                     rows.push(link_title_row(&cfg.palette, title, width, &under));
-                    row_events.push((line.event_id.clone(), false, None));
+                    row_events.push((line.event_id.clone(), None, None));
                 }
                 Some(_) => {}
                 None => {
@@ -1708,7 +1712,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
                 .filter(|_| k == 0)
                 .zip(line.sender.clone())
                 .map(|((x, w), user)| (area.x + x as u16, area.x + (x + w) as u16, user));
-            row_events.push((line.event_id.clone(), false, nick));
+            row_events.push((line.event_id.clone(), None, nick));
         }
         rows.extend(rendered.into_iter().rev());
         if is_selected {
@@ -1724,7 +1728,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
         }
         if i > 0 && visible[i - 1].ts.date_naive() != line.ts.date_naive() {
             rows.push(day_changed(cfg, width, line.ts, set_apart));
-            row_events.push((None, false, None));
+            row_events.push((None, None, None));
             divided = true;
         }
         if i > 0
@@ -1733,7 +1737,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             && last_from_others.is_some_and(|j| j >= i)
         {
             rows.push(new_messages(&cfg.palette, width));
-            row_events.push((None, false, None));
+            row_events.push((None, None, None));
             divided = true;
         }
     }
@@ -1762,7 +1766,7 @@ fn draw_messages(f: &mut Frame, area: Rect, app: &mut App, idx: usize) {
             .chain(shown.iter().zip(&row_events[start..end]).map(|(row, (event, image, nick))| RowHit {
                 event: event.clone(),
                 links: underlined(row, area.x),
-                image: *image,
+                image: image.map(|width| (area.x + image_x, area.x + image_x + width)),
                 nick: nick.clone(),
             }))
             .collect(),
