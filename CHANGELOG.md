@@ -7,6 +7,29 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.22.0] - unreleased
+
+### Added
+- codebot carries on in its threads: more said in a pull request's thread
+  ("also keep it for a week") goes back to the same branch (as it is on
+  GitHub, with anything pushed to it since), commits, tests and pushes
+  there, and comments on the pull request. With Claude Code it carries on
+  in the same session, so it remembers what it did. A thank-you isn't more
+  work. It keeps its 30 most recent pull requests, across restarts.
+- codebot hands failing tests back: the agent gets what they printed and
+  another go, up to `fix_rounds` (2) more times, a commit a round, and the
+  pull request says how many rounds it took (⚠️ if they still fail).
+- codebot works on several repositories: `repos.<name>` beside the main
+  `repo`, each with the rooms it's the one for, and "codebot in <name>: …"
+  picks one anywhere. `/codebot start <checkout>` in a room adds it as that
+  room's; "codebot: repos" lists them.
+- codebot shows its work as it goes: with Claude Code, its status message
+  follows each step (✏️ editing todo.py, 🔎 looking for…, 🗒️ planning) and
+  how many files it's changed, and it ends with how long it took and what
+  it cost.
+- CODEBOT.md: the whole guide to codebot, from setting it up to safety and
+  troubleshooting; `/codebot help` in the app, and a section on the site.
+
 ## [0.21.1] - 2026-11-17
 
 ### Fixed

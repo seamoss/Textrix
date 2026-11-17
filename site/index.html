@@ -382,7 +382,7 @@
     <tr><td>⬆️ Upgrades</td><td><code>brew update &amp;&amp; brew upgrade textrix</code> and a running Textrix notices; <code>/restart</code> and you're on the new one, in the same window, with what you were typing.</td></tr>
     <tr><td>🔎 Search</td><td>Every room, encrypted ones too, up to 20,000 messages back in each, found instantly from an index kept encrypted on your disk. <code>/search from:sam in:"Book Club" before:2026 pizza</code></td></tr>
     <tr><td>🧵 Threads &amp; spaces</td><td>Threads open in their own windows. Spaces group your rooms.</td></tr>
-    <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. Drag a file onto the terminal to send it.</td></tr>
+    <tr><td>🖼️ Pictures!</td><td>Inline images, sharp in kitty, Ghostty, WezTerm and iTerm2, drawn in tiny blocks everywhere else, and a full-screen zoomable viewer. GIFs that actually <i>move</i>, in a terminal, full screen too. Drag a file onto the terminal to send it. <span class="new">NEW!</span></td></tr>
     <tr><td>🎤 Voice &amp; video</td><td>See the waveform ▁▃▅▇▅▃▁, press <code>z</code> to hear it; videos open in your player.</td></tr>
     <tr><td>🌈 Code</td><td>Code blocks in colour, even on a green-screen monitor (in shades of green).</td></tr>
     <tr><td>🔔 Bells</td><td>Mentions, highlight words, per-room notification levels that sync with your other clients, a visual bell, and a mentions inbox.</td></tr>
@@ -393,13 +393,48 @@
     <tr><td>🎙️ Voice &amp; offline</td><td>Ctrl+R records a voice message, waveform and all, like Element's. No network? Read what's saved, and what you send waits and goes when you're back. <span class="new">NEW!</span></td></tr>
     <tr><td>😀 Reactions &amp; hooks</td><td>Press <code>+</code> on a message for an emoji picker (your recent ones first, type to search). <code>notify_command</code> runs your own command on mentions, to push them to your phone. <code>theme = "auto"</code> goes light or dark with your terminal, and Alt+R jumps to where you stopped reading.</td></tr>
     <tr><td>🏠 Home &amp; gallery</td><td>F4 shows everything waiting for you (mentions, unread rooms, invitations), a key away. <code>/media</code> lays out a room's pictures, videos and files as tiles to flick through.</td></tr>
-    <tr><td>🧩 Plugins &amp; bots</td><td>Plugins in any language (a Python starter comes with it) hear the rooms you give them and answer, react and post. Run a bot on its own account in the background and give it plugins. codebot (experimental) takes coding requests to Claude Code or Codex and comes back with pull requests. <span class="new">NEW!</span></td></tr>
+    <tr><td>🧩 Plugins &amp; bots</td><td>Plugins in any language (a Python starter comes with it) hear the rooms you give them and answer, react and post. Run a bot on its own account in the background and give it plugins. <a href="#codebot">codebot</a> (experimental) takes coding requests to Claude Code, fixes its own failing tests, and comes back with pull requests. <span class="new">NEW!</span></td></tr>
     <tr><td>📋 Paste &amp; links</td><td>Ctrl+V pastes a screenshot straight from the clipboard, with a caption. <code>/links</code> lists a room's links with their titles, to open, copy or find the message again. <span class="new">NEW!</span></td></tr>
     <tr><td>🔗 Links &amp; edits</td><td>Links show the page's title and picture, fetched by your homeserver so the site never sees you. Edited messages keep what they said before (<code>i</code>), <code>||spoilers||</code> stay hidden until revealed, and irssi's <code>/exec -o uptime</code> is back.</td></tr>
     <tr><td>🏖️ Away log</td><td>Go <code>/away</code>, come back to "while you were away: 3 mentions and 2 DMs", all in one window. And a status bar you arrange yourself.</td></tr>
     <tr><td>📜 Scripts</td><td>Like irssi's Perl scripts, but in Rhai: drop a file in <code>~/.textrix/scripts</code> to add commands, answer messages, run timers and put things in the status bar. The examples include dice.</td></tr>
-    <tr><td>⌨️ Commands</td><td>/join /msg /me /away /ignore /lastlog /search /alias … and a few that aren't in <code>/help</code>.</td></tr>
+    <tr><td>⌨️ Commands</td><td>/join /msg /me /away /ignore /lastlog /search /alias … <code>/np</code> tells the room what you're listening to, like mIRC did ("* you is listening to ♫ …"), and a few aren't in <code>/help</code>.</td></tr>
   </table>
+
+  <h2 id="codebot">🤖 Meet codebot!!</h2>
+  <p>
+    Ask for a change in a chat room. A robot writes it, runs your tests, fixes what it broke,
+    and sends you a <b>pull request</b>. Say more in its thread and it keeps going on the same one.
+    It talks as its own account, works on branches of its own, and <b>never merges anything</b>:
+    you read it, you decide. (Experimental! Try it on a repository you don't mind.)
+  </p>
+
+  <div class="term-wrap" aria-label="codebot at work in a room, drawn with HTML">
+    <div class="term">
+      <div class="titlebar"><span>Team Tests — Textrix</span><span class="btns" aria-hidden="true"><span>_</span><span>□</span><span>×</span></span></div>
+      <div class="msgs"><span class="ts">14:02</span> <span class="rx">&lt;</span><span class="me">you</span><span class="rx">&gt;</span>          <span class="bcol">│</span> codebot: make the to-do list say how many items are left <span class="rx">[👀]</span>
+<span class="ts">14:02</span> <span class="rx">&lt;</span><span class="n1">codebot</span><span class="rx">&gt;</span>      <span class="bcol">│</span> <span class="rx">└</span> ⏳ Working (1m) on codebot/make-the-to-do-list-say-how in todo.
+                     <span class="bcol">│</span>   ✏️ editing todo.py · 2 files changed
+<span class="ts">14:03</span> <span class="rx">&lt;</span><span class="n1">codebot</span><span class="rx">&gt;</span>      <span class="bcol">│</span> <span class="rx">└</span> 🧪 The tests failed; round 2 of 3: claude is fixing them.
+<span class="ts">14:04</span> <span class="rx">&lt;</span><span class="n1">codebot</span><span class="rx">&gt;</span>      <span class="bcol">│</span> <span class="rx">└</span> ✅ Pull request: <u>https://github.com/you/todo/pull/12</u>
+                     <span class="bcol">│</span>   2 files changed, 23 insertions(+); tests passed after 2 rounds · 1m48s
+<span class="ts">14:06</span> <span class="rx">&lt;</span><span class="me">you</span><span class="rx">&gt;</span>          <span class="bcol">│</span> <span class="rx">└</span> also say "all done!" when there's nothing left
+<span class="ts">14:07</span> <span class="rx">&lt;</span><span class="n1">codebot</span><span class="rx">&gt;</span>      <span class="bcol">│</span> <span class="rx">└</span> ✅ Updated the pull request: <u>https://github.com/you/todo/pull/12</u>
+<span class="ts">14:07</span> <span class="rx">&lt;</span><span class="n2">sam</span><span class="rx">&gt;</span>          <span class="bcol">│</span> codebot: delete the database
+<span class="ts">14:07</span> <span class="rx">&lt;</span><span class="n1">codebot</span><span class="rx">&gt;</span>      <span class="bcol">│</span> Sorry, I only take work from the people I've been told to.</div>
+      <div class="input"><span class="p">[Team Tests]</span> lgtm <span class="cursor"> </span></div>
+    </div>
+  </div>
+
+  <ul>
+    <li><b>One command to set up:</b> <code>/codebot start ~/code/project</code> in the room. (Make it a Matrix account first: robots can't sign themselves up.)</li>
+    <li><b>Claude Code</b> does the work (or Codex, aider, or your own), on a branch and a worktree of its own. You watch it go, step by step, right in the thread.</li>
+    <li><b>Tests fail?</b> It hands the failures back and has another go. Then it tells you how many goes it took.</li>
+    <li><b>Keep talking</b> in its thread: same branch, same pull request, and Claude remembers what it did.</li>
+    <li><b>Several projects:</b> one per room, or <code>codebot in api: …</code></li>
+    <li><b>Kept on a leash:</b> only the people you allow, its own branches only, time limits, a daily cap, and it <i>never</i> merges.</li>
+  </ul>
+  <p>Everything about it: <a href="https://github.com/seamoss/Textrix/blob/master/CODEBOT.md">CODEBOT.md</a></p>
 
   <h2 id="screenshots">📸 Real screenshots!!</h2>
   <p>

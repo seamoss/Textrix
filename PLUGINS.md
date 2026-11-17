@@ -170,78 +170,26 @@ The bot joins rooms when someone in its `accept_invites_from` invites it
 (`bot new` puts your Matrix IDs there). Its plugins go in its own
 `plugins` folder and config.toml, granted its rooms, often `rooms = ["*"]`:
 everything it's invited to. Messages that mention the bot arrive with
-`highlight: true`.
+`highlight: true`. A name typed out rather than completed isn't a mention
+to the server, though (its old "contains my name" rules don't apply to a
+message that says whom it mentions, as Textrix's do), so a bot that answers
+to its name should look for it at the front of the text too, as codebot
+does.
 
 ## codebot
 
-*Experimental:* it has made real pull requests with Claude Code on a test
-repository, but it's young. Try it on a repository you don't mind first.
+codebot is the plugin this protocol was built for: it takes coding requests
+in a room ("codebot: make the login form remember the user name") to a
+coding agent (Claude Code, Codex, aider, or your own) on a branch of its
+own, runs the tests (handing failures back to the agent), and opens a pull
+request; more in its thread carries on with the same one. It runs in a bot,
+so it talks as itself, and `/codebot start ~/code/project` in a room sets
+it all up from your own Textrix. *Experimental:* try it on a repository you
+don't mind first.
 
-codebot takes coding requests in a room to a coding agent (Claude Code,
-Codex, aider, or your own) on a branch of its own, and opens a pull request.
-It runs in a bot, so it talks as itself.
-
-The quick way, from your own Textrix: make the bot a Matrix account on your
-server (Textrix can't make accounts), then in the room it's for:
-
-```
-/codebot start ~/code/project
-```
-
-The first time, that makes the bot (`~/.textrix/bots/codebot`) and asks
-for its account in the `.env` there; run it again once that's in. Then it
-writes codebot into the bot with its settings: the repository, the branch
-pull requests go to (origin's default), the tests it guesses from the
-project (`cargo test`, `npm test`, `go test ./...`, pytest or unittest,
-`make test`), and you as the one who gives it work. It grants it the room,
-starts the bot (or restarts it to read new settings), and invites it in.
-The bot gets your Textrix's environment, so its PATH finds the agent, `git`
-and `gh`. `/codebot` says how it's set up, `/codebot stop` stops it, and
-`/codebot log` shows the end of its log. In another room, `/codebot start`
-adds that room too; with a repository, it moves to that one.
-
-By hand:
-
-```sh
-textrix bot new codebot          # then put its account in ~/.textrix/bots/codebot/.env
-textrix bot start codebot
-textrix bot attach codebot       # invite it to the room, then, there:
-/plugin new codebot codebot
-```
-
-Then fill in its settings in the bot's config.toml and `/reload`:
-
-```toml
-[plugins.codebot.settings]
-repo = "~/code/project"        # a git checkout whose origin is on GitHub
-base = "main"                  # branches start here; pull requests go here
-agent = "claude"               # "claude", "codex", "aider", or ["my-agent", "{prompt}"]
-allow = ["@you:example.org"]   # who may give it work (bot new fills in yours)
-test = "cargo test"            # optional: run before pushing; the result goes in the PR
-approve = false                # true: it waits for "go" in the thread
-max_minutes = 30               # per task
-max_per_day = 20
-```
-
-In the room, "codebot: make the login form remember the user name" (or
-`!code …`). It reacts 👀, answers in a thread under the request, makes a
-branch `codebot/…` in a worktree of its own, runs the agent there with the
-request, commits what it changed, runs the tests, pushes the branch, opens
-the pull request with `gh pr create`, and posts the link (✅). "stop" in the
-thread (or "codebot: stop") ends a task, whatever the agent started
-included; "codebot: status" says what it's doing. One task at a time, a
-few queued.
-
-What keeps it in check:
-
-- Only people in `allow` can give it work; others are told so (once an
-  hour).
-- The request reaches the agent as one argument, never through a shell.
-- The agent only edits files: codebot commits, and pushes only its own
-  `codebot/…` branch. It never merges, and never pushes to `base`. A pull
-  request is a proposal: read it before merging.
-- A time limit per task and a cap per day.
-- Run the bot as a user (or on a machine) with nothing else worth taking,
-  and give `gh` a token for that repository only. The agent can run what
-  its own settings let it (Claude Code's `acceptEdits` edits files but
-  asks before running commands, which in a bot means it doesn't).
+[CODEBOT.md](CODEBOT.md) has the whole story: setting it up, talking to it,
+follow-ups, tests, several repositories, the agents, its settings, safety
+and troubleshooting. Its source,
+[examples/plugins/codebot.py](examples/plugins/codebot.py), is a fuller
+example of a plugin than hello.py: a worker thread, progress edited in
+place, reactions, threads, and its own state across restarts.

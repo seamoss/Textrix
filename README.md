@@ -802,13 +802,12 @@ in a room gives it a plugin there. `/bot [list | new | start | stop
 **codebot** (experimental) is a plugin for a bot that takes coding requests ("codebot:
 make the login form remember the user name") from the people you allow,
 has a coding agent (Claude Code, Codex, aider, or your own) do it on a
-branch of its own, and opens a pull request, reporting in a thread as it
-goes. It only ever pushes its own `codebot/…` branches and never merges.
-Once you've made it a Matrix account, `/codebot start ~/code/project` in
-the room it's for sets it all up from your own Textrix: the bot, codebot
-in it with the repository and its tests, the room granted, the bot started
-and invited. `/codebot` says how it's set up; [PLUGINS.md](PLUGINS.md#codebot)
-has the rest.
+branch of its own, runs the tests (handing failures back to the agent), and
+opens a pull request, reporting in a thread as it goes; more in that thread
+carries on with the same pull request. It only ever pushes its own
+`codebot/…` branches and never merges. Once you've made it a Matrix
+account, `/codebot start ~/code/project` in the room it's for sets it all
+up from your own Textrix. [CODEBOT.md](CODEBOT.md) has the whole story.
 
 ## Optional preferences
 
