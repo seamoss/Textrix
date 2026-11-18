@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.26.0] - unreleased
+## [0.26.0] - 2026-11-17
 
 ### Added
 - Mark as unread: `/unread` marks the room you're in unread, to come back
