@@ -495,6 +495,54 @@ fn the_room_browser_lists_searches_and_goes_to_rooms() {
 }
 
 #[test]
+fn rooms_marked_unread_wait_in_unreads_until_opened() {
+    let mut app = test_app();
+    let owls = room_window(&mut app, "!owls:x.org", "Night Owls");
+    let books = room_window(&mut app, "!books:x.org", "Book Club");
+    app.switch_to(owls);
+    // Marked in another client: it comes with the room's details.
+    let meta = |name: &str, id: &str, marked: bool| RoomMeta {
+        room_id: id.try_into().unwrap(),
+        name: name.into(),
+        topic: None,
+        encrypted: false,
+        is_dm: false,
+        dm_user: None,
+        is_space: false,
+        avatar: None,
+        fully_read: None,
+        unread: 0,
+        highlights: 0,
+        pinned: Vec::new(),
+        favourite: false,
+        bridges: Vec::new(),
+        marked_unread: marked,
+    };
+    app.on_event(AppEvent::Rooms { account: "t".into(), rooms: vec![meta("Book Club", "!books:x.org", true)] });
+    assert!(app.windows[books].marked_unread);
+    let draw = |app: &mut App| {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 14)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..14).map(|y| (0..90).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>()
+    };
+    let rows = draw(&mut app);
+    let unreads = rows.iter().position(|r| r.contains("Unreads")).expect("an Unreads section");
+    assert!(rows[unreads + 1].contains("Book Club") && rows[unreads + 1].contains('•'), "{rows:#?}");
+    // Opening it: not any more (and nothing new to show for it).
+    app.switch_to(books);
+    assert!(!app.windows[books].marked_unread);
+    assert!(!draw(&mut app).iter().any(|r| r.contains("Unreads")), "back where it was");
+    // /unread needs the server, which says so.
+    app.switch_to(owls);
+    assert!(app.cmd_unread("").unwrap_err().contains("isn't connected"));
+    // /markread clears it too.
+    app.windows[owls].marked_unread = true;
+    app.cmd_markread("").unwrap();
+    assert!(!app.windows[owls].marked_unread);
+}
+
+#[test]
 fn the_status_bars_show_what_you_list() {
     let mut app = test_app();
     let a = room_window(&mut app, "!a:x.org", "Night Owls");

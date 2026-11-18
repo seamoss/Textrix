@@ -74,6 +74,7 @@ impl Scene {
                 highlights: 0,
                 pinned: Vec::new(),
                 bridges: Vec::new(),
+                marked_unread: false,
             })
             .collect();
         self.app.on_event(AppEvent::Rooms { account: ACCOUNT.into(), rooms });

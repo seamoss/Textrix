@@ -414,6 +414,9 @@ pub struct RoomMeta {
     pub favourite: bool,
     /// Bridges to other chat networks: where its messages also go.
     pub bridges: Vec<Bridge>,
+    /// Marked unread (`m.marked_unread`), here or in another client: to
+    /// come back to.
+    pub marked_unread: bool,
 }
 
 /// A bridge to another chat network, from the room's `m.bridge` state

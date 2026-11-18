@@ -7,6 +7,14 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.26.0] - unreleased
+
+### Added
+- Mark as unread: `/unread` marks the room you're in unread, to come back
+  to (`/unread <room>` another). It waits in Unreads with a • until you
+  open it again (or `/markread`). It's Matrix's `m.marked_unread`, the
+  same in Element and your other clients, and one marked there shows here.
+
 ## [0.25.0] - 2026-11-17
 
 ### Added

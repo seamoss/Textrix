@@ -189,6 +189,7 @@ impl App {
         }
         self.active = idx;
         self.windows[idx].activity = Activity::None;
+        self.clear_marked_unread(idx);
         if let Some(unsent) = self.windows[idx].unsent.take() {
             if let Some(text) = unsent.text {
                 self.input.restore(text);

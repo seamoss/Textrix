@@ -90,6 +90,37 @@ impl App {
         Ok(())
     }
 
+    /// `/unread [room]`: this room (or another) marked unread, to come back
+    /// to, or not; `m.marked_unread`, so the same in your other clients.
+    pub(super) fn cmd_unread(&mut self, args: &str) -> Result<(), String> {
+        let idx = match args.trim() {
+            "" => self.active,
+            name => self.find_window(name)?,
+        };
+        let key = self.windows[idx].room.clone().filter(|k| k.thread.is_none()).ok_or("that's for rooms and DMs")?;
+        let acct = self.connected(&key.account).ok_or_else(|| format!("{} isn't connected", key.account))?;
+        let w = &mut self.windows[idx];
+        w.marked_unread = !w.marked_unread;
+        acct.set_marked_unread(key.room_id, w.marked_unread);
+        let name = w.title().to_owned();
+        self.info(if self.windows[idx].marked_unread {
+            format!("{name} is marked unread: in Unreads until you open it again")
+        } else {
+            format!("{name} isn't marked unread any more")
+        });
+        Ok(())
+    }
+
+    /// Opened (or read): a room marked unread isn't any more.
+    pub(super) fn clear_marked_unread(&mut self, idx: usize) {
+        let Some(w) = self.windows.get_mut(idx) else { return };
+        let Some(key) = w.room.clone().filter(|k| k.thread.is_none() && w.marked_unread) else { return };
+        w.marked_unread = false;
+        if let Some(acct) = self.connected(&key.account) {
+            acct.set_marked_unread(key.room_id, false);
+        }
+    }
+
     /// `/nickname [who [name]]`: your own name for someone, shown in place of
     /// theirs everywhere in Textrix and never sent anywhere.
     pub(super) fn cmd_nickname(&mut self, args: &str) -> Result<(), String> {
@@ -285,6 +316,7 @@ impl App {
             "media" => self.open_gallery(gallery::Tab::Media),
             "links" => self.open_gallery(gallery::Tab::Links),
             "favourite" => self.cmd_favourite(args),
+            "unread" => self.cmd_unread(args),
             "home" => {
                 self.open_home();
                 Ok(())
@@ -1043,6 +1075,7 @@ impl App {
         let mode = self.cfg.read_receipts;
         let mut rooms = 0;
         for idx in targets {
+            self.clear_marked_unread(idx);
             let w = &mut self.windows[idx];
             w.activity = Activity::None;
             let latest = w.latest_event();

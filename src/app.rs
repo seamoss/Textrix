@@ -125,6 +125,8 @@ pub struct Window {
     /// Bridges to other networks: a ⇄ in the window list, named in the
     /// topic bar.
     pub bridges: Vec<crate::model::Bridge>,
+    /// Marked unread, to come back to: in Unreads until you open it.
+    pub marked_unread: bool,
     pub lines: VecDeque<Line>,
     pub activity: Activity,
     /// Rows scrolled up from the bottom.
@@ -205,6 +207,7 @@ impl Window {
             avatar: None,
             favourite: false,
             bridges: Vec::new(),
+            marked_unread: false,
             lines: VecDeque::new(),
             activity: Activity::None,
             scroll: 0,
@@ -244,6 +247,7 @@ impl Window {
         self.pinned = meta.pinned.clone();
         self.favourite = meta.favourite;
         self.bridges = meta.bridges.clone();
+        self.marked_unread = meta.marked_unread;
         if self.marker.is_none() {
             self.marker = meta.fully_read.clone();
         }
@@ -1168,6 +1172,11 @@ const COMMANDS: &[Cmd] = &[
         name: "bot",
         args: "[list | new <name> | start <name> | stop <name>]",
         help: "Bots: Textrix in the background as another Matrix account, doing what its plugins do",
+    },
+    Cmd {
+        name: "unread",
+        args: "[room]",
+        help: "Mark this room (or another) unread, to come back to: in Unreads until you open it, in every client",
     },
     Cmd {
         name: "codebot",

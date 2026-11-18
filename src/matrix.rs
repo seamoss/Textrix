@@ -884,6 +884,7 @@ pub async fn room_meta(room: &Room) -> RoomMeta {
         pinned: room.pinned_event_ids().unwrap_or_default(),
         favourite: room.is_favourite(),
         bridges: bridges_of(room).await,
+        marked_unread: room.is_marked_unread(),
     }
 }
 
@@ -1773,6 +1774,7 @@ impl Account {
             // Read from the store with an await; the room's next update
             // brings them.
             bridges: Vec::new(),
+            marked_unread: room.is_marked_unread(),
         })
     }
 
@@ -4096,6 +4098,16 @@ impl Account {
         let acct = self.clone();
         self.spawn_op(Some(room_id.clone()), async move {
             acct.room(&room_id)?.set_is_favourite(on, None).await?;
+            Ok(())
+        });
+    }
+
+    /// Mark a room unread (`m.marked_unread`), or not: the same in your
+    /// other clients.
+    pub fn set_marked_unread(&self, room_id: OwnedRoomId, on: bool) {
+        let acct = self.clone();
+        self.spawn_op(Some(room_id.clone()), async move {
+            acct.room(&room_id)?.set_unread_flag(on).await?;
             Ok(())
         });
     }

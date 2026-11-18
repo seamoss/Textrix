@@ -229,7 +229,10 @@ Favourites (the `m.favourite` tag), so they're the same everywhere you
 use Matrix. Next come other rooms and DMs with messages you haven't read,
 under **Unreads**, mentions first; once you've read them they go back to
 **Rooms** (grouped under their spaces, if you're in any) or **DMs**, each
-by name. A window's number stays the same wherever it's listed, so
+by name. `/unread` marks the room you're in unread, to come back to
+(`/unread <room>` another): it waits in Unreads with a • until you open it
+again. It's Matrix's `m.marked_unread`, so it's the same in Element and
+your other clients, and one marked there shows here. A window's number stays the same wherever it's listed, so
 Alt+1..0 and `/window N` always find it.
 
 A room bridged to another network (Discord, Telegram, Slack, Signal, IRC…)
@@ -266,7 +269,7 @@ bindings.
 
 | Area | Commands |
 |---|---|
-| Rooms | `/create [-public] [-space] <name>`, `/join`, `/favourite [room]` (see the window list above), `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
+| Rooms | `/create [-public] [-space] <name>`, `/join`, `/favourite [room]` and `/unread [room]` (see the window list above), `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
 | Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [<version> confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all. `/close` shuts a room you own down for everyone: it says what it will do, and `/close confirm` makes it invite-only, takes it off the directory, removes its addresses, withdraws invites, removes every member less powerful than you, then leaves and forgets it. Matrix has no "delete room" for clients (other servers keep their copy while their members are in it), but when you're an admin on your Synapse homeserver, `/close` also has it delete the room and block it there |
 | Directory | `/list [server \| search]`: the room browser (see [Finding rooms](#finding-rooms)) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |

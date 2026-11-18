@@ -865,7 +865,8 @@ pub fn sidebar_entries(app: &App) -> Vec<SidebarEntry> {
     let mut out = vec![SidebarEntry::Window(0)];
     out.extend((1..app.windows.len()).filter(|&i| app.windows[i].room.is_none()).map(SidebarEntry::Window));
     let rooms = |i: &usize| app.windows[*i].room.is_some();
-    let unread = |i: &usize| app.windows[*i].activity >= Activity::Message;
+    // Marked unread, to come back to, counts too.
+    let unread = |i: &usize| app.windows[*i].activity >= Activity::Message || app.windows[*i].marked_unread;
     let by_name = |a: &usize, b: &usize| {
         let name = |i: &usize| app.windows[*i].title().to_lowercase();
         name(a).cmp(&name(b)).then(a.cmp(b))
@@ -1021,6 +1022,8 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let unread = match (active, w.typing.is_empty(), w.unread()) {
         (false, false, _) => "✎".to_owned(),
         (false, true, n) if n > 0 => n.to_string(),
+        // Marked unread, to come back to.
+        (false, true, _) if w.marked_unread => "•".to_owned(),
         // Something you started typing there and haven't sent.
         (false, true, _) if w.has_draft() => "…".to_owned(),
         _ => String::new(),
@@ -1037,12 +1040,14 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     let used = number.len() + lead_w + display_len(&name) + display_len(bridged) + display_len(&unread);
     let pad = inner.saturating_sub(used);
     let muted = app.room_mode(i) == Some(RoomNotificationMode::Mute);
+    // Marked unread looks like new messages, unless there's more than that.
+    let activity = if w.marked_unread { w.activity.max(Activity::Message) } else { w.activity };
     let style = if active {
         t.current
-    } else if muted && w.activity == Activity::None {
+    } else if muted && activity == Activity::None {
         t.dim
     } else {
-        activity_style(t, w.activity)
+        activity_style(t, activity)
     };
     let number_style = match (active, app.on_screen(i)) {
         (true, _) => style,
@@ -1060,7 +1065,7 @@ fn window_row(app: &App, i: usize, inner: usize) -> TLine<'static> {
     }
     parts.extend([
         Span::styled(" ".repeat(pad), style),
-        Span::styled(unread, if active { style } else { activity_style(t, w.activity) }),
+        Span::styled(unread, if active { style } else { activity_style(t, activity) }),
     ]);
     TLine::from(parts)
 }
