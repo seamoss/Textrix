@@ -501,8 +501,7 @@ impl App {
     /// the room you're in, added to config.toml and started.
     fn new_plugin(&mut self, name: &str, kind: &str) -> Result<(), String> {
         // codebot in your own Textrix would post as you: it goes in a bot.
-        let in_bot = self.paths.base.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "bots");
-        if kind == "codebot" && !in_bot {
+        if kind == "codebot" && !self.is_bot() {
             return Err("codebot goes in a bot of its own, so it doesn't talk as you: /codebot start <repo> in the \
                         room it's for sets it up"
                 .into());

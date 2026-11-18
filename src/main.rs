@@ -34,6 +34,7 @@ mod script;
 mod sealed;
 mod search;
 mod servers;
+mod setup;
 mod switcher;
 mod term;
 mod theme;
@@ -158,6 +159,10 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Set up an account, the first or another: a few questions, then the
+    /// dotfile, with your password left for you to put in (never typed
+    /// into Textrix)
+    Setup,
     /// Bots: Textrix in the background as another Matrix account (the
     /// bot's), from a home of its own, doing what its plugins do
     #[command(subcommand)]
@@ -483,6 +488,7 @@ async fn run() -> Result<()> {
         return check(&paths);
     }
     match cli.command {
+        Some(Command::Setup) => return setup::run(&paths).await,
         Some(Command::Bot(command)) => return bot_command(&paths, command).await,
         #[cfg(target_os = "macos")]
         Some(Command::App(command)) => return app_command(command),

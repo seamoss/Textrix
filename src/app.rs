@@ -1009,6 +1009,11 @@ pub struct App {
     in_script: usize,
     /// When you went /away: from then, DMs collect with your mentions.
     away_since: Option<chrono::DateTime<Local>>,
+    /// When you last pressed a key, clicked, pasted or came back to the
+    /// terminal: auto-away counts from it.
+    last_input: Instant,
+    /// Auto-away set the away you're in (so your being back ends it).
+    auto_away: bool,
     /// The theme `cfg.palette` is: yours, or the focused room's own.
     palette_for: ThemeId,
     /// The terminal reports keys the enhanced way (kitty's protocol).
@@ -1206,7 +1211,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
     Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
     Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
-    Cmd { name: "away", args: "[-all] [message]", help: "Set away with a message, or come back (no message)" },
+    Cmd {
+        name: "away",
+        args: "[-all] [message]",
+        help: "Set away with a message, or come back (no message); auto_away does it after you've been idle",
+    },
     Cmd { name: "ignore", args: "[nick|@user]", help: "Hide a user everywhere, or list ignored users" },
     Cmd {
         name: "notify",
@@ -1619,6 +1628,8 @@ impl App {
             editor_request: None,
             enhanced_keys: false,
             away_since: None,
+            last_input: Instant::now(),
+            auto_away: false,
             in_script: 0,
             palette_for,
             recent: Vec::new(),
@@ -3349,7 +3360,51 @@ impl App {
 
     /// Once a second: last session's split if it's waiting, scripts' live
     /// status items, and their stores saved if they changed.
+    /// You're here: back from auto-away, if it had set you away.
+    fn present(&mut self) {
+        self.last_input = Instant::now();
+        if std::mem::take(&mut self.auto_away) {
+            // Every server, whether or not its away had come through yet.
+            for acct in self.accounts.values().filter_map(|s| s.account.clone()) {
+                acct.set_away(None);
+            }
+        }
+    }
+
+    /// Whether you've been idle long enough for auto-away: it's on, it
+    /// isn't a bot (no one at its keyboard), and you aren't away already
+    /// (your own /away stays as it is).
+    fn idle_for_away(&self) -> bool {
+        let minutes = self.cfg.auto_away;
+        minutes > 0
+            && !self.auto_away
+            && !self.is_bot()
+            && !self.accounts.values().any(|s| s.away.is_some())
+            && self.last_input.elapsed() >= Duration::from_secs(u64::from(minutes) * 60)
+    }
+
+    /// A bot's Textrix (`~/.textrix/bots/<name>`).
+    fn is_bot(&self) -> bool {
+        self.paths.base.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "bots")
+    }
+
+    /// Auto-away: away on every connected server once you've been idle.
+    fn check_idle(&mut self) {
+        if !self.idle_for_away() {
+            return;
+        }
+        let accounts: Vec<Account> = self.accounts.values().filter_map(|s| s.account.clone()).collect();
+        if accounts.is_empty() {
+            return;
+        }
+        self.auto_away = true;
+        for acct in accounts {
+            acct.set_away(Some(self.cfg.auto_away_message.clone()));
+        }
+    }
+
     pub fn on_clock(&mut self) {
+        self.check_idle();
         if self.recording.as_ref().is_some_and(|(_, r)| r.started.elapsed() >= crate::voice::MAX) {
             self.info("that's ten minutes, the most a voice message can be: sending it");
             self.stop_voice(true);
@@ -3499,6 +3554,14 @@ impl App {
         // Whatever an Escape is held for, it goes first.
         if !matches!(ev, Event::Key(_)) {
             self.esc_timeout();
+        }
+        let here = match &ev {
+            Event::Key(_) | Event::Paste(_) | Event::FocusGained => true,
+            Event::Mouse(m) => m.kind != MouseEventKind::Moved,
+            _ => false,
+        };
+        if here {
+            self.present();
         }
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key_in(key),
@@ -9804,6 +9867,62 @@ mod tests {
         let reloaded = Theme::resolve(&app.cfg.theme, &BTreeMap::new(), &base.join("themes")).unwrap();
         assert_eq!(reloaded.color_of("link").flatten(), lighter, "the file has the change");
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn auto_away_comes_when_youre_idle_and_goes_when_youre_back() {
+        let mut app = test_app();
+        let ago = |minutes: u64| Instant::now().checked_sub(Duration::from_secs(minutes * 60)).unwrap();
+        assert_eq!(app.cfg.auto_away, 15, "on unless you say");
+        app.last_input = ago(14);
+        assert!(!app.idle_for_away(), "not yet");
+        app.last_input = ago(16);
+        assert!(app.idle_for_away());
+        // Already away (your own /away): left as it is.
+        let def = ServerDef { name: "t".into(), homeserver: None, user: "@me:example.org".into() };
+        let state = AccountState {
+            user: def.user.clone(),
+            def,
+            nick: None,
+            status: ConnStatus::Online,
+            verified: None,
+            away: None,
+            account: None,
+        };
+        app.accounts.insert("t".into(), state);
+        app.accounts.get_mut("t").unwrap().away = Some("lunch".into());
+        assert!(!app.idle_for_away());
+        app.accounts.get_mut("t").unwrap().away = None;
+        // Set by auto-away already; or off.
+        app.auto_away = true;
+        assert!(!app.idle_for_away());
+        app.auto_away = false;
+        app.cfg.auto_away = 0;
+        assert!(!app.idle_for_away(), "0: never");
+        app.cfg.auto_away = 15;
+        // A key brings you back: counting starts again.
+        app.auto_away = true;
+        app.on_terminal(Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)));
+        assert!(!app.auto_away && !app.idle_for_away());
+        // A mouse moving over it isn't you being back.
+        app.last_input = ago(16);
+        app.on_terminal(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(app.idle_for_away());
+        app.on_terminal(Event::FocusGained);
+        assert!(!app.idle_for_away(), "coming back to the terminal is");
+
+        // A bot never: nobody's at its keyboard.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let base = std::env::temp_dir().join("bots").join("helper");
+        let paths = Paths { base: base.clone(), env_file: base.join(".env") };
+        let mut bot = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx);
+        bot.last_input = ago(60);
+        assert!(bot.is_bot() && !bot.idle_for_away());
     }
 
     #[test]

@@ -41,12 +41,12 @@ class Textrix < Formula
   def caveats
     <<~EOS
       Textrix only connects to the servers listed in ~/.textrix/.env. To start:
-        mkdir -p ~/.textrix
-        cp #{opt_pkgshare}/env.example ~/.textrix/.env
-        chmod 600 ~/.textrix/.env
-      then fill in your server and account, check it with `textrix --check`,
-      and run `textrix`. Passwords can come from a password manager instead
-      of the file; #{opt_pkgshare}/env.example explains how.
+        textrix setup
+      asks for your Matrix ID and writes that file, leaving your password for
+      you to put in it (it's never typed into Textrix); then run `textrix`.
+      Or by hand: copy #{opt_pkgshare}/env.example to ~/.textrix/.env,
+      chmod 600 it and fill it in. Passwords can come from a password manager
+      instead of the file; env.example explains how.
 
       To upgrade: brew update && brew upgrade textrix. A Textrix that's running (in the
       background too) then shows "[x.y.z installed: /restart]", and

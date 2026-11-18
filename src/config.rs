@@ -110,6 +110,12 @@ pub struct Config {
     /// Say so when you write to someone who's away or long gone ("sam is
     /// away: lunch"), when it's news. Off unless you turn it on.
     pub away_notes: bool,
+    /// Minutes without a key, click or paste before you're marked away on
+    /// every server (0: never). A key or click brings you back, with what
+    /// came in meanwhile. Your own /away is left alone.
+    pub auto_away: u32,
+    /// The away message auto-away sets.
+    pub auto_away_message: String,
     /// What `/np` says: {track} ("Artist – Title"), {title}, {artist},
     /// {album}, {player}; starting with "/me " makes it an action.
     pub np_format: String,
@@ -268,6 +274,8 @@ impl Default for Config {
             editor: String::new(),
             system_italic: true,
             away_notes: false,
+            auto_away: 15,
+            auto_away_message: "away from the keyboard".into(),
             np_format: "/me is listening to ♫ {track}".into(),
             np_command: String::new(),
             show_joins: true,

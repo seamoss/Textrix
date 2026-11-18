@@ -102,7 +102,7 @@ impl EnvFile {
     pub fn servers(&self) -> Result<Servers> {
         let mut out = Servers::default();
         let Some(text) = self.read()? else {
-            bail!("no server config at {}", self.path.display());
+            bail!("no server config at {}: textrix setup makes one", self.path.display());
         };
 
         let mut defs: Vec<ServerDef> = Vec::new();

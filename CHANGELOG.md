@@ -7,6 +7,24 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.24.0] - unreleased
+
+### Added
+- `textrix setup`: a few questions instead of copying env.example. It asks
+  for your Matrix ID, finds your homeserver (the way signing in does) and
+  checks it signs in with a password, suggests a short name, and writes
+  the dotfile, readable only by you. It never asks for your password: that
+  goes in the line it leaves in the file (or comes from a password
+  manager), never typed into Textrix; setup offers your editor for it,
+  then says what's in place. Run it again to add another account; an
+  existing dotfile is only added to. Without a dotfile, Textrix now says
+  to run it, and so do Homebrew's install notes.
+- Auto-away, like irssi's: after 15 minutes without a key, click or paste
+  you're away on every server ("away from the keyboard"); a key, a click
+  or coming back to the terminal makes you back, with the awaylog of what
+  came in. Your own `/away` is left alone, and bots never go away.
+  `auto_away` sets the minutes (0: off), `auto_away_message` the message.
+
 ## [0.23.0] - 2026-11-17
 
 ### Added

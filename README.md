@@ -31,8 +31,9 @@ place (see [Upgrading while it runs](#upgrading-while-it-runs)).
 
 Or download a build for macOS (universal, or per chip) or Linux (x86_64,
 ARM) from the [releases](https://github.com/seamoss/Textrix/releases).
-Then make your dotfile (below) and run `textrix`; `textrix --check` tells
-you whether everything's in place.
+Then `textrix setup` makes your dotfile (see [Setup](#setup)), and
+`textrix` signs you in; `textrix --check` tells you whether everything's
+in place.
 
 ```text
 textrix [--env FILE] [--home DIR] [--theme NAME]
@@ -95,6 +96,21 @@ it on.
 ## Setup
 
 Connections come only from a private dotfile. No file, no connections.
+
+```sh
+textrix setup
+```
+
+asks for your Matrix ID, finds your homeserver (the way signing in does)
+and checks it signs in with a password, suggests a short name for it, and
+writes the dotfile, readable only by you, with your account in it. It never
+asks for your password: that goes in the file, on the
+`TEXTRIX_<NAME>_PASSWORD=` line it leaves, or comes from a password manager
+(below), so it's never typed into Textrix. Setup offers to open the file in
+your editor for it, then says what's in place. Run it again to add another
+account; an existing dotfile is only ever added to.
+
+Or by hand:
 
 | Build              | Dotfile                         |
 |--------------------|---------------------------------|
@@ -554,6 +570,13 @@ line for you to send. Esc closes it.
   the mentions window too. Coming back says what came in ("while you were
   away (1h 5m): 3 mentions (Team Tests) and 2 DMs (sam), in the mentions
   window") and opens it.
+- Like irssi's autoaway: after 15 minutes without a key, click or paste
+  (the terminal in the background, Textrix running with no terminal
+  attached), you're away on every server, with "away from the keyboard".
+  A key, a click, or coming back to the terminal makes you back, with the
+  awaylog above. Your own `/away` is left as it is, and bots never go
+  away. `auto_away` sets the minutes (0 turns it off), `auto_away_message`
+  what it says.
 - Highlights and DMs from other windows (or any window while the terminal is
   in the background) ring the bell and pop a desktop notification in
   iTerm2, Ghostty, WezTerm and kitty. Inside tmux, notifications need
@@ -871,6 +894,8 @@ statusbar = ["time", "nick", "window", "activity", "typing", "scripts", "upgrade
 statusbar2 = []            # a second bar above, e.g. ["date", "users", "theme"]
 system_italic = true       # -!- lines in italic
 away_notes = false         # true: "sam is away: lunch" when you write to them, if it's news
+auto_away = 15             # minutes idle before you're away on every server (0: never)
+auto_away_message = "away from the keyboard"
 np_format = "/me is listening to ♫ {track}"   # what /np says ({title}, {artist}, {album}, {player})
 np_command = ""            # a command that prints what's playing ("" asks Music/Spotify or playerctl)
 show_joins = true
