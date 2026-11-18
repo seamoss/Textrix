@@ -967,6 +967,8 @@ pub struct App {
     /// How much of the Konami code has been typed.
     konami: usize,
     pub switcher: Option<Switcher>,
+    /// `/list`: rooms to join, from a server's directory or a space.
+    pub directory: Option<crate::directory::Directory>,
     pub theme_picker: Option<ThemePicker>,
     /// `/theme edit`: the theme on screen, a colour at a time.
     pub theme_editor: Option<crate::theme_editor::ThemeEditor>,
@@ -1210,7 +1212,11 @@ const COMMANDS: &[Cmd] = &[
     },
     Cmd { name: "urls", args: "", help: "List links in this window, newest first" },
     Cmd { name: "open", args: "[N]", help: "Open link N from /urls in your browser (default: newest)" },
-    Cmd { name: "list", args: "[search]", help: "Browse the server's public room directory" },
+    Cmd {
+        name: "list",
+        args: "[server | search]",
+        help: "Rooms to join: your server's public directory (or another server's), then your spaces' rooms with Tab",
+    },
     Cmd {
         name: "away",
         args: "[-all] [message]",
@@ -1606,6 +1612,7 @@ impl App {
             alias_depth: 0,
             konami: 0,
             switcher: None,
+            directory: None,
             theme_picker: None,
             theme_editor: None,
             emoji_picker: None,
@@ -2138,6 +2145,11 @@ impl App {
             AppEvent::Quit => self.quit = true,
             AppEvent::Exec { into, send, command, output } => self.exec_done(into, send, &command, output),
             AppEvent::Changelog { into, releases } => self.changelog_done(into, releases),
+            AppEvent::Directory { account, source, query, rooms } => {
+                if let Some(d) = self.directory.as_mut().filter(|d| *d.account == *account) {
+                    d.arrived(source, query, rooms);
+                }
+            }
             AppEvent::NowPlaying { into, track } => self.np_done(into, track),
             AppEvent::Voice { key, voice } => self.voice_done(key, voice),
             AppEvent::Pasted { image, picture } => self.pasted_image(image, picture),
@@ -3583,6 +3595,15 @@ impl App {
 
     fn on_mouse(&mut self, m: MouseEvent) {
         let at = Position::new(m.column, m.row);
+        if let Some(d) = self.directory.as_mut() {
+            match m.kind {
+                MouseEventKind::ScrollUp => d.select(-3),
+                MouseEventKind::ScrollDown => d.select(3),
+                MouseEventKind::Down(MouseButton::Left) => self.on_directory_click(at),
+                _ => {}
+            }
+            return;
+        }
         match m.kind {
             MouseEventKind::ScrollUp => self.on_wheel(at, true),
             MouseEventKind::ScrollDown => self.on_wheel(at, false),
@@ -4066,6 +4087,9 @@ impl App {
         if self.switcher.is_some() {
             return self.on_switcher_key(key);
         }
+        if self.directory.is_some() {
+            return self.on_directory_key(key);
+        }
         if self.theme_picker.is_some() {
             return self.on_theme_picker_key(key);
         }
@@ -4467,6 +4491,123 @@ impl App {
             });
         }
         switcher::rank(&sw.query, candidates)
+    }
+
+    /// `/list [-account] [server | search]`: the room browser, on your
+    /// server's directory (or `server`'s), then your spaces with Tab.
+    fn open_directory(&mut self, args: &str) -> Result<(), String> {
+        use crate::directory::{Directory, Source};
+        let (acct, rest) = self.pick_account(args)?;
+        let rest = rest.trim();
+        let (server, query) = if looks_like_server(rest) { (Some(rest.to_owned()), "") } else { (None, rest) };
+        let mut sources = vec![Source::Server(server)];
+        if let Some(spaces) = self.spaces.get(&*acct.name) {
+            sources.extend(spaces.iter().map(|s| Source::Space { id: s.room_id.clone(), name: s.name.clone() }));
+        }
+        self.directory = Some(Directory::new(acct.name.to_string(), sources, query.to_owned()));
+        Ok(())
+    }
+
+    /// When the room browser asks next (typing waits for a pause).
+    pub fn directory_due(&self) -> Option<Instant> {
+        self.directory.as_ref().and_then(|d| d.due)
+    }
+
+    /// Ask for what the room browser wants now.
+    pub fn fetch_directory(&mut self) {
+        use crate::directory::Fetch;
+        let Some(d) = self.directory.as_mut() else { return };
+        let (account, at) = (d.account.clone(), d.at);
+        let Some(fetch) = d.fetch() else { return };
+        let Some(acct) = self.connected(&account) else {
+            if let Some(d) = self.directory.as_mut() {
+                (d.loading, d.error) = (false, Some(format!("{account} isn't connected")));
+            }
+            return;
+        };
+        match fetch {
+            Fetch::Server { server, search, since } => acct.browse_directory(at, server, search, since),
+            Fetch::Space { id, from } => acct.browse_space(at, id, from),
+        }
+    }
+
+    fn on_directory_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(d) = self.directory.as_mut() else { return };
+        match key.code {
+            Esc => self.directory = None,
+            Char('c') if ctrl => self.directory = None,
+            Enter => self.directory_join(),
+            Up => d.select(-1),
+            Down => d.select(1),
+            Char('p') if ctrl => d.select(-1),
+            Char('n') if ctrl => d.select(1),
+            PageUp => d.select(-10),
+            PageDown => d.select(10),
+            Tab => d.switch(false),
+            BackTab => d.switch(true),
+            Backspace => {
+                d.query.pop();
+                d.typed();
+            }
+            Char('u') if ctrl => {
+                d.query.clear();
+                d.typed();
+            }
+            Char(c) if !ctrl && !alt => {
+                d.query.push(c);
+                d.typed();
+            }
+            _ => {}
+        }
+    }
+
+    /// A row chooses it, again joins it; outside the panel closes it.
+    fn on_directory_click(&mut self, at: Position) {
+        let hits = self.hits.directory.as_ref();
+        let row = hits.and_then(|(_, rows)| rows.iter().find(|(r, _)| r.contains(at))).map(|&(_, n)| n);
+        let inside = hits.is_some_and(|(area, _)| area.contains(at));
+        match (row, self.directory.as_mut()) {
+            (Some(n), Some(d)) if d.selected == n => self.directory_join(),
+            (Some(n), Some(d)) => d.selected = n,
+            (None, _) if !inside => self.directory = None,
+            _ => {}
+        }
+    }
+
+    /// Enter in the room browser: join the chosen room (or go to it, if
+    /// you're in it), and close.
+    fn directory_join(&mut self) {
+        use crate::directory::Source;
+        let Some(d) = self.directory.as_ref() else { return };
+        let Some(room) = d.chosen().cloned() else { return };
+        let account = d.account.clone();
+        // A room known only by its ID on another server is reached through it.
+        let mut via: Vec<matrix_sdk::ruma::OwnedServerName> = match d.source() {
+            Source::Server(Some(server)) => {
+                matrix_sdk::ruma::OwnedServerName::try_from(server.as_str()).into_iter().collect()
+            }
+            Source::Space { id, .. } => id.server_name().map(ToOwned::to_owned).into_iter().collect(),
+            Source::Server(None) => Vec::new(),
+        };
+        via.extend(room.room_id.server_name().map(ToOwned::to_owned));
+        via.dedup();
+        self.directory = None;
+        if room.joined {
+            match self.window_idx(&account, &room.room_id).or_else(|| self.reopen(&account, &room.room_id)) {
+                Some(idx) => self.switch_to(idx),
+                None => self.info(format!("you're in {} already", room.name)),
+            }
+            return;
+        }
+        let Some(acct) = self.connected(&account) else {
+            return self.error(format!("{account} isn't connected"));
+        };
+        let target = room.alias.clone().unwrap_or_else(|| room.room_id.to_string());
+        acct.join_via(target, via);
+        self.info(format!("joining {}…", room.name));
     }
 
     fn on_switcher_key(&mut self, key: KeyEvent) {
@@ -5888,10 +6029,7 @@ impl App {
                 Ok(())
             }
             "open" => self.cmd_open(args),
-            "list" => self.pick_account(args).map(|(acct, search)| {
-                let search = Some(search.trim()).filter(|s| !s.is_empty()).map(str::to_owned);
-                acct.list_public(self.here(), search);
-            }),
+            "list" => self.open_directory(args),
             "away" => self.cmd_away(args),
             "notify" => self.cmd_notify(args),
             "script" => self.cmd_script(args),
@@ -9353,6 +9491,16 @@ fn split_mouse(text: &str) -> Result<Option<MouseEvent>, ()> {
     Ok(Some(MouseEvent { kind, column, row, modifiers }))
 }
 
+/// `/list matrix.org`: a server's name (a dot, no spaces, not an address
+/// or ID), rather than something to search for.
+fn looks_like_server(text: &str) -> bool {
+    !text.is_empty()
+        && text.contains('.')
+        && !text.contains(char::is_whitespace)
+        && !text.starts_with(['#', '!', '@'])
+        && <&matrix_sdk::ruma::ServerName>::try_from(text).is_ok()
+}
+
 /// Wait until `until`, or forever.
 async fn until(until: Option<Instant>) {
     match until {
@@ -9474,6 +9622,8 @@ where
             _ = until(app.esc_hold.as_ref().map(|h| h.at + ESC_WAIT)) => app.esc_timeout(),
             // A moving picture's next frame.
             _ = until(next_frame.filter(|_| shown)) => {}
+            // The room browser's search, once typing rests.
+            _ = until(app.directory_due()) => app.fetch_directory(),
         }
     }
     let restart = app.restart;
@@ -9923,6 +10073,72 @@ mod tests {
         let mut bot = App::new(Config::default(), paths.clone(), EnvFile::new(paths.env_file), Servers::default(), tx);
         bot.last_input = ago(60);
         assert!(bot.is_bot() && !bot.idle_for_away());
+    }
+
+    #[test]
+    fn the_room_browser_lists_searches_and_goes_to_rooms() {
+        use crate::directory::{DirRoom, Page, Source};
+        assert!(looks_like_server("matrix.org") && looks_like_server("example.org:8448"));
+        assert!(!looks_like_server("rust") && !looks_like_server("rust lang") && !looks_like_server("#room:x.org"));
+
+        let mut app = test_app();
+        let owls = room_window(&mut app, "!owls:x.org", "Night Owls");
+        app.switch_to(0);
+        app.spaces.insert(
+            "t".into(),
+            vec![SpaceInfo {
+                room_id: "!hobbies:x.org".try_into().unwrap(),
+                name: "Hobbies".into(),
+                children: Vec::new(),
+            }],
+        );
+        // /list on another server is that server's directory; Tab, your spaces.
+        assert!(app.open_directory("matrix.org").is_err(), "nobody is connected in a test");
+        app.directory = Some(crate::directory::Directory::new(
+            "t".into(),
+            vec![
+                Source::Server(None),
+                Source::Space { id: "!hobbies:x.org".try_into().unwrap(), name: "Hobbies".into() },
+            ],
+            String::new(),
+        ));
+        let room = |id: &str, name: &str, joined: bool| DirRoom {
+            room_id: id.try_into().unwrap(),
+            alias: Some(format!("#{}:x.org", name.to_lowercase().replace(' ', "-"))),
+            name: name.into(),
+            topic: Some(format!("{name}, the room for it")),
+            members: 42,
+            joined,
+            space: false,
+            how: "public".into(),
+            readable: true,
+        };
+        app.on_event(AppEvent::Directory {
+            account: "t".into(),
+            source: 0,
+            query: String::new(),
+            rooms: Ok(Page {
+                rooms: vec![room("!owls:x.org", "Night Owls", true), room("!books:x.org", "Book Club", false)],
+                next: None,
+                total: Some(2),
+            }),
+        });
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..30).map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect()).collect();
+        assert!(rows.iter().any(|r| r.contains("Rooms · your server")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("✓ Night Owls") && r.contains("#night-owls:x.org")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("Tab Hobbies")), "where Tab goes: {rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("you're in it: Enter goes there")), "{rows:#?}");
+        // Typing: a server search waits for a pause.
+        app.on_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert!(app.directory_due().is_some_and(|at| at > Instant::now()));
+        // Enter on a room you're in: there, and the browser closes.
+        app.directory.as_mut().unwrap().selected = 0;
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.directory.is_none());
+        assert_eq!(app.active, owls);
     }
 
     #[test]

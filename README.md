@@ -268,7 +268,7 @@ bindings.
 |---|---|
 | Rooms | `/create [-public] [-space] <name>`, `/join`, `/favourite [room]` (see the window list above), `/name`, `/topic`, `/info`, `/rooms`, `/invites`, `/decline`, `/part`, `/forget`, `/invite`, `/kick`, `/ban`, `/unban`, `/names` |
 | Room settings | `/joinrule <invite\|public\|knock\|restricted <space>>`, `/guests <on\|off>`, `/history <joined\|invited\|shared\|world>`, `/publish <on\|off>` (room directory), `/upgrade [<version> confirm]` (shows versions first; confirming moves you to the new room); `/info` shows them all. `/close` shuts a room you own down for everyone: it says what it will do, and `/close confirm` makes it invite-only, takes it off the directory, removes its addresses, withdraws invites, removes every member less powerful than you, then leaves and forgets it. Matrix has no "delete room" for clients (other servers keep their copy while their members are in it), but when you're an admin on your Synapse homeserver, `/close` also has it delete the room and block it there |
-| Directory | `/list [search]` (public rooms) |
+| Directory | `/list [server \| search]`: the room browser (see [Finding rooms](#finding-rooms)) |
 | Spaces | `/spaces`, `/space <name>` (browse, including rooms you haven't joined), `/space <name> add\|remove` (the current room), `/space <name> leave`, `/create -space <name>`; the window list groups rooms under their spaces without renumbering them |
 | Links | `/links` (the room's links as a list to browse: see [The media gallery](#the-media-gallery)), `/urls` (numbered, newest first), `/open [N]`; `o` in selection mode, or click one. Links are real hyperlinks in terminals that have them (Ghostty, iTerm2, kitty, WezTerm…): hovering shows where they go and Cmd/Ctrl+click opens them, a link wrapped over lines included; `hyperlinks = false` turns that off. The page title of a message's first link shows under it (`↳ Title — Site`), and under that the page's picture, small, when it has one (`link_images = false` leaves pictures out). Both come from your homeserver's URL preview, picture included, so the site never sees you. That's on in unencrypted rooms, which the server reads anyway; `link_titles = "all"` adds encrypted rooms (the server then sees those links), `"off"` stops it. Synapse needs `url_preview_enabled` for this; Textrix tells you once if it's off |
 | Forwarding | `f` in selection mode opens a "Forward to" list of that server's other rooms (closed ones too), filtered as you type like the switcher; Enter sends a copy and leaves you where you are. `/forward [room]` does the same for the latest message here. The copy keeps formatting and attachments but not reply or thread links or mentions, so nobody is pinged again; an edited message goes as its edited text. Forwarding out of an encrypted room into one that isn't says so |
@@ -428,6 +428,18 @@ how you see the detail. A GIF keeps moving there, zoomed or not: with
 kitty graphics its frames go to the terminal at their own size and the
 terminal stretches them over the screen, so even a long one fits in what
 the terminal keeps.
+
+### Finding rooms
+
+`/list` opens the room browser on your server's public directory:
+`/list matrix.org` on another server's, `/list rust` searching yours. Each
+room shows its address and how many are in it, ✓ the ones you're in and
+◆ spaces; the chosen one shows its topic and how you'd get in (public,
+knock, space members). Type to search (the server's asked once you pause),
+↑/↓ (or the wheel) to choose, and the end of the list loads more. Enter
+joins it, or goes to it if you're in it already; so does a second click.
+Tab goes on to the spaces you're in, listing their rooms, joined or not,
+searched as you type. Esc closes it.
 
 ### Polls
 

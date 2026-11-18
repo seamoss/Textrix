@@ -282,6 +282,14 @@ pub enum AppEvent {
         into: Option<crate::app::WinKey>,
         track: Result<crate::np::Track, String>,
     },
+    /// Rooms for the room browser (`/list`), for its place `source` and
+    /// search `query`.
+    Directory {
+        account: AccountName,
+        source: usize,
+        query: String,
+        rooms: Result<crate::directory::Page, String>,
+    },
     /// `/changelog`'s releases from GitHub, for the window it was typed in
     /// (the status window when `into` is `None`).
     Changelog {
@@ -3052,31 +3060,107 @@ impl Account {
         });
     }
 
-    /// `/list [search]`: the server's public room directory.
-    pub fn list_public(&self, out: Option<OwnedRoomId>, search: Option<String>) {
+    /// The room browser (`/list`): a page of a server's public directory
+    /// (yours, or `server`'s), for `search`, from `since`.
+    pub fn browse_directory(
+        &self,
+        source: usize,
+        server: Option<String>,
+        search: Option<String>,
+        since: Option<String>,
+    ) {
         let acct = self.clone();
-        self.spawn_op(out.clone(), async move {
-            let mut request = get_public_rooms_filtered::v3::Request::new();
-            request.limit = Some(UInt::from(50u32));
-            request.filter = DirectoryFilter::new();
-            request.filter.generic_search_term = search.clone();
-            let response = acct.client.public_rooms_filtered(request).await?;
-            let what = search.map(|s| format!(" matching \"{s}\"")).unwrap_or_default();
-            let total = response.total_room_count_estimate.map(|n| format!(" of ~{n}")).unwrap_or_default();
-            acct.notify.line(
-                out.clone(),
-                Line::info(format!("{}: {} public room(s){what}{total}", acct.name, response.chunk.len())),
-            );
-            for room in response.chunk {
-                let address = room.canonical_alias.map(|a| a.to_string()).unwrap_or_else(|| room.room_id.to_string());
-                let name = room.name.unwrap_or_else(|| address.clone());
-                let topic = room.topic.map(|t| format!(" — {}", t.lines().next().unwrap_or(""))).unwrap_or_default();
-                acct.notify.line(
-                    out.clone(),
-                    Line::info(format!("  {name} [{address}] {} user(s){topic}", room.num_joined_members)),
-                );
-            }
-            acct.notify.line(out, Line::info("/join <address> to join one"));
+        tokio::spawn(async move {
+            let query = search.clone().unwrap_or_default();
+            let page = async {
+                let mut request = get_public_rooms_filtered::v3::Request::new();
+                request.limit = Some(UInt::from(30u32));
+                request.since = since;
+                request.filter = DirectoryFilter::new();
+                request.filter.generic_search_term = search;
+                if let Some(server) = &server {
+                    request.server = Some(
+                        OwnedServerName::try_from(server.as_str())
+                            .map_err(|_| anyhow::anyhow!("“{server}” isn't a server name"))?,
+                    );
+                }
+                let response = acct.client.public_rooms_filtered(request).await?;
+                let rooms = response
+                    .chunk
+                    .into_iter()
+                    .map(|r| crate::directory::DirRoom {
+                        joined: acct.joined(&r.room_id),
+                        alias: r.canonical_alias.map(|a| a.to_string()),
+                        name: r.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| r.room_id.to_string()),
+                        topic: r.topic.filter(|t| !t.trim().is_empty()),
+                        members: u64::from(r.num_joined_members),
+                        space: r.room_type == Some(RoomType::Space),
+                        how: join_rule_words(r.join_rule.as_str()),
+                        readable: r.world_readable,
+                        room_id: r.room_id,
+                    })
+                    .collect();
+                let total = response.total_room_count_estimate.map(u64::from);
+                anyhow::Ok(crate::directory::Page { rooms, next: response.next_batch, total })
+            };
+            let rooms = page.await.map_err(|e| match e.downcast_ref::<matrix_sdk::Error>() {
+                Some(e) => reach_error(e),
+                None => format!("{e:#}"),
+            });
+            acct.notify.send(AppEvent::Directory { account: acct.name.clone(), source, query, rooms });
+        });
+    }
+
+    /// The room browser on a space: a page of its rooms, joined or not.
+    pub fn browse_space(&self, source: usize, space_id: OwnedRoomId, from: Option<String>) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let page = async {
+                let mut request = get_hierarchy::v1::Request::new(space_id.clone());
+                request.max_depth = Some(UInt::from(2u32));
+                request.limit = Some(UInt::from(50u32));
+                request.from = from;
+                let response = acct.client.send(request).await?;
+                let rooms = response
+                    .rooms
+                    .into_iter()
+                    .map(|chunk| chunk.summary)
+                    .filter(|s| s.room_id != space_id)
+                    .map(|s| crate::directory::DirRoom {
+                        joined: acct.joined(&s.room_id),
+                        alias: s.canonical_alias.map(|a| a.to_string()),
+                        name: s.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| s.room_id.to_string()),
+                        topic: s.topic.filter(|t| !t.trim().is_empty()),
+                        members: u64::from(s.num_joined_members),
+                        space: s.room_type == Some(RoomType::Space),
+                        how: join_rule_words(s.join_rule.kind().as_str()),
+                        readable: s.world_readable,
+                        room_id: s.room_id,
+                    })
+                    .collect();
+                anyhow::Ok(crate::directory::Page { rooms, next: response.next_batch, total: None })
+            };
+            let rooms = page.await.map_err(|e| match e.downcast_ref::<matrix_sdk::Error>() {
+                Some(e) => reach_error(e),
+                None => format!("{e:#}"),
+            });
+            acct.notify.send(AppEvent::Directory { account: acct.name.clone(), source, query: String::new(), rooms });
+        });
+    }
+
+    /// Whether you're in this room.
+    fn joined(&self, room_id: &matrix_sdk::ruma::RoomId) -> bool {
+        self.client.get_room(room_id).is_some_and(|r| r.state() == RoomState::Joined)
+    }
+
+    /// Join `target` (an address or ID), through `via` for a room on
+    /// another server known only by its ID.
+    pub fn join_via(&self, target: String, via: Vec<OwnedServerName>) {
+        let acct = self.clone();
+        self.spawn_op(None, async move {
+            let id = <&RoomOrAliasId>::try_from(target.as_str()).context("expected #alias:server or !room:server")?;
+            let room = acct.client.join_room_by_id_or_alias(id, &via).await?;
+            acct.announce_and_focus(&room).await;
             Ok(())
         });
     }
@@ -4035,6 +4119,18 @@ impl Account {
             acct.notify.send(AppEvent::LoggedOut { account: acct.name.clone() });
             Ok(())
         });
+    }
+}
+
+/// How you'd get into a room with this join rule, in words.
+fn join_rule_words(kind: &str) -> String {
+    match kind {
+        "public" => "public".into(),
+        "knock" => "knock to join".into(),
+        "invite" => "invite only".into(),
+        "restricted" => "space members".into(),
+        "knock_restricted" => "space members, or knock".into(),
+        other => other.replace('_', " "),
     }
 }
 

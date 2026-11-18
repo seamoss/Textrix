@@ -7,6 +7,20 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.25.0] - unreleased
+
+### Added
+- The room browser: `/list` opens your server's public directory in a
+  panel (`/list matrix.org` another server's), searched as you type, with
+  each room's address, size, topic and how you'd get in, ✓ by the ones
+  you're in. ↑/↓ chooses, the end loads more, Enter joins (or goes there),
+  and Tab goes on to the rooms of the spaces you're in, joined or not.
+  `/list` used to print the directory as lines to `/join` from.
+
+### Changed
+- CI checks macOS too (clippy and the tests), where the Mac-only code
+  builds.
+
 ## [0.24.0] - 2026-11-17
 
 ### Added

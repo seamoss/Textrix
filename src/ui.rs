@@ -53,6 +53,8 @@ pub struct Hits {
     pub theme_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The theme editor's box, and its rows: (row, role index).
     pub theme_editor: Option<(Rect, Vec<(Rect, usize)>)>,
+    /// The room browser's box, and its rows: (row, room index).
+    pub directory: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The emoji picker's box, and its emoji: (where, entry index).
     pub emoji_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The profile pane.
@@ -159,6 +161,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     app.hits.theme_picker = app.theme_picker.is_some().then(|| draw_theme_picker(f, app));
     app.hits.theme_editor = app.theme_editor.is_some().then(|| draw_theme_editor(f, app));
+    app.hits.directory = app.directory.is_some().then(|| draw_directory(f, app));
     app.hits.emoji_picker = app.emoji_picker.is_some().then(|| draw_emoji_picker(f, app));
     if app.vote.is_some() {
         draw_vote(f, app);
@@ -320,6 +323,116 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
         let pad = (list.width as usize).saturating_sub(display_len(&text));
         f.render_widget(Paragraph::new(Span::styled(format!("{text}{}", " ".repeat(pad)), style)), rect);
         hits.push((rect, n));
+    }
+    (area, hits)
+}
+
+/// `/list`: what's typed, the rooms (✓ yours, ◆ spaces) with their address
+/// and size, and the chosen one's topic and how you'd get in.
+fn draw_directory(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    let t = app.cfg.palette.clone();
+    let screen = f.area();
+    let Some(d) = app.directory.as_ref() else { return (Rect::default(), Vec::new()) };
+    let shown = d.shown();
+    let width = screen.width.saturating_sub(4).min(90);
+    let height = screen.height.saturating_sub(2).min(30);
+    let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
+    let total = match (d.total, d.source()) {
+        (Some(n), _) => format!(" ~{n} "),
+        (None, crate::directory::Source::Space { .. }) => format!(" {} ", d.rooms.len()),
+        _ => String::new(),
+    };
+    let tab = d.next_source().map(|s| format!(" · Tab {}", s.title())).unwrap_or_default();
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(format!(" Rooms · {} ", d.source().title()), t.accent))
+        .title(TLine::from(Span::styled(total, t.dim)).right_aligned())
+        .title_bottom(TLine::from(format!(" ↑↓ choose · Enter join · type to search{tab} · Esc ")).right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    // What's typed.
+    let query: String = d.query.chars().filter(|c| !c.is_control()).collect();
+    let prompt = TLine::from(vec![Span::styled("› ", t.accent), Span::raw(query.clone())]);
+    f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
+    let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
+    f.set_cursor_position(Position::new(cursor_x, inner.y));
+
+    // The chosen room, at the foot: its topic, then how you'd get in.
+    let foot_h = 4.min(inner.height.saturating_sub(2));
+    let list = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1 + foot_h), ..inner };
+    let foot = Rect { y: list.bottom(), height: foot_h, ..inner };
+    let mut foot_lines: Vec<TLine> = Vec::new();
+    match (&d.error, d.chosen()) {
+        (Some(error), _) => foot_lines.push(TLine::from(Span::styled(error.clone(), t.error))),
+        (None, Some(room)) => {
+            foot_lines.push(TLine::from(Span::styled("─".repeat(foot.width as usize), t.dim)));
+            let topic = room.topic.as_deref().unwrap_or("(no topic)").replace(['\n', '\r', '\t'], " ");
+            for line in wrap_plain(&topic, foot.width as usize).into_iter().take(foot_h.saturating_sub(2) as usize) {
+                foot_lines.push(TLine::from(line));
+            }
+            let mut about =
+                vec![room.how.clone(), format!("{} member{}", room.members, if room.members == 1 { "" } else { "s" })];
+            if room.readable {
+                about.push("readable without joining".into());
+            }
+            if room.joined {
+                about.push("you're in it: Enter goes there".into());
+            }
+            foot_lines.push(TLine::from(Span::styled(about.join(" · "), t.dim)));
+        }
+        (None, None) => {}
+    }
+    f.render_widget(Paragraph::new(foot_lines), foot);
+
+    if shown.is_empty() {
+        let note = if d.loading || d.due.is_some() {
+            "looking…"
+        } else if d.query.trim().is_empty() {
+            "no rooms here"
+        } else {
+            "nothing matches"
+        };
+        f.render_widget(Paragraph::new(Span::styled(format!("  {note}"), t.dim)), Rect { height: 1, ..list });
+        return (area, Vec::new());
+    }
+    let start = (d.selected + 1).saturating_sub(list.height as usize);
+    let mut hits = Vec::new();
+    let more = if d.loading { " loading more…" } else { "" };
+    for (row, (n, room)) in shown.iter().enumerate().skip(start).take(list.height as usize).enumerate() {
+        let rect = Rect { y: list.y + row as u16, height: 1, ..list };
+        let mark = if room.joined {
+            "✓"
+        } else if room.space {
+            "◆"
+        } else {
+            " "
+        };
+        let members = format!("{:>6}", room.members);
+        let alias = room.alias.as_deref().unwrap_or("");
+        let name_w = (rect.width as usize).saturating_sub(3 + members.len() + 1).min(40);
+        let name: String = room.name.chars().filter(|c| !c.is_control()).take(name_w).collect();
+        let alias_w = (rect.width as usize).saturating_sub(3 + display_len(&name) + 2 + members.len() + 1);
+        let alias: String = alias.chars().take(alias_w).collect();
+        let pad =
+            (rect.width as usize).saturating_sub(3 + display_len(&name) + 2 + display_len(&alias) + members.len());
+        let style = if n == d.selected { Style::new().add_modifier(Modifier::REVERSED) } else { t.inactive };
+        let line = TLine::from(vec![
+            Span::styled(format!(" {mark} "), if room.joined { t.accent } else { t.dim }),
+            Span::styled(name, style),
+            Span::raw("  "),
+            Span::styled(alias, t.dim),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(members, t.dim),
+        ]);
+        f.render_widget(Paragraph::new(line), rect);
+        hits.push((rect, n));
+    }
+    if !more.is_empty() && list.height as usize > shown.len().saturating_sub(start) {
+        let y = list.y + (shown.len() - start) as u16;
+        f.render_widget(Paragraph::new(Span::styled(more, t.dim)), Rect { y, height: 1, ..list });
     }
     (area, hits)
 }

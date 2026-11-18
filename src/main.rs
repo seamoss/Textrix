@@ -8,6 +8,7 @@ mod clipboard;
 mod compose;
 mod config;
 mod convert;
+mod directory;
 mod editor;
 mod eggs;
 mod emoji;
