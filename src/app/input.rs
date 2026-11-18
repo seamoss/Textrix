@@ -49,6 +49,16 @@ impl App {
 
     pub(super) fn on_mouse(&mut self, m: MouseEvent) {
         let at = Position::new(m.column, m.row);
+        if let Some(p) = self.sticker_picker.as_mut() {
+            let across = p.cols.max(1) as isize;
+            match m.kind {
+                MouseEventKind::ScrollUp => p.step(-across),
+                MouseEventKind::ScrollDown => p.step(across),
+                MouseEventKind::Down(MouseButton::Left) => self.on_sticker_click(at),
+                _ => {}
+            }
+            return;
+        }
         if let Some(d) = self.directory.as_mut() {
             match m.kind {
                 MouseEventKind::ScrollUp => d.select(-3),
@@ -461,6 +471,9 @@ impl App {
         }
         if self.emoji_picker.is_some() {
             return self.on_emoji_key(key);
+        }
+        if self.sticker_picker.is_some() {
+            return self.on_sticker_key(key);
         }
         if self.vote.is_some() {
             return self.on_vote_key(key);

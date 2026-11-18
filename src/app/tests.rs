@@ -1361,6 +1361,58 @@ fn esc_typed_just_before_a_key_does_not_eat_it() {
 }
 
 #[test]
+fn stickers_are_chosen_from_a_grid_or_named() {
+    use crate::stickers::Sticker;
+    let mut app = test_app();
+    let a = room_window(&mut app, "!a:x.org", "Night Owls");
+    app.switch_to(a);
+    assert!(app.cmd_sticker("").unwrap_err().contains("aren't loaded yet"));
+    let sticker = |code: &str, body: &str| Sticker {
+        code: code.into(),
+        body: body.into(),
+        url: OwnedMxcUri::from(format!("mxc://x.org/{code}")),
+        info: serde_json::json!({}),
+    };
+    let room: OwnedRoomId = "!a:x.org".try_into().unwrap();
+    app.on_event(AppEvent::Stickers {
+        account: "t".into(),
+        global: vec![sticker("blobcat", "a blob cat"), sticker("party", "party")],
+        rooms: HashMap::from([(room.clone(), vec![sticker("party", "the room's party"), sticker("wave", "hello")])]),
+    });
+    let mine = app.stickers_for("t", &room);
+    assert_eq!(mine.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(), ["party", "wave", "blobcat"]);
+    assert_eq!(mine[0].body, "the room's party", "the room's own wins");
+
+    app.cmd_sticker("").unwrap();
+    let rows = screen(&mut app, 100, 30).join("\n");
+    assert!(rows.contains("Stickers · Night Owls") && rows.contains("blobcat") && rows.contains("wave"), "{rows}");
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.on_key(key(KeyCode::Right));
+    assert_eq!(app.sticker_picker.as_ref().and_then(|p| p.chosen()).map(|s| s.code.as_str()), Some("wave"));
+    for c in "blob".chars() {
+        app.on_key(key(KeyCode::Char(c)));
+    }
+    let rows = screen(&mut app, 100, 30).join("\n");
+    assert!(rows.contains("› blob") && rows.contains(":blobcat: · a blob cat") && !rows.contains("wave"), "{rows}");
+    // Enter sends: here, without the server, it says so.
+    app.on_key(key(KeyCode::Enter));
+    assert!(app.sticker_picker.is_none());
+    let said = |app: &App, text: &str| app.windows.iter().any(|w| w.lines.iter().any(|l| l.body.contains(text)));
+    assert!(said(&app, "t is not connected"), "the error is shown");
+    app.cmd_sticker("").unwrap();
+    app.on_key(key(KeyCode::Esc));
+    assert!(app.sticker_picker.is_none(), "Esc closes it");
+
+    // By name.
+    assert!(app.cmd_sticker("dog").unwrap_err().contains("no sticker called dog"));
+    assert!(app.cmd_sticker("a").unwrap_err().starts_with("which?"));
+    assert!(app.cmd_sticker(":wave:").unwrap_err().contains("is not connected"));
+    // A room on a server with none.
+    app.stickers.insert("t".into(), (Vec::new(), HashMap::new()));
+    assert!(app.cmd_sticker("").unwrap_err().contains("has stickers"));
+}
+
+#[test]
 fn plus_opens_the_emoji_picker() {
     let mut app = test_app();
     let a = room_window(&mut app, "!a:x.org", "Night Owls");

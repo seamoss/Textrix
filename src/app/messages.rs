@@ -724,3 +724,66 @@ impl App {
         Ok(())
     }
 }
+
+impl App {
+    /// `/sticker [name]`: send the sticker called that, or choose one from
+    /// their pictures.
+    pub(super) fn cmd_sticker(&mut self, args: &str) -> Result<(), String> {
+        let key = self.win().room.clone().ok_or("stickers go in a room or a DM")?;
+        if !self.stickers.contains_key(key.account.as_str()) {
+            return Err(format!("{}'s image packs aren't loaded yet: try again in a moment", key.account));
+        }
+        let stickers = self.stickers_for(&key.account, &key.room_id);
+        if stickers.is_empty() {
+            return Err("none of your image packs (or this room's) has stickers".into());
+        }
+        match args.trim() {
+            "" => {
+                self.sticker_picker = Some(crate::stickers::StickerPicker::new(key, stickers));
+                Ok(())
+            }
+            name => {
+                let sticker = crate::stickers::find(&stickers, name)?.clone();
+                self.send_sticker(&sticker)
+            }
+        }
+    }
+
+    /// The stickers you can send in `room`: its own pack's, then yours and
+    /// the global ones (by name, the room's first).
+    pub(super) fn stickers_for(&self, account: &str, room: &RoomId) -> Vec<crate::stickers::Sticker> {
+        let Some((global, rooms)) = self.stickers.get(account) else { return Vec::new() };
+        let mut out = rooms.get(room).cloned().unwrap_or_default();
+        for sticker in global {
+            if !out.iter().any(|s| s.code == sticker.code) {
+                out.push(sticker.clone());
+            }
+        }
+        out
+    }
+
+    /// Send `sticker` here (into the thread, in a thread window), shown at
+    /// once and marked sent when it is.
+    pub(super) fn send_sticker(&mut self, sticker: &crate::stickers::Sticker) -> Result<(), String> {
+        use matrix_sdk::ruma::events::{
+            room::{ImageInfo, message::Relation},
+            sticker::StickerEventContent,
+        };
+        let (acct, room_id) = self.room_ctx()?;
+        let info: ImageInfo = serde_json::from_value(sticker.info.clone()).unwrap_or_default();
+        let mut content = StickerEventContent::new(sticker.body.clone(), info, sticker.url.clone());
+        if let Some((root, latest, _)) = self.thread_context() {
+            content.relates_to = Some(Relation::Thread(Thread::plain(root, latest)));
+        }
+        let txn_id = TransactionId::new();
+        let mut line = Line::new(LineKind::Message, "");
+        crate::convert::sticker_line(&content, &mut line);
+        if let Some(root) = self.win().thread_root() {
+            line.thread = true;
+            line.thread_root = Some(root.to_owned());
+        }
+        self.echo(&acct, line, &txn_id);
+        acct.send(room_id, content, txn_id);
+        Ok(())
+    }
+}

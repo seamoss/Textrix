@@ -14,6 +14,15 @@ release notes.
   to (`/unread <room>` another). It waits in Unreads with a • until you
   open it again (or `/markread`). It's Matrix's `m.marked_unread`, the
   same in Element and your other clients, and one marked there shows here.
+- Stickers: `/sticker` opens your image packs' stickers (yours, the global
+  ones and the room's) as a grid of their pictures, searched as you type;
+  Enter sends the chosen one. `/sticker <name>` sends one by name. In a
+  thread window, it goes into the thread.
+
+### Changed
+- The code: `app.rs` (12,695 lines) is split into a module for each part
+  of the app (events, keys and mouse, panels, layout, messages, commands,
+  settings, themes), with its tests beside them. Nothing it does changed.
 
 ## [0.25.0] - 2026-11-17
 

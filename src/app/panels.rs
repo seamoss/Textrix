@@ -801,3 +801,75 @@ impl App {
         self.redraw_all = true;
     }
 }
+
+impl App {
+    /// The sticker picker: type to search, arrows move in the grid, Enter
+    /// sends the chosen one.
+    pub(super) fn on_sticker_key(&mut self, key: KeyEvent) {
+        use KeyCode::*;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(p) = self.sticker_picker.as_mut() else { return };
+        let (across, page) = (p.cols.max(1) as isize, (p.cols * p.rows).max(1) as isize);
+        match key.code {
+            Esc => self.close_sticker_picker(),
+            Char('c') if ctrl => self.close_sticker_picker(),
+            Enter => self.sticker_send_chosen(),
+            Left => p.step(-1),
+            Right => p.step(1),
+            Up => p.step(-across),
+            Down => p.step(across),
+            Char('p') if ctrl => p.step(-across),
+            Char('n') if ctrl => p.step(across),
+            PageUp => p.step(-page),
+            PageDown => p.step(page),
+            Home => p.step(isize::MIN / 2),
+            End => p.step(isize::MAX / 2),
+            Backspace => {
+                p.query.pop();
+                p.typed();
+            }
+            Char('u') if ctrl => {
+                p.query.clear();
+                p.typed();
+            }
+            Char(c) if !ctrl && !alt => {
+                p.query.push(c);
+                p.typed();
+            }
+            _ => {}
+        }
+    }
+
+    /// A tile chooses it, again sends it; outside the panel closes it.
+    pub(super) fn on_sticker_click(&mut self, at: Position) {
+        let hits = self.hits.sticker_picker.as_ref();
+        let tile = hits.and_then(|(_, tiles)| tiles.iter().find(|(r, _)| r.contains(at))).map(|&(_, n)| n);
+        let inside = hits.is_some_and(|(area, _)| area.contains(at));
+        match (tile, self.sticker_picker.as_mut()) {
+            (Some(n), Some(p)) if p.selected == n => self.sticker_send_chosen(),
+            (Some(n), Some(p)) => p.selected = n,
+            (None, _) if !inside => self.close_sticker_picker(),
+            _ => {}
+        }
+    }
+
+    /// Send the picker's choice, and close it.
+    pub(super) fn sticker_send_chosen(&mut self) {
+        let Some(p) = self.sticker_picker.as_ref() else { return };
+        let Some(sticker) = p.chosen().cloned() else { return };
+        let here = self.win().room.as_ref() == Some(&p.key);
+        self.close_sticker_picker();
+        let sent = if here { self.send_sticker(&sticker) } else { Err("that room isn't the one open now".into()) };
+        if let Err(e) = sent {
+            self.error(e);
+        }
+    }
+
+    /// Close the picker, and draw everything again: some terminals leave a
+    /// picture where it was.
+    pub(super) fn close_sticker_picker(&mut self) {
+        self.sticker_picker = None;
+        self.redraw_all = true;
+    }
+}

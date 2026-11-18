@@ -57,6 +57,7 @@ pub struct Hits {
     pub directory: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The emoji picker's box, and its emoji: (where, entry index).
     pub emoji_picker: Option<(Rect, Vec<(Rect, usize)>)>,
+    pub sticker_picker: Option<(Rect, Vec<(Rect, usize)>)>,
     /// The profile pane.
     pub profile: Option<Rect>,
     /// Gallery tiles: (tile, index among the room's media).
@@ -163,6 +164,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.hits.theme_editor = app.theme_editor.is_some().then(|| draw_theme_editor(f, app));
     app.hits.directory = app.directory.is_some().then(|| draw_directory(f, app));
     app.hits.emoji_picker = app.emoji_picker.is_some().then(|| draw_emoji_picker(f, app));
+    app.hits.sticker_picker = app.sticker_picker.is_some().then(|| draw_sticker_picker(f, app));
     if app.vote.is_some() {
         draw_vote(f, app);
     }
@@ -329,6 +331,99 @@ fn draw_theme_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>)
 
 /// `/list`: what's typed, the rooms (✓ yours, ◆ spaces) with their address
 /// and size, and the chosen one's topic and how you'd get in.
+/// `/sticker`: the stickers you can send here, as a grid of their
+/// pictures (their names, with images off), searched as you type.
+fn draw_sticker_picker(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
+    use crate::stickers::{PICTURE, TILE};
+    let t = app.cfg.palette.clone();
+    let images = app.picker.is_some();
+    let screen = f.area();
+    let room = app.windows.iter().find(|w| w.room.as_ref() == app.sticker_picker.as_ref().map(|p| &p.key));
+    let room = room.map(|w| w.title()).unwrap_or_default();
+    let Some(p) = app.sticker_picker.as_mut() else { return (Rect::default(), Vec::new()) };
+    let width = screen.width.saturating_sub(4).min(TILE.0 * 7 + 2);
+    let height = screen.height.saturating_sub(2).min(TILE.1 * 4 + 5);
+    let area = Rect { x: screen.x + (screen.width - width) / 2, y: screen.y + 1, width, height };
+    let block = Block::bordered()
+        .style(t.base)
+        .border_style(t.frame)
+        .title(Span::styled(format!(" Stickers · {room} "), t.accent))
+        .title(TLine::from(Span::styled(format!(" {} ", p.stickers.len()), t.dim)).right_aligned())
+        .title_bottom(TLine::from(" ←↑↓→ choose · Enter send · type to search · Esc ").right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let query: String = p.query.chars().filter(|c| !c.is_control()).collect();
+    let prompt = TLine::from(vec![Span::styled("› ", t.accent), Span::raw(query.clone())]);
+    f.render_widget(Paragraph::new(prompt), Rect { height: 1, ..inner });
+    let cursor_x = (inner.x + 2 + display_len(&query) as u16).min(inner.right().saturating_sub(1));
+    f.set_cursor_position(Position::new(cursor_x, inner.y));
+
+    // The tiles, between the search and a line about the chosen one.
+    let grid = Rect { y: inner.y + 2, height: inner.height.saturating_sub(3), ..inner };
+    let foot = Rect { y: inner.bottom().saturating_sub(1), height: 1, ..inner };
+    let shown: Vec<crate::stickers::Sticker> = p.shown().into_iter().cloned().collect();
+    if shown.is_empty() || grid.height < TILE.1 || grid.width < PICTURE.0 {
+        let note = if shown.is_empty() { "  nothing matches" } else { "  too small for stickers" };
+        f.render_widget(Paragraph::new(Span::styled(note, t.dim)), Rect { height: 1, ..grid });
+        return (area, Vec::new());
+    }
+    p.cols = usize::from((grid.width + TILE.0 - PICTURE.0) / TILE.0).max(1);
+    p.rows = usize::from(grid.height / TILE.1).max(1);
+    p.selected = p.selected.min(shown.len() - 1);
+    p.follow();
+    let (pw, ph) = PICTURE;
+    let mut hits = Vec::new();
+    let mut wanted = Vec::new();
+    let first = p.top * p.cols;
+    for (n, sticker) in shown.iter().enumerate().skip(first).take(p.cols * p.rows) {
+        let x = grid.x + ((n - first) % p.cols) as u16 * TILE.0;
+        let y = grid.y + ((n - first) / p.cols) as u16 * TILE.1;
+        let tile = Rect { x, y, width: pw, height: ph };
+        let note = if !images {
+            Some(sticker.body.as_str())
+        } else {
+            match p.pictures.get(&sticker.url) {
+                Some(Thumb::Ready(picture)) => {
+                    let size = picture.size();
+                    let (w, h) = (size.width.min(pw), size.height.min(ph));
+                    f.render_widget(picture, Rect { x: x + (pw - w) / 2, y: y + (ph - h) / 2, width: w, height: h });
+                    None
+                }
+                Some(Thumb::Failed) => Some("can't show it"),
+                Some(Thumb::Loading) => Some("loading…"),
+                None => {
+                    p.pictures.insert(sticker.url.clone(), Thumb::Loading);
+                    wanted.push(sticker.url.clone());
+                    Some("loading…")
+                }
+            }
+        };
+        if let Some(note) = note {
+            let lines: Vec<TLine> = wrap_plain(note, pw as usize - 2).into_iter().map(TLine::from).collect();
+            let block = Block::bordered().border_style(t.dim);
+            let text = Paragraph::new(lines).style(t.dim).alignment(ratatui::layout::Alignment::Center);
+            f.render_widget(text.block(block), tile);
+        }
+        let style =
+            if n == p.selected { Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD) } else { t.dim };
+        let name = Span::styled(fit(&sticker.code, pw as usize), style);
+        f.render_widget(Paragraph::new(name), Rect { y: y + ph, height: 1, ..tile });
+        hits.push((Rect { height: ph + 1, ..tile }, n));
+    }
+    if let Some(chosen) = shown.get(p.selected) {
+        let about = if chosen.body == chosen.code {
+            format!(":{}:", chosen.code)
+        } else {
+            format!(":{}: · {}", chosen.code, chosen.body)
+        };
+        f.render_widget(Paragraph::new(Span::raw(fit(&about, foot.width as usize))), foot);
+    }
+    app.sticker_requests.extend(wanted);
+    (area, hits)
+}
+
 fn draw_directory(f: &mut Frame, app: &mut App) -> (Rect, Vec<(Rect, usize)>) {
     let t = app.cfg.palette.clone();
     let screen = f.area();

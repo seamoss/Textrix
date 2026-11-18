@@ -648,6 +648,8 @@ pub const PROFILE_PICTURE: (u16, u16) = (16, 8);
 
 /// Custom emoji: (shortcode, picture).
 type Emoji = Vec<(String, OwnedMxcUri)>;
+/// Stickers, from the same packs.
+type Stickers = Vec<crate::stickers::Sticker>;
 
 /// An image from the clipboard, saved to send: its file, "1280×720 PNG,
 /// 340 KB", and a small picture of it (when the terminal can show one).
@@ -978,6 +980,10 @@ pub struct App {
     pub theme_editor: Option<crate::theme_editor::ThemeEditor>,
     /// Reacting with `+`: the emoji to pick from.
     pub emoji_picker: Option<EmojiPicker>,
+    /// `/sticker`: stickers to choose from, in a grid of their pictures.
+    pub sticker_picker: Option<crate::stickers::StickerPicker>,
+    /// Sticker pictures the picker drew a space for and wants.
+    pub sticker_requests: Vec<OwnedMxcUri>,
     pub vote: Option<VotePicker>,
     /// A verification under way: accept it, compare emoji, see it end.
     pub verify_panel: Option<VerifyPanel>,
@@ -1009,6 +1015,9 @@ pub struct App {
     later: Vec<(AccountName, Scheduled)>,
     /// Custom emoji per server: (yours and global, each room's own).
     custom_emoji: HashMap<AccountName, (Emoji, HashMap<OwnedRoomId, Emoji>)>,
+    /// Each server's stickers (from the same packs): yours and the global
+    /// ones, and each room's. Not there until they're loaded.
+    stickers: HashMap<AccountName, (Stickers, HashMap<OwnedRoomId, Stickers>)>,
     /// Ctrl+X: this text, to open in your editor.
     pub editor_request: Option<String>,
     /// A script's command is running (with what it calls): no `/exec`.
@@ -1145,6 +1154,11 @@ const COMMANDS: &[Cmd] = &[
     Cmd { name: "say", args: "<text>", help: "Send text as-is, even if it starts with / (or type //)" },
     Cmd { name: "reply", args: "[nick] <text>", help: "Reply to the last message (from nick, if given)" },
     Cmd { name: "react", args: "[nick] <emoji>", help: "React to the last message (from nick, if given)" },
+    Cmd {
+        name: "sticker",
+        args: "[name]",
+        help: "Send a sticker from your image packs or the room's: by name, or choose from their pictures",
+    },
     Cmd {
         name: "edit",
         args: "[text]",
@@ -1625,6 +1639,8 @@ impl App {
             theme_picker: None,
             theme_editor: None,
             emoji_picker: None,
+            sticker_picker: None,
+            sticker_requests: Vec::new(),
             vote: None,
             verify_panel: None,
             pasted: None,
@@ -1640,6 +1656,7 @@ impl App {
             sent_early: HashMap::new(),
             hooks: Default::default(),
             custom_emoji: HashMap::new(),
+            stickers: HashMap::new(),
             later: Vec::new(),
             editor_request: None,
             enhanced_keys: false,

@@ -317,6 +317,7 @@ impl App {
             "links" => self.open_gallery(gallery::Tab::Links),
             "favourite" => self.cmd_favourite(args),
             "unread" => self.cmd_unread(args),
+            "sticker" => self.cmd_sticker(args),
             "home" => {
                 self.open_home();
                 Ok(())

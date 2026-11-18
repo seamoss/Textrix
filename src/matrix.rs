@@ -323,6 +323,18 @@ pub enum AppEvent {
         global: Vec<(String, OwnedMxcUri)>,
         rooms: HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>>,
     },
+    /// Stickers from the same packs: yours and the global ones, and each
+    /// room's. Sent once they're loaded, even when there are none.
+    Stickers {
+        account: AccountName,
+        global: Vec<crate::stickers::Sticker>,
+        rooms: HashMap<OwnedRoomId, Vec<crate::stickers::Sticker>>,
+    },
+    /// A sticker's picture, for the picker (`None`: it couldn't be shown).
+    StickerPicture {
+        url: OwnedMxcUri,
+        picture: Option<Picture>,
+    },
     /// The textrix on disk changed: its version, if it said.
     Installed {
         version: Option<String>,
@@ -1796,10 +1808,15 @@ impl Account {
     /// store meanwhile, so not even quitting loses it). The queue names it
     /// afresh: the app hears which name, then that it went, through
     /// [`Account::watch_send_queue`].
-    pub fn send(&self, room_id: OwnedRoomId, content: RoomMessageEventContent, txn_id: OwnedTransactionId) {
+    pub fn send(
+        &self,
+        room_id: OwnedRoomId,
+        content: impl Into<matrix_sdk::ruma::events::AnyMessageLikeEventContent>,
+        txn_id: OwnedTransactionId,
+    ) {
         let acct = self.clone();
+        let content = content.into();
         tokio::spawn(async move {
-            let content = matrix_sdk::ruma::events::AnyMessageLikeEventContent::RoomMessage(content);
             let queued = async {
                 let queue = acct.room(&room_id)?.send_queue();
                 let (_, mut updates) = queue.subscribe().await?;
@@ -2490,11 +2507,12 @@ impl Account {
         });
     }
 
-    /// The custom emoji in image packs (MSC2545: `im.ponies.*`, and the
-    /// stable `m.room.image_pack` / `m.image_pack.rooms`), from what's
-    /// stored locally: your own pack, packs you've made global, and each
-    /// room's.
+    /// The custom emoji and stickers in image packs (MSC2545: `im.ponies.*`,
+    /// and the stable `m.room.image_pack` / `m.image_pack.rooms`), from
+    /// what's stored locally: your own pack, packs you've made global, and
+    /// each room's.
     pub fn load_custom_emoji(&self) {
+        use crate::stickers::{Sticker, pack_stickers};
         let acct = self.clone();
         tokio::spawn(async move {
             let account = acct.client.account();
@@ -2505,10 +2523,13 @@ impl Account {
                     serde_json::from_str::<serde_json::Value>(raw.json().get()).ok()
                 }
             };
-            let mut global = data("im.ponies.user_emotes").await.map(|c| pack_emoji(&c)).unwrap_or_default();
+            let own = data("im.ponies.user_emotes").await;
+            let mut global = own.as_ref().map(pack_emoji).unwrap_or_default();
+            let mut global_stickers = own.as_ref().map(pack_stickers).unwrap_or_default();
             let mut rooms: HashMap<OwnedRoomId, Vec<(String, OwnedMxcUri)>> = HashMap::new();
+            let mut room_stickers: HashMap<OwnedRoomId, Vec<Sticker>> = HashMap::new();
             for room in acct.client.joined_rooms() {
-                let mut emoji = Vec::new();
+                let (mut emoji, mut stickers) = (Vec::new(), Vec::new());
                 for kind in ["im.ponies.room_emotes", "m.room.image_pack"] {
                     for state in room.get_state_events(kind.into()).await.unwrap_or_default() {
                         let matrix_sdk::deserialized_responses::RawAnySyncOrStrippedState::Sync(raw) = state else {
@@ -2516,11 +2537,15 @@ impl Account {
                         };
                         if let Ok(event) = serde_json::from_str::<serde_json::Value>(raw.json().get()) {
                             emoji.extend(pack_emoji(&event["content"]));
+                            stickers.extend(pack_stickers(&event["content"]));
                         }
                     }
                 }
                 if !emoji.is_empty() {
                     rooms.insert(room.room_id().to_owned(), emoji);
+                }
+                if !stickers.is_empty() {
+                    room_stickers.insert(room.room_id().to_owned(), stickers);
                 }
             }
             // Rooms whose packs you've made global.
@@ -2528,15 +2553,48 @@ impl Account {
                 let Some(content) = data(kind).await else { continue };
                 let listed =
                     content["rooms"].as_object().map(|r| r.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
-                for room_id in listed {
-                    if let Some(emoji) = OwnedRoomId::try_from(room_id).ok().and_then(|id| rooms.get(&id)) {
+                for room_id in listed.into_iter().filter_map(|id| OwnedRoomId::try_from(id).ok()) {
+                    if let Some(emoji) = rooms.get(&room_id) {
                         global.extend(emoji.iter().cloned());
+                    }
+                    for sticker in room_stickers.get(&room_id).into_iter().flatten() {
+                        if !global_stickers.iter().any(|s| s.code == sticker.code) {
+                            global_stickers.push(sticker.clone());
+                        }
                     }
                 }
             }
+            let account = acct.name.clone();
             if !global.is_empty() || !rooms.is_empty() {
-                acct.notify.send(AppEvent::CustomEmoji { account: acct.name.clone(), global, rooms });
+                acct.notify.send(AppEvent::CustomEmoji { account: account.clone(), global, rooms });
             }
+            acct.notify.send(AppEvent::Stickers { account, global: global_stickers, rooms: room_stickers });
+        });
+    }
+
+    /// A sticker's picture for the picker: the server's thumbnail of it,
+    /// or the picture itself when there's none.
+    pub fn fetch_sticker_picture(&self, url: OwnedMxcUri, picker: Painter, cells: Size) {
+        let acct = self.clone();
+        tokio::spawn(async move {
+            let media = acct.client.media();
+            let source = MediaSource::Plain(url.clone());
+            let settings = MediaThumbnailSettings::new(UInt::from(128u32), UInt::from(128u32));
+            let thumbnail = MediaRequestParameters { source: source.clone(), format: MediaFormat::Thumbnail(settings) };
+            let bytes = match media.get_media_content(&thumbnail, true).await {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => {
+                    media.get_media_content(&MediaRequestParameters { source, format: MediaFormat::File }, true).await
+                }
+            };
+            let picture = match bytes {
+                Ok(bytes) => encode_image(bytes, picker, cells).await.ok(),
+                Err(e) => {
+                    tracing::debug!("no picture for sticker {url}: {e}");
+                    None
+                }
+            };
+            acct.notify.send(AppEvent::StickerPicture { url, picture });
         });
     }
 

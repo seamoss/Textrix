@@ -92,6 +92,14 @@ impl App {
             AppEvent::CustomEmoji { account, global, rooms } => {
                 self.custom_emoji.insert(account, (global, rooms));
             }
+            AppEvent::Stickers { account, global, rooms } => {
+                self.stickers.insert(account, (global, rooms));
+            }
+            AppEvent::StickerPicture { url, picture } => {
+                if let Some(p) = self.sticker_picker.as_mut() {
+                    p.store(url, picture);
+                }
+            }
             AppEvent::Edited(saved) => {
                 match saved {
                     Ok(text) => self.input.set_text(&text),
@@ -1074,6 +1082,24 @@ impl App {
                     let asked = std::mem::take(&mut self.tile_requests);
                     if let Some(g) = self.gallery.as_mut() {
                         asked.iter().for_each(|(id, _)| drop(g.pictures.remove(id)));
+                    }
+                }
+            }
+        }
+        if !self.sticker_requests.is_empty() {
+            let (w, h) = crate::stickers::PICTURE;
+            let account = self.sticker_picker.as_ref().map(|p| p.key.account.clone());
+            let asked = std::mem::take(&mut self.sticker_requests);
+            match (self.picker.clone(), account.and_then(|a| self.connected(&a))) {
+                (Some(picker), Some(acct)) => {
+                    for url in asked {
+                        acct.fetch_sticker_picture(url, picker.clone(), Size::new(w, h));
+                    }
+                }
+                // Asked again once the server is back.
+                _ => {
+                    if let Some(p) = self.sticker_picker.as_mut() {
+                        asked.iter().for_each(|url| drop(p.pictures.remove(url)));
                     }
                 }
             }

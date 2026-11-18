@@ -184,6 +184,20 @@ impl<'a> Converter<'a> {
     }
 }
 
+/// A sticker on `line`: its name, and its picture as an image.
+pub fn sticker_line(content: &matrix_sdk::ruma::events::sticker::StickerEventContent, line: &mut Line) {
+    line.body = format!("[sticker] {}", content.body);
+    line.media = Some(Media {
+        source: content.source.clone().into(),
+        filename: content.body.clone(),
+        kind: MediaKind::Image,
+        mimetype: content.info.mimetype.clone(),
+        thumbnail: content.info.thumbnail_source.clone(),
+        size: content.info.size.map(u64::from),
+        animated: content.info.is_animated,
+    });
+}
+
 fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
     match msg {
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Original(ev)) => {
@@ -259,17 +273,7 @@ fn message_like(msg: AnySyncMessageLikeEvent, mut line: Line) -> Option<Item> {
         }),
         // A sticker is a picture with a name: shown like an image.
         AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Original(ev)) => {
-            let content = ev.content;
-            line.body = format!("[sticker] {}", content.body);
-            line.media = Some(Media {
-                source: content.source.into(),
-                filename: content.body,
-                kind: MediaKind::Image,
-                mimetype: content.info.mimetype.clone(),
-                thumbnail: content.info.thumbnail_source.clone(),
-                size: content.info.size.map(u64::from),
-                animated: content.info.is_animated,
-            });
+            sticker_line(&ev.content, &mut line);
             Some(Item::Line(line))
         }
         _ => None,

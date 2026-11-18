@@ -36,6 +36,7 @@ mod sealed;
 mod search;
 mod servers;
 mod setup;
+mod stickers;
 mod switcher;
 mod term;
 mod theme;
