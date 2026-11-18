@@ -44,6 +44,26 @@ textrix --check | --completions SHELL | --man | --version
 keychain and reports, without connecting. `--theme` picks colours for one
 run. `--env` and `--home` work like `TEXTRIX_ENV` and `TEXTRIX_HOME`.
 
+### As an app (macOS)
+
+```sh
+textrix app install     # ~/Applications/Textrix.app
+textrix app uninstall
+```
+
+`textrix app install` makes Textrix.app, so Alfred, Spotlight, Launchpad
+and the Dock can start Textrix. Opening it opens a window running Textrix:
+in the Ghostty you have open, or Ghostty started with just that, or in
+Terminal if you don't have Ghostty (`--terminal ghostty|terminal` picks).
+It runs the textrix that made it, by the path it was started as (on
+Homebrew, the one every upgrade takes over), with your login shell's PATH.
+Should Textrix not start (it's open in another window, say), the window
+stays to say why. The first time, macOS asks whether Textrix may control
+the terminal. `--dir` puts it somewhere other than ~/Applications; running
+install again replaces it, and both only ever touch the Textrix.app they
+made. (If Textrix is running in the background, the app's window attaches
+to it.)
+
 ### In the background
 
 Like irssi in screen, Textrix can keep running with no terminal:

@@ -20,6 +20,8 @@ mod index;
 mod input;
 mod install;
 mod links;
+#[cfg(target_os = "macos")]
+mod macapp;
 mod matrix;
 mod model;
 mod notify;
@@ -160,6 +162,69 @@ enum Command {
     /// bot's), from a home of its own, doing what its plugins do
     #[command(subcommand)]
     Bot(BotCommand),
+    /// Textrix.app in ~/Applications, so Alfred, Spotlight and the Dock can
+    /// start Textrix (it opens a Ghostty or Terminal window running it)
+    #[cfg(target_os = "macos")]
+    #[command(subcommand)]
+    App(AppCommand),
+}
+
+#[cfg(target_os = "macos")]
+#[derive(clap::Subcommand)]
+enum AppCommand {
+    /// Make Textrix.app (again, replacing the one it made before): it runs
+    /// this textrix, in Ghostty if you have it, otherwise Terminal
+    Install {
+        /// The terminal it opens: ghostty or terminal
+        #[arg(long, value_enum)]
+        terminal: Option<macapp::Terminal>,
+        /// Where it goes [default: ~/Applications]
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+    /// Take Textrix.app away (only the one this made)
+    Uninstall {
+        /// Where it is [default: ~/Applications]
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+}
+
+/// `textrix app …` (macOS).
+#[cfg(target_os = "macos")]
+fn app_command(command: AppCommand) -> Result<()> {
+    match command {
+        AppCommand::Install { terminal, dir } => {
+            let dir = match dir {
+                Some(dir) => dir,
+                None => macapp::default_dir()?,
+            };
+            let terminal = terminal.unwrap_or_else(macapp::Terminal::found);
+            // The path it was started as: on Homebrew, the link upgrades take over.
+            let textrix = install::Install::current().map(|i| i.path.components().collect::<PathBuf>());
+            let app = macapp::install(&dir, terminal, textrix.as_deref())?;
+            let runs = textrix.map_or_else(|| "textrix".to_owned(), |p| p.display().to_string());
+            let opens = match terminal {
+                macapp::Terminal::Ghostty => "a Ghostty window",
+                macapp::Terminal::Terminal => "a Terminal window",
+            };
+            println!("Made {}: it opens {opens} running {runs}.", app.display());
+            println!("Find it as Textrix in Alfred, Spotlight or Launchpad, or drag it to the Dock.");
+            println!("The first time, macOS asks whether it may control the terminal: say OK.");
+            Ok(())
+        }
+        AppCommand::Uninstall { dir } => {
+            let dir = match dir {
+                Some(dir) => dir,
+                None => macapp::default_dir()?,
+            };
+            match macapp::uninstall(&dir)? {
+                Some(app) => println!("Took away {}.", app.display()),
+                None => println!("There's no Textrix.app in {}.", dir.display()),
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -417,8 +482,11 @@ async fn run() -> Result<()> {
     if cli.check {
         return check(&paths);
     }
-    if let Some(Command::Bot(command)) = cli.command {
-        return bot_command(&paths, command).await;
+    match cli.command {
+        Some(Command::Bot(command)) => return bot_command(&paths, command).await,
+        #[cfg(target_os = "macos")]
+        Some(Command::App(command)) => return app_command(command),
+        None => {}
     }
     create_private_dir(&paths.base)?;
     let socket = remote::socket_path(&paths.base);

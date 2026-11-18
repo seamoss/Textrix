@@ -51,6 +51,9 @@ class Textrix < Formula
       To upgrade: brew update && brew upgrade textrix. A Textrix that's running (in the
       background too) then shows "[x.y.z installed: /restart]", and
       /restart switches to the new one where you were.
+
+      On a Mac, `textrix app install` puts Textrix.app in ~/Applications, to start
+      it from Alfred, Spotlight or the Dock (in Ghostty, or Terminal).
     EOS
   end
 

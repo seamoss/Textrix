@@ -7,6 +7,18 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
+## [0.23.0] - 2026-11-17
+
+### Added
+- `textrix app install` (macOS): Textrix.app in ~/Applications, so Alfred,
+  Spotlight, Launchpad and the Dock can start Textrix. It opens a window
+  running Textrix: in the Ghostty you have open (or Ghostty started with
+  just that), or in Terminal without Ghostty (`--terminal` picks). It runs
+  the textrix that made it, by the path it was started as, so Homebrew
+  upgrades carry on through it, with your login shell's PATH; if Textrix
+  can't start, the window stays to say why. `textrix app uninstall` takes
+  it away; both only touch the Textrix.app they made.
+
 ## [0.22.0] - 2026-11-17
 
 ### Added
