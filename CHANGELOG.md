@@ -7,7 +7,7 @@ for macOS and Linux, published from `master` when the version in
 `Cargo.toml` changes. A release needs its section here, which becomes its
 release notes.
 
-## [0.25.0] - unreleased
+## [0.25.0] - 2026-11-17
 
 ### Added
 - The room browser: `/list` opens your server's public directory in a
